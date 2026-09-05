@@ -28,7 +28,7 @@ concurrency:
 
 jobs:
   cbr:
-    name: CBR through a real unrar backend
+    name: CBR routing and failure paths
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -66,43 +66,44 @@ jobs:
           print(f"ok: rarfile {rarfile.__version__} with backend {backend}")
           PY
 
-      - name: A CBR imports, in reading order, with hashes
+      - name: The CBR paths this project owns
+        # NOT a real RAR round-trip, and the reason is worth stating rather than
+        # working around: there is no free RAR *writer*. RAR compression is
+        # proprietary and libarchive is read-only for it, so `bsdtar -a -c -f
+        # x.cbr` writes something that is not a RAR at all — measured, it made
+        # rarfile raise NotRarFile. Fabricating a fixture would test the
+        # fabrication.
+        #
+        # What is covered is the code this repository actually wrote: routing,
+        # and the two failure paths a user hits. A genuine RAR round-trip stays
+        # untested, and `.ai/TESTING_NOTES.md` says so.
         env:
           PYTHONIOENCODING: utf-8
+        # `-rs` prints skip reasons, so a CBR test that quietly opted out is
+        # visible rather than counted as coverage. This runs the real test file
+        # instead of restating its assertions inline: the unit tier skips these
+        # because rarfile is not a required dependency, and this is the only
+        # place they execute.
+        run: |
+          python -m pip install pytest pytest-timeout
+          python -m pytest tests/test_readers.py -q -rs --timeout=120
+
+      - name: The CBR tests did not all skip
         run: |
           python - <<'PY'
-          import subprocess, sys, tempfile, shutil
-          from pathlib import Path
+          import subprocess, sys
 
-          sys.path[:0] = ["tests", "skills/revayat-comic/scripts"]
-          from tests_support import manga_page, page_bytes
-          import pageir as ir
-          import readers
-
-          work = Path(tempfile.mkdtemp())
-          pages = work / "pages"
-          pages.mkdir()
-          # Names that sort badly byte-wise, so the natural-sort path is under
-          # test and not just the archive reader.
-          for index, name in enumerate(("page1.png", "page2.png", "page10.png")):
-              (pages / name).write_bytes(page_bytes(manga_page(dark_balloon=index == 1)))
-
-          archive = work / "chapter.cbr"
-          # bsdtar writes RAR-compatible archives that rarfile can read back.
-          subprocess.run(
-              ["bsdtar", "-a", "-c", "-f", str(archive), "page1.png", "page2.png", "page10.png"],
-              cwd=pages, check=True,
+          run = subprocess.run(
+              [sys.executable, "-m", "pytest", "tests/test_readers.py",
+               "-q", "-rs", "--timeout=120", "-k", "cbr or rarfile"],
+              capture_output=True, text=True,
           )
-          assert archive.stat().st_size > 0
-
-          report = readers.import_source(archive, work / "out")
-          assert report["pages"] == 3, report
-          doc = ir.load_doc(Path(report["document"]))
-          assert [p["id"] for p in doc["pages"]] == ["p0001", "p0002", "p0003"]
-          root = ir.doc_dir(Path(report["document"]))
-          for page in doc["pages"]:
-              assert ir.sha256_file(root / page["image"]) == page["sha256"]
-          print(f"ok: CBR imported {report['pages']} pages in reading order, hashes match")
+          print(run.stdout[-2000:])
+          assert run.returncode == 0, "the CBR tests failed"
+          assert " skipped" not in run.stdout.splitlines()[-1], (
+              "a CBR test skipped in the tier that exists to run it"
+          )
+          print("ok: the CBR tests ran here rather than skipping")
           PY
 
   full_resolution:

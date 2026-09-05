@@ -91,6 +91,17 @@ def _from_rar(path: Path, pages_dir: Path) -> list[Path]:
             "    Windows:     install WinRAR, or convert the file to CBZ\n"
             f"({error})"
         ) from error
+    except rarfile.Error as error:
+        # A file named .cbr that is not a RAR, or one that is truncated. Without
+        # this the user gets a bare `rarfile.NotRarFile` traceback from inside a
+        # dependency, which says nothing about which file or what to do — the
+        # dispatcher only translates FileNotFoundError and ValueError.
+        raise ValueError(
+            f"{path.name} is not a readable RAR archive ({error}). "
+            "A .cbr is a RAR of page images; if it opens in a comic reader but "
+            "not here, re-save it as CBZ, which is a ZIP and needs no extra "
+            "tool."
+        ) from error
 
     written: list[Path] = []
     with archive:
