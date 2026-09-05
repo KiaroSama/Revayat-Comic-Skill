@@ -118,3 +118,41 @@ def test_pdf_import_keeps_the_original_page_bytes(tmp_path):
     assert report["kind"] == "pdf" and report["pages"] == 2
     doc = ir.load_doc(Path(report["document"]))
     assert doc["pages"][0]["width"] == 1000
+
+
+# --- CBR ---------------------------------------------------------------------
+# There is no free RAR *writer* — RAR compression is proprietary and libarchive
+# is read-only for it — so a real round-trip cannot be built here or in CI. What
+# can be covered is the routing and the failure path, which is where the code
+# this project owns actually lives.
+
+def test_a_cbr_extension_routes_to_the_rar_reader(tmp_path):
+    path = tmp_path / "chapter.cbr"
+    path.write_bytes(b"not really a rar")
+    assert readers.detect_kind(path) == "cbr"
+
+
+def test_a_cbr_that_is_not_a_rar_explains_itself(tmp_path):
+    """Found by CI: `rarfile.NotRarFile` escaped as a bare traceback from inside
+    a dependency. The dispatcher only translates FileNotFoundError and
+    ValueError, so anything else reaches the user as a stack."""
+    pytest.importorskip("rarfile")
+    path = tmp_path / "chapter.cbr"
+    path.write_bytes(b"PK\x03\x04 this is a zip wearing a cbr extension")
+    with pytest.raises(ValueError, match="not a readable RAR archive"):
+        readers.import_source(path, tmp_path / "work")
+
+
+def test_a_missing_rarfile_names_the_package(tmp_path, monkeypatch):
+    import pageir
+
+    def refuse(module, package, why):
+        if module == "rarfile":
+            raise pageir.MissingDependency(f"{why} needs the {package} package.")
+        return __import__(module)
+
+    monkeypatch.setattr(readers.ir, "require", refuse)
+    path = tmp_path / "chapter.cbr"
+    path.write_bytes(b"x")
+    with pytest.raises(pageir.MissingDependency, match="rarfile"):
+        readers.import_source(path, tmp_path / "work")
