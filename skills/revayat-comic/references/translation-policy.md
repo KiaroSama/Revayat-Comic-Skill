@@ -54,6 +54,36 @@ Practical guidance:
 - Do not pad. `そうか` is `که این‌طور`, not `آها، پس قضیه از این قرار بوده`.
 - If `typeset` later reports the region as overflowing, shorten *that* line.
 
+## Fidelity is not literalness
+
+A translation can map cleanly onto every word of the original and still be
+wrong, because it reads as translated. That failure passes every gate in this
+project: the ids match, the script is Persian, nothing overflows, no term
+drifted. Only a reader catches it, and the word they use is *stilted*.
+
+Three habits separate Persian that reads natively from Persian that reads
+translated. They matter more in a balloon than in prose, because there is no
+room to recover:
+
+- **Persian drops subjects that English and Japanese must state.** `او رفت` is
+  usually just `رفت`. A pronoun in every balloon makes every character sound
+  like they are giving evidence.
+- **Persian prefers a verb where English takes a noun.** Not
+  `تصمیم به رفتن گرفت` but `تصمیم گرفت برود`. Not `در حال انجام بررسی است` but
+  `دارد بررسی می‌کند`.
+- **Persian will not carry a long relative clause; break it in two.** A single
+  sentence with a `که …` tail that keeps going is the commonest shape of a
+  translated-sounding balloon. Two short sentences almost always beat it, and
+  they fit better as well.
+
+The test is not "does this match the original word for word" but "would a
+Persian speaker say this, in this situation, with this much space". Where those
+two pull apart, say what the character means.
+
+Adapted from the sibling novel project, which found it on its first real
+translation sample — every automated check green, rejected by its reader in one
+word.
+
 ## Names and terms
 
 The table at the top of the worksheet is binding. Use exactly the Persian it
