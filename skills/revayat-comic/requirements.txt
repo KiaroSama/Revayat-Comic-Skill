@@ -1,0 +1,24 @@
+# Core — required for every run.
+pillow>=10.0                  # page IO, and the Persian text renderer
+numpy>=1.24                   # every pixel measurement
+opencv-python-headless>=4.8   # balloon detection, masks, inpainting
+
+# Strongly recommended. Without it CBZ, CBR and folders still work, but PDF
+# input and PDF export do not.
+pymupdf>=1.24
+
+# Persian shaping fallback. Pillow wheels normally ship RAQM, which does this
+# properly through HarfBuzz and FriBidi; these two are only used when it does
+# not, and `doctor` says which path is in effect.
+arabic-reshaper>=3.0
+python-bidi>=0.4
+
+# Optional, not installed by default:
+#   rarfile>=4.0      CBR archives (also needs an unrar/bsdtar binary on PATH)
+#   manga-ocr>=0.1.8  a second opinion on Japanese text (~400 MB of model,
+#                     and it pulls in torch — see references/ocr.md before
+#                     deciding you need it)
+
+# Development only.
+pytest>=8.0
+pytest-timeout>=2.3

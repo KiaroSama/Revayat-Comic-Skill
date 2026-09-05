@@ -1,0 +1,362 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: tests (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        # All three platforms people actually run this on, at the oldest and
+        # newest supported interpreters.
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.10", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: skills/revayat-comic/requirements.txt
+
+      # A runner has no Persian font by default, and the one font every Linux
+      # box does have — DejaVu Sans — contains no Arabic script at all. Without
+      # this the typesetter correctly refuses to draw tofu and every rendering
+      # test fails for a reason that has nothing to do with the code.
+      # macOS ships Geeza Pro and Windows ships Tahoma, so only Linux needs it.
+      - name: Install a Persian-capable font
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends fonts-noto-core
+          fc-list :lang=fa family | head -5
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r skills/revayat-comic/requirements.txt
+
+      - name: Run tests
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python -m pytest tests -q --timeout=300 --durations=10
+
+      - name: Smoke-test the CLI
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python skills/revayat-comic/scripts/revayat-comic.py doctor
+
+  pipeline:
+    name: end-to-end pipeline (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: skills/revayat-comic/requirements.txt
+
+      - name: Install a Persian-capable font
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends fonts-noto-core
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r skills/revayat-comic/requirements.txt
+
+      # Runs every stage through the real CLI against a generated chapter, so a
+      # break anywhere in the chain fails here even when each module's unit
+      # tests still pass.
+      - name: import -> detect -> translate -> clean -> typeset -> QA -> export
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python tests/e2e_pipeline.py
+
+      # Linux is the only platform whose Pillow wheel carries a working RAQM,
+      # so it is the only place the good shaping path can be exercised at all.
+      - name: Confirm the RAQM path is the one that ran on Linux
+        if: runner.os == 'Linux'
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          python - <<'PY'
+          import sys
+          sys.path.insert(0, "skills/revayat-comic/scripts")
+          from PIL import features
+          import typeset
+
+          raqm = features.check("raqm")
+          print(f"raqm: {raqm}")
+          # Not an assertion: Pillow may drop it from a future wheel, and that
+          # is a fact to surface rather than a build to fail. The fallback is
+          # tested everywhere, so only this line would go quiet.
+          if not raqm:
+              print("::warning::Pillow on Linux no longer carries RAQM; the "
+                    "reshaper fallback is now the only path under test")
+          print("shaping:", typeset.Shaper().mode)
+          PY
+
+  install:
+    name: installer (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install into every agent layout (POSIX)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n install/install.sh
+          target="$(mktemp -d)"
+          for dir in .claude .kiro .codex .cursor .cline .hermes .opencode .agents; do
+            mkdir -p "$target/$dir"
+          done
+          bash install/install.sh --scope project --path "$target" --agent all --force
+          found=$(find "$target" -name SKILL.md | wc -l | tr -d ' ')
+          test "$found" -eq 8 || { echo "expected 8 skill copies, found $found"; exit 1; }
+          test -f "$target/AGENTS.md"
+          # Re-running must replace the pointer section, never stack copies.
+          bash install/install.sh --scope project --path "$target" --agent opencode --force
+          marks=$(grep -c 'BEGIN revayat-comic' "$target/AGENTS.md")
+          test "$marks" -eq 1 || { echo "AGENTS.md pointer duplicated ($marks)"; exit 1; }
+          test -z "$(find "$target" -name __pycache__)"
+          echo "installer OK: 8 copies, single pointer, no caches"
+
+      - name: Install into every agent layout (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $parseErrors = $null
+          $scriptPath = (Resolve-Path 'install/install.ps1').Path
+          $null = [System.Management.Automation.Language.Parser]::ParseFile(
+            $scriptPath, [ref]$null, [ref]$parseErrors)
+          if ($parseErrors) { $parseErrors; throw 'install.ps1 does not parse' }
+
+          $target = Join-Path ([System.IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString('N'))
+          foreach ($d in '.claude','.kiro','.codex','.cursor','.cline','.hermes','.opencode','.agents') {
+            New-Item -ItemType Directory -Path (Join-Path $target $d) -Force | Out-Null
+          }
+          & ./install/install.ps1 -Agent all -Scope project -Path $target -Force | Out-Null
+          $found = @(Get-ChildItem -Path $target -Recurse -Filter SKILL.md).Count
+          if ($found -ne 8) { throw "expected 8 skill copies, found $found" }
+          if (-not (Test-Path (Join-Path $target 'AGENTS.md'))) { throw 'no AGENTS.md pointer' }
+          & ./install/install.ps1 -Agent opencode -Scope project -Path $target -Force | Out-Null
+          $marks = (Select-String -Path (Join-Path $target 'AGENTS.md') -Pattern 'BEGIN revayat-comic').Count
+          if ($marks -ne 1) { throw "AGENTS.md pointer duplicated ($marks)" }
+          Write-Output 'installer OK: 8 copies, single pointer'
+
+  lint:
+    name: manifests and encoding
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: skills/revayat-comic/requirements.txt
+
+      # Two checks below import the project, so they need its dependencies.
+      # Without them pytest collects nothing and the coverage check reads that
+      # as "every suite is unreachable".
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r skills/revayat-comic/requirements.txt
+
+      - name: Every plugin manifest is valid JSON and agrees on version
+        run: |
+          python - <<'PY'
+          import json, pathlib
+
+          manifests = sorted(pathlib.Path(".").glob("*-plugin/plugin.json"))
+          assert manifests, "no plugin manifests found"
+          versions = set()
+          for path in manifests:
+              data = json.loads(path.read_text(encoding="utf-8"))
+              for field in ("name", "version", "description", "license"):
+                  assert data.get(field), f"{path}: missing {field}"
+              versions.add(data["version"])
+              print(f"ok {path} -> {data['name']} {data['version']}")
+
+          market = json.loads(
+              pathlib.Path(".claude-plugin/marketplace.json").read_text(encoding="utf-8")
+          )
+          versions.add(market["plugins"][0]["version"])
+          assert len(versions) == 1, f"plugin versions disagree: {versions}"
+          print("ok marketplace.json, all manifests at", versions.pop())
+          PY
+
+      - name: Every tracked text file is valid UTF-8
+        run: |
+          python - <<'PY'
+          import pathlib, subprocess, sys
+
+          binary_suffixes = {
+              ".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".cbz", ".cbr",
+              ".epub", ".zip", ".ico", ".woff", ".woff2", ".ttf", ".otf", ".ttc",
+          }
+          tracked = subprocess.run(
+              ["git", "ls-files", "-z"], capture_output=True, check=True
+          ).stdout.split(b"\0")
+
+          bad = []
+          for raw in tracked:
+              if not raw:
+                  continue
+              path = pathlib.Path(raw.decode("utf-8"))
+              if path.suffix.lower() in binary_suffixes or not path.is_file():
+                  continue
+              try:
+                  path.read_bytes().decode("utf-8")
+              except UnicodeDecodeError as error:
+                  bad.append(f"{path}: {error}")
+
+          if bad:
+              print("\n".join(bad))
+              sys.exit(1)
+          print("ok: all tracked text files decode as UTF-8")
+          PY
+
+      - name: The skill declares itself correctly
+        run: |
+          python - <<'PY'
+          import pathlib, re
+
+          text = pathlib.Path("skills/revayat-comic/SKILL.md").read_text(encoding="utf-8")
+          front = re.match(r"^---\n(.*?)\n---\n", text, re.S)
+          assert front, "SKILL.md has no YAML front matter"
+          body = front.group(1)
+          for field in ("name:", "description:"):
+              assert field in body, f"SKILL.md front matter is missing {field}"
+          # Several agents parse this front matter with a line-oriented reader,
+          # so every field has to stay on one line.
+          for line in body.splitlines():
+              assert not line.startswith(" "), f"front matter must be flat: {line!r}"
+          name = re.search(r"^name:\s*(\S+)", body, re.M).group(1)
+          assert name == "revayat-comic", f"skill name drifted: {name}"
+
+          referenced = set(re.findall(r"references/([a-z0-9-]+\.md)", text))
+          on_disk = {p.name for p in pathlib.Path("skills/revayat-comic/references").glob("*.md")}
+          missing = referenced - on_disk
+          assert not missing, f"SKILL.md references files that do not exist: {missing}"
+          unused = on_disk - referenced
+          assert not unused, f"reference files nothing points at: {unused}"
+          print(f"ok: skill '{name}', {len(on_disk)} reference files, none dangling")
+          PY
+
+      - name: Every command the docs promise actually exists
+        run: |
+          python - <<'PY'
+          import pathlib, re, subprocess, sys
+
+          stages = subprocess.run(
+              [sys.executable, "skills/revayat-comic/scripts/revayat-comic.py", "--help"],
+              capture_output=True, text=True, check=True,
+          ).stdout
+          available = set(re.search(r"stages: (.+)", stages).group(1).split(", "))
+
+          docs = [pathlib.Path("README.md"), pathlib.Path("README.en.md"),
+                  pathlib.Path("skills/revayat-comic/SKILL.md")]
+          docs += list(pathlib.Path("skills/revayat-comic/references").glob("*.md"))
+          docs += list(pathlib.Path("commands").glob("*.md"))
+
+          used = set()
+          for doc in docs:
+              # A stage name may contain a hyphen. Stopping at one would turn
+              # `ocr-sidecar` into `ocr`, failing on documentation that is right.
+              used |= set(re.findall(r"revayat-comic\.py\s+([a-z][a-z_-]*)",
+                                     doc.read_text(encoding="utf-8")))
+
+          unknown = used - available
+          assert not unknown, f"docs reference stages that do not exist: {unknown}"
+          print(f"ok: {len(used)} documented stages, all real ({sorted(available)})")
+          PY
+
+      - name: Every QA finding code has a documented action
+        run: |
+          python - <<'PY'
+          import pathlib, sys
+
+          sys.path.insert(0, "skills/revayat-comic/scripts")
+          import qa
+
+          text = pathlib.Path("skills/revayat-comic/SKILL.md").read_text(encoding="utf-8")
+          missing = [code for code in qa.CODES if f"`{code}`" not in text]
+          assert not missing, f"SKILL.md has no action for: {missing}"
+          print(f"ok: all {len(qa.CODES)} QA codes are documented")
+          PY
+
+      - name: Every test suite on disk is reachable
+        run: |
+          python - <<'PY'
+          import pathlib, subprocess, sys
+
+          on_disk = {p.name for p in pathlib.Path("tests").glob("test_*.py")}
+          run = subprocess.run(
+              [sys.executable, "-m", "pytest", "tests", "--collect-only", "-q"],
+              capture_output=True, text=True,
+          )
+          # Without this, a collection error would look like "no suite is
+          # reachable" and point the blame at the wrong thing entirely.
+          assert run.returncode == 0, (
+              "pytest could not collect at all: "
+              + run.stdout[-1500:] + run.stderr[-1500:]
+          )
+          missing = [name for name in on_disk if name.replace(".py", "") not in run.stdout]
+          assert not missing, f"test files never collected by CI: {missing}"
+          print(f"ok: all {len(on_disk)} test modules are collected")
+          PY
+
+      - name: No comic artwork was committed
+        run: |
+          python - <<'PY'
+          import pathlib, subprocess
+
+          # Pages are someone else's work and they bloat the repository. The
+          # fixtures are drawn at run time, so there is never a reason for one.
+          ART = {".png", ".jpg", ".jpeg", ".webp", ".cbz", ".cbr", ".psd"}
+          tracked = subprocess.run(["git", "ls-files"], capture_output=True,
+                                   text=True, check=True).stdout.splitlines()
+          found = [name for name in tracked
+                   if pathlib.Path(name).suffix.lower() in ART
+                   and not name.startswith("docs/")]
+          assert not found, f"artwork committed: {found}"
+          print(f"ok: {len(tracked)} tracked files, no artwork")
+          PY

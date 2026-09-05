@@ -1,0 +1,114 @@
+# Translation policy
+
+What to hand the sub-agent translating one page, and what it must do. Read this
+before step 5 of `SKILL.md`; the sub-agent should read it too.
+
+## The one thing that makes this different
+
+You can see the page. An OCR-then-translate pipeline cannot, and every weakness
+of those tools comes from that: a bare string has no speaker, no tone, no face
+above it and no balloon answering it back.
+
+So look at both images the worksheet names, in this order:
+
+1. **`overview.png`** — the whole page, every region numbered in reading order.
+   Read the page as a page first. Who is in it, what is happening, who is
+   talking to whom, which balloon is an answer to which.
+2. **`sheet*.png`** — the crops, enlarged and labelled with region ids. Read the
+   text from these; the overview is too small to read from.
+
+Then write the worksheet. `src:` is what the balloon says. `fa:` is the Persian.
+
+## Register is most of the job
+
+Comic dialogue is speech, not prose. The commonest failure in a machine
+translation of a manga is not a wrong word — it is a correct word in the wrong
+register, so that a fifteen-year-old shouting at his brother sounds like a
+government notice.
+
+| The art shows | The Persian should be |
+| --- | --- |
+| shouting, motion lines, a jagged balloon | short, blunt, no polite verb endings |
+| a thought balloon | quieter, more interior, often unfinished |
+| a narration box | narrative past tense, more formal than any dialogue |
+| a small trailing balloon | a mutter; keep it small in words too |
+| a child | plain vocabulary, simple structures |
+| a formal or older character | full verb forms, no clipping |
+
+Japanese carries register in verb endings that Persian carries in word choice
+and sentence length. `やめろ` and `やめてください` are the same instruction; the
+first is `بس کن` and the second is `لطفاً بس کنید`. Losing that flattens every
+character into one voice.
+
+## Length
+
+Persian runs longer than Japanese, and a balloon does not grow. If the natural
+Persian is too long, the answer is a shorter Persian sentence that still says
+everything — not a summary, and not a smaller font.
+
+Practical guidance:
+
+- Prefer the shorter of two accurate renderings.
+- Drop filler that Persian does not need: a Japanese sentence-final particle
+  usually becomes punctuation or nothing.
+- Do not pad. `そうか` is `که این‌طور`, not `آها، پس قضیه از این قرار بوده`.
+- If `typeset` later reports the region as overflowing, shorten *that* line.
+
+## Names and terms
+
+The table at the top of the worksheet is binding. Use exactly the Persian it
+gives, every time. If a name is not in the table, choose a rendering, use it
+consistently, and put it in `speaker:` so it reaches the table for later pages.
+
+For a Japanese name, transliterate rather than translate: ハルカ is `هاروکا`.
+For a title or a technique with a meaning, prefer the meaning when it is a
+common noun (`先輩` → `سِنپای` when it is used as a name, `ارشد` when it is a
+role) — decide once and stay with it.
+
+Honorifics: `-san`, `-kun`, `-chan`, `-senpai`. Keep them when the relationship
+between two characters is part of the story and Persian has no equivalent;
+drop them when they are only politeness. Do not switch between the two policies
+inside one chapter.
+
+## Persian specifics
+
+- Natural Persian punctuation: `،` `؛` `؟` `«»`. The typography pass fixes these
+  mechanically, so write naturally and do not fight it.
+- Persian letters, not Arabic: `ی` and `ک`, never `ي` and `ك`.
+- Half-spaces where they belong: `می‌روم`, `کتاب‌ها`. Also mechanical.
+- Do not reverse anything, and do not paste text that already looks right-to-left
+  in your editor. Write ordinary Persian in ordinary order.
+- Do not insert an explanation into the dialogue. A character does not explain
+  their own culture mid-sentence.
+
+## Sound effects
+
+An SFX is lettering drawn into the artwork. Under the default `keep` policy it
+stays as drawn and you only transcribe it, which is still worth doing: it lands
+in the glossary and helps the next page.
+
+When the policy is `translate` or `bilingual`, give a Persian equivalent that is
+a *sound*, not a description: `ドドド` is `دادادا` or `غرش`, not
+`صدای پای سنگین`. If you are unsure what a sound effect says, say so in `note:`
+and leave `fa:` empty rather than inventing one — a wrong SFX replaces artwork
+with a mistake.
+
+## Correcting the detector
+
+The detector measured geometry. It did not understand the page, and you do.
+Three fields fix what it got wrong:
+
+- `drop: yes` — there is no text in this region. Screentone, a hand, a panel
+  border that happened to look like lettering. Common for low-confidence
+  regions; use it freely.
+- `kind:` — it called a narration box `speech`, or a shop sign `sfx`.
+- `speaker:` — who is talking. Use a short, stable name and use the *same* one
+  on every page. This is what makes a character sound like one person.
+
+## What never to do
+
+- Never merge two balloons into one answer, or split one across two.
+- Never leave a balloon untranslated because it is hard. Ask in `note:`.
+- Never summarise. A balloon with four sentences gets four sentences.
+- Never invent a region id, and never renumber one.
+- Never write English into `fa:`.
