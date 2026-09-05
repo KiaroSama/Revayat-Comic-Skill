@@ -1,0 +1,120 @@
+"""Input normalisation: order, hashing, and the formats people actually have."""
+
+from __future__ import annotations
+
+import zipfile
+from pathlib import Path
+
+import pytest
+
+import pageir as ir
+import readers
+from tests_support import manga_page, page_bytes, write_pages
+
+
+def test_natural_sort_puts_page_2_before_page_10():
+    names = ["page10.png", "page2.png", "page1.png"]
+    assert sorted(names, key=readers.natural_key) == [
+        "page1.png", "page2.png", "page10.png"
+    ]
+    # And byte-wise sorting does not, which is the reason this exists.
+    assert sorted(names) != ["page1.png", "page2.png", "page10.png"]
+
+
+def test_import_renames_pages_into_reading_order(imported):
+    doc = ir.load_doc(imported)
+    assert [page["id"] for page in doc["pages"]] == ["p0001", "p0002", "p0003"]
+    assert [page["index"] for page in doc["pages"]] == [0, 1, 2]
+
+
+def test_every_page_is_hashed_and_the_hash_matches(imported):
+    doc = ir.load_doc(imported)
+    root = ir.doc_dir(imported)
+    for page in doc["pages"]:
+        assert len(page["sha256"]) == 64
+        assert ir.sha256_file(root / page["image"]) == page["sha256"]
+
+
+def test_page_size_is_recorded(imported):
+    doc = ir.load_doc(imported)
+    assert all(page["width"] == 1000 and page["height"] == 1500
+               for page in doc["pages"])
+
+
+def test_macos_metadata_entries_are_not_pages(tmp_path):
+    archive = tmp_path / "junk.cbz"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("__MACOSX/._page1.png", b"junk")
+        zf.writestr(".DS_Store", b"junk")
+        zf.writestr("page1.png", page_bytes(manga_page()))
+    report = readers.import_source(archive, tmp_path / "work")
+    assert report["pages"] == 1
+
+
+def test_an_archive_with_no_images_says_so(tmp_path):
+    archive = tmp_path / "empty.cbz"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("readme.txt", b"nothing here")
+    with pytest.raises(ValueError, match="no images"):
+        readers.import_source(archive, tmp_path / "work")
+
+
+def test_a_folder_of_images_imports(tmp_path):
+    folder = write_pages(tmp_path / "pages", pages=2)
+    report = readers.import_source(folder, tmp_path / "work")
+    assert report["kind"] == "directory" and report["pages"] == 2
+
+
+def test_a_single_image_imports(sample_page, tmp_path):
+    report = readers.import_source(sample_page, tmp_path / "work")
+    assert report["pages"] == 1
+
+
+def test_a_cbz_with_the_wrong_extension_is_still_recognised(tmp_path):
+    archive = tmp_path / "chapter.bin"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("001.png", page_bytes(manga_page()))
+    assert readers.detect_kind(archive) == "cbz"
+
+
+def test_an_unknown_file_type_explains_what_is_supported(tmp_path):
+    path = tmp_path / "notes.txt"
+    path.write_text("hello", encoding="utf-8")
+    with pytest.raises(ValueError, match="CBZ"):
+        readers.detect_kind(path)
+
+
+def test_a_missing_source_is_reported_as_such(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        readers.import_source(tmp_path / "nope.cbz", tmp_path / "work")
+
+
+def test_a_tall_strip_is_flagged_as_a_webtoon(tmp_path):
+    from PIL import Image
+
+    folder = tmp_path / "strip"
+    folder.mkdir()
+    (folder / "001.png").write_bytes(page_bytes(Image.new("RGB", (800, 6000), "white")))
+    report = readers.import_source(folder, tmp_path / "work")
+    assert report["webtoon_strips"] == ["p0001"]
+    assert "webtoon" in report["warning"]
+
+
+def test_pdf_import_keeps_the_original_page_bytes(tmp_path):
+    """A comic PDF is one scan per page; re-rendering it would resample artwork
+    that was already at its native resolution."""
+    pymupdf = pytest.importorskip("pymupdf")
+
+    source = tmp_path / "chapter.pdf"
+    payload = page_bytes(manga_page())
+    document = pymupdf.open()
+    for _ in range(2):
+        page = document.new_page(width=1000, height=1500)
+        page.insert_image(pymupdf.Rect(0, 0, 1000, 1500), stream=payload)
+    document.save(str(source))
+    document.close()
+
+    report = readers.import_source(source, tmp_path / "work")
+    assert report["kind"] == "pdf" and report["pages"] == 2
+    doc = ir.load_doc(Path(report["document"]))
+    assert doc["pages"][0]["width"] == 1000

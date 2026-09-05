@@ -1,0 +1,48 @@
+{
+  "name": "revayat-comic",
+  "displayName": "Revayat Comic — Persian Comic Translation",
+  "version": "1.0.0",
+  "description": "Translate manga, manhwa, manhua and Western comics into Persian and produce a finished CBZ or PDF: pixel-accurate balloon detection, source lettering removed without altering the artwork, and real right-to-left Persian typesetting fitted to each balloon.",
+  "author": {
+    "name": "Kiaro Sama",
+    "url": "https://github.com/KiaroSama"
+  },
+  "homepage": "https://github.com/KiaroSama/Revayat-Comic-Skill",
+  "repository": "https://github.com/KiaroSama/Revayat-Comic-Skill",
+  "license": "GPL-3.0-or-later",
+  "keywords": [
+    "manga",
+    "comics",
+    "manhwa",
+    "manhua",
+    "webtoon",
+    "translation",
+    "persian",
+    "farsi",
+    "rtl",
+    "cbz",
+    "typesetting",
+    "scanlation"
+  ],
+  "skills": "./skills/",
+  "commands": "./commands/",
+  "interface": {
+    "displayName": "Revayat Comic",
+    "shortDescription": "Translate a comic chapter into Persian, artwork intact.",
+    "longDescription": "Translate manga, manhwa, manhua and Western comics into Persian and produce a finished CBZ or PDF: pixel-accurate balloon detection, source lettering removed without altering the artwork, and real right-to-left Persian typesetting fitted to each balloon.",
+    "developerName": "Kiaro Sama",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write",
+      "Bash"
+    ],
+    "websiteURL": "https://github.com/KiaroSama/Revayat-Comic-Skill",
+    "defaultPrompt": [
+      "Translate this manga chapter into Persian: chapter-01.cbz",
+      "Translate this webtoon to Persian and keep the artwork intact.",
+      "Localise this comic PDF into Persian and give me a CBZ."
+    ],
+    "brandColor": "#1f6f5c"
+  }
+}

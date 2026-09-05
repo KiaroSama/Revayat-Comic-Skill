@@ -1,0 +1,23 @@
+name: Dependency review
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    name: review dependency changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Flag vulnerable or incompatibly-licensed dependencies
+        uses: actions/dependency-review-action@v5
+        with:
+          fail-on-severity: moderate
+          # This project is GPL-3.0-or-later, so a copyleft dependency is no
+          # longer a problem — the denial that used to sit here was written for
+          # an MIT project and would now reject licences this one is compatible
+          # with. Vulnerability severity remains the gate.
