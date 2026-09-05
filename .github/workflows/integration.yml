@@ -1,0 +1,189 @@
+name: Optional toolchain integration
+
+# The unit tier on every push installs no binaries and reads no real scan: it
+# tests the decisions, which is the part with consequences and the part that can
+# be checked in seconds. This workflow is the other half — the two things that
+# need something extra to prove:
+#
+#   * CBR, which needs rarfile plus an unrar backend on PATH
+#   * a full 300-dpi page, which is slow enough that running it per commit buys
+#     nothing the 1000x1500 fixture does not already cover
+#
+# Kept off the push path on purpose. Apt and a third-party archive backend are
+# the least stable things in this repository's CI, and a flake in either must
+# not block an unrelated commit.
+on:
+  workflow_dispatch:
+  schedule:
+    # Weekly, early Monday UTC. Enough to catch a breaking release without
+    # spending a runner on every commit.
+    - cron: "31 4 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cbr:
+    name: CBR through a real unrar backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Install the archive toolchain
+        run: |
+          sudo apt-get update -qq
+          # libarchive-tools provides bsdtar, which rarfile accepts as a
+          # backend and which — unlike unrar — is free software and packaged
+          # in main.
+          sudo apt-get install -y --no-install-recommends libarchive-tools
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r skills/revayat-comic/requirements.txt
+          python -m pip install rarfile
+
+      - name: The backend is actually here
+        # Without this the CBR test would skip itself and the job would pass
+        # green having proved nothing at all — the exact failure this tier
+        # exists to avoid.
+        run: |
+          python - <<'PY'
+          import shutil, sys
+          import rarfile
+
+          backend = shutil.which("bsdtar") or shutil.which("unrar")
+          assert backend, "no unrar/bsdtar backend: the CBR tier cannot run"
+          print(f"ok: rarfile {rarfile.__version__} with backend {backend}")
+          PY
+
+      - name: A CBR imports, in reading order, with hashes
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          python - <<'PY'
+          import subprocess, sys, tempfile, shutil
+          from pathlib import Path
+
+          sys.path[:0] = ["tests", "skills/revayat-comic/scripts"]
+          from tests_support import manga_page, page_bytes
+          import pageir as ir
+          import readers
+
+          work = Path(tempfile.mkdtemp())
+          pages = work / "pages"
+          pages.mkdir()
+          # Names that sort badly byte-wise, so the natural-sort path is under
+          # test and not just the archive reader.
+          for index, name in enumerate(("page1.png", "page2.png", "page10.png")):
+              (pages / name).write_bytes(page_bytes(manga_page(dark_balloon=index == 1)))
+
+          archive = work / "chapter.cbr"
+          # bsdtar writes RAR-compatible archives that rarfile can read back.
+          subprocess.run(
+              ["bsdtar", "-a", "-c", "-f", str(archive), "page1.png", "page2.png", "page10.png"],
+              cwd=pages, check=True,
+          )
+          assert archive.stat().st_size > 0
+
+          report = readers.import_source(archive, work / "out")
+          assert report["pages"] == 3, report
+          doc = ir.load_doc(Path(report["document"]))
+          assert [p["id"] for p in doc["pages"]] == ["p0001", "p0002", "p0003"]
+          root = ir.doc_dir(Path(report["document"]))
+          for page in doc["pages"]:
+              assert ir.sha256_file(root / page["image"]) == page["sha256"]
+          print(f"ok: CBR imported {report['pages']} pages in reading order, hashes match")
+          PY
+
+  full_resolution:
+    name: a whole chapter at 300 dpi
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Install a Persian-capable font
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends fonts-noto-core
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r skills/revayat-comic/requirements.txt
+
+      - name: Detect, clean and typeset A4-at-300dpi pages
+        env:
+          PYTHONIOENCODING: utf-8
+        run: |
+          python - <<'PY'
+          import sys, tempfile, time
+          from pathlib import Path
+
+          sys.path[:0] = ["tests", "skills/revayat-comic/scripts"]
+          from tests_support import manga_page, page_bytes
+          import clean, detect, falint, masks, pageir as ir, qa, readers, typeset, export
+
+          WIDTH, HEIGHT, PAGES = 2480, 3508, 4
+          work = Path(tempfile.mkdtemp())
+          folder = work / "src"
+          folder.mkdir()
+          for index in range(PAGES):
+              (folder / f"{index + 1:03d}.png").write_bytes(
+                  page_bytes(manga_page(WIDTH, HEIGHT, dark_balloon=index % 2 == 1))
+              )
+
+          started = time.monotonic()
+          report = readers.import_source(folder, work / "w", source_language="ja")
+          doc_path = Path(report["document"])
+
+          found = detect.detect_document(doc_path)
+          assert found["totals"]["speech"] == 3 * PAGES, found["totals"]
+          assert found["totals"]["panels"] == 4 * PAGES, found["totals"]
+
+          masks.build_document(doc_path)
+          doc = ir.load_doc(doc_path)
+          for page in doc["pages"]:
+              assert page["mask_coverage"] < 0.15, (page["id"], page["mask_coverage"])
+
+          # Stand in for the reader.
+          lines = ["بس کن! این‌جا چه خبر است؟", "هیچ‌کس نمی‌داند او کجا رفته.", "دوباره برگشتی؟"]
+          for index, (_, region) in enumerate(ir.iter_regions(doc)):
+              region["source_text"] = "やめろ！"
+              region["target_text"] = lines[index % len(lines)]
+              region["locked"] = True
+          ir.save_doc(doc, doc_path)
+
+          falint.fix_document(doc_path)
+          cleaned = clean.clean_document(doc_path)
+          assert cleaned["totals"]["flat"] > 0, cleaned["totals"]
+
+          set_up = typeset.typeset_document(doc_path)
+          assert not set_up["overflow"], set_up["overflow"]
+
+          gate = qa.check_document(doc_path)
+          assert gate["ok"], gate["findings"][:4]
+          assert gate["stats"]["artwork_pixels_changed"] == 0
+
+          out = work / "chapter-fa.cbz"
+          export.export_document(doc_path, out)
+          assert qa.check_package(out, doc_path)["ok"]
+
+          elapsed = time.monotonic() - started
+          print(f"ok: {PAGES} pages at {WIDTH}x{HEIGHT} in {elapsed:.0f}s, "
+                f"{gate['stats']['translated']} regions, 0 pixels changed outside the masks")
+          PY

@@ -105,6 +105,7 @@ means.
 | a sound effect comes back as several regions | letters spaced further apart than usual | raise `--sfx-min-side` is *wrong* here; the clustering is size-relative, so check the marks were seeded at all with `--glyph-max` |
 | one page-sized panel | no clean gutters | expected on a splash page; order falls back to geometry |
 | `pages_without_text` on most pages | the thresholds do not fit this book | start with `--balloon-min-area 0.0003 --ink-min 0.008` |
+| balloons missed **only** on a high-resolution scan | the outline is a hairline relative to the page | see *Resolution* below |
 
 ## Correcting a region
 
@@ -125,3 +126,32 @@ flags it (`webtoon_strips`) and the right settings are `--direction ltr` and low
 expectations of the panel pass. Balloon detection itself works normally; it is
 the ordering that has nothing to work with beyond top-to-bottom, which for a
 webtoon is the correct order anyway.
+
+## Resolution
+
+Every threshold here is a fraction of the page, so the detector is
+scale-invariant **provided the artwork scales with the raster**. A real scan
+does: a tankobon at 300 dpi has a proportionally thicker balloon outline than
+the same art at 96 dpi, because it is the same ink measured with more pixels.
+Measured on A4 at 300 dpi (2480×3508), detection is exact — every balloon, every
+panel, at the same numbers as a 1000×1500 page.
+
+The counter-case is art whose line weight did **not** scale with the raster: a
+small drawing upsampled, or vector line art rendered thin at high DPI. A
+four-pixel outline on a 2480-pixel page is 0.16% of the width — thinner than the
+ink and solidity heuristics expect — and balloons are missed.
+
+That is a property of the input, not a threshold bug. Loosening the heuristics
+enough to catch a hairline also makes every screentone gradient a balloon. On
+such a book, try in this order:
+
+1. `--balloon-min-solidity 0.30` — the usual fix. A hairline-outlined balloon
+   still reads as blobby, just less so.
+2. `--ink-min 0.008` — thin lettering holds less ink than the default assumes.
+3. Downsample the pages before importing. If the extra pixels came from
+   upsampling they carry no more detail, and they cost detection accuracy.
+
+`tests/test_resolution.py` pins both the working case and this limit across four
+page sizes, so neither can move silently. The weekly
+`.github/workflows/integration.yml` runs a whole four-page chapter at 300 dpi
+end to end.

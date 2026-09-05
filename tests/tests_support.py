@@ -42,7 +42,7 @@ def _glyph_block(draw, box, *, rows=3, columns=6, colour=BLACK, seed=0, gaps=Tru
             draw.rectangle([gx, gy, gx + glyph_w, gy + glyph_h], fill=colour)
 
 
-def _texture(image, box, spacing=9):
+def _texture(image, box, spacing=9, width=2):
     """Hatching, so a region over it needs real inpainting and not a flat fill.
 
     Drawn on its own layer and pasted, because PIL clips a line to the *image*
@@ -52,11 +52,11 @@ def _texture(image, box, spacing=9):
     be filling.
     """
     x0, y0, x1, y1 = (int(value) for value in box)
-    width, height = max(1, x1 - x0), max(1, y1 - y0)
-    patch = Image.new("RGB", (width, height), WHITE)
+    box_w, box_h = max(1, x1 - x0), max(1, y1 - y0)
+    patch = Image.new("RGB", (box_w, box_h), WHITE)
     hatch = ImageDraw.Draw(patch)
-    for offset in range(0, width + height, spacing):
-        hatch.line([(offset, 0), (0, offset)], fill=(70, 70, 70), width=2)
+    for offset in range(0, box_w + box_h, spacing):
+        hatch.line([(offset, 0), (0, offset)], fill=(70, 70, 70), width=width)
     image.paste(patch, (x0, y0))
 
 
@@ -69,11 +69,24 @@ def manga_page(
     with_sfx: bool = True,
     dark_balloon: bool = False,
 ) -> Image.Image:
-    """One page: two panel rows, balloons with lettering, optionally an SFX."""
+    """One page: two panel rows, balloons with lettering, optionally an SFX.
+
+    **Line weights scale with the page.** Every detector threshold is a fraction
+    of the page, so the fixture has to be a fraction of the page too — and a real
+    scan is: a tankobon at 300 dpi has a proportionally thicker balloon outline
+    than the same art at 96 dpi, because it is the same ink measured with more
+    pixels. Drawing a fixed four-pixel outline on a 2480-pixel page produces a
+    hairline no real scan contains, and detection collapses on it (measured:
+    1 balloon of 3, and one panel lost). Scaled, it is exact at every size.
+    """
+    scale = min(width, height) / 1000.0
+    border = max(2, round(5 * scale))
+    outline = max(2, round(4 * scale))
+
     page = Image.new("RGB", (width, height), WHITE)
     draw = ImageDraw.Draw(page)
 
-    margin, gutter = 40, 34
+    margin, gutter = 40 * scale, 34 * scale
     panel_w = (width - 2 * margin - gutter) / 2
     panel_h = (height - 2 * margin - gutter) / 2
     panels = []
@@ -82,12 +95,14 @@ def manga_page(
             x0 = margin + column * (panel_w + gutter)
             y0 = margin + row * (panel_h + gutter)
             box = [x0, y0, x0 + panel_w, y0 + panel_h]
-            draw.rectangle(box, outline=BLACK, width=5)
+            draw.rectangle(box, outline=BLACK, width=border)
             panels.append(box)
 
     if with_texture:
         px0, py0, px1, py1 = panels[1]
-        _texture(page, [px0 + 12, py0 + 12, px1 - 12, py1 - 12])
+        inset = 12 * scale
+        _texture(page, [px0 + inset, py0 + inset, px1 - inset, py1 - inset],
+                 spacing=max(3, round(9 * scale)), width=max(1, round(2 * scale)))
 
     placed = 0
     for index, (px0, py0, px1, py1) in enumerate(panels):
@@ -95,11 +110,11 @@ def manga_page(
             break
         bw, bh = (px1 - px0) * 0.62, (py1 - py0) * 0.42
         bx0 = px0 + (px1 - px0 - bw) / 2
-        by0 = py0 + 26 + index * 5
+        by0 = py0 + (26 + index * 5) * scale
         box = [bx0, by0, bx0 + bw, by0 + bh]
         fill, ink = ((30, 30, 30), (240, 240, 240)) if dark_balloon else (WHITE, BLACK)
         draw.ellipse(box, fill=fill, outline=BLACK if not dark_balloon else WHITE,
-                     width=4)
+                     width=outline)
         inset_x, inset_y = bw * 0.20, bh * 0.24
         _glyph_block(
             draw,
@@ -115,7 +130,8 @@ def manga_page(
         # and the detector is meant to return it as one region.
         _glyph_block(
             draw,
-            [px0 + 40, py1 - 130, px0 + 300, py1 - 40],
+            [px0 + 40 * scale, py1 - 130 * scale,
+             px0 + 300 * scale, py1 - 40 * scale],
             rows=1, columns=4, colour=BLACK, seed=2, gaps=False,
         )
     return page

@@ -292,7 +292,7 @@ jobs:
           ).stdout
           available = set(re.search(r"stages: (.+)", stages).group(1).split(", "))
 
-          docs = [pathlib.Path("README.md"), pathlib.Path("README.en.md"),
+          docs = [pathlib.Path("README.md"), pathlib.Path("README.fa.md"),
                   pathlib.Path("skills/revayat-comic/SKILL.md")]
           docs += list(pathlib.Path("skills/revayat-comic/references").glob("*.md"))
           docs += list(pathlib.Path("commands").glob("*.md"))

@@ -91,6 +91,11 @@ python tests/e2e_pipeline.py
 generated chapter, so a break in the dispatcher, an argument name or a report
 field shows up even when each module's own tests still pass.
 
+`.github/workflows/integration.yml` is the other tier, off the push path and run
+weekly: CBR through a real archive backend, and a whole four-page chapter at
+A4/300 dpi. Both need something the unit tier deliberately does not install, and
+a flake in either must not block an unrelated commit.
+
 Fixtures are drawn with plain shapes rather than real Japanese, deliberately:
 the detector measures geometry and does not care which script the ink came from,
 and drawing with a CJK font would make the suite depend on a font a stock CI
