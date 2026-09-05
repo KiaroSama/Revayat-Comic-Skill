@@ -282,3 +282,126 @@ def test_the_skill_documents_every_code():
     text = skill.read_text(encoding="utf-8")
     missing = [code for code in qa.CODES if f"`{code}`" not in text]
     assert not missing, f"SKILL.md has no action for: {missing}"
+
+
+# --- Terminal states ---------------------------------------------------------
+# Completeness used to be inferred from a scatter of fields. A region that fell
+# between them was invisible: nothing missing, no count wrong, and a balloon
+# simply never translated. The census makes "what happened to all of them" a
+# question with one answer per region.
+
+def test_every_region_reaches_exactly_one_terminal_state(finished):
+    doc = ir.load_doc(finished)
+    census = ir.state_census(doc)
+    assert sum(census.values()) == len(ir.all_regions(doc))
+    assert set(census) == set(ir.REGION_STATES)
+
+
+def test_a_finished_chapter_leaves_nothing_unresolved(finished):
+    assert ir.state_census(ir.load_doc(finished))["unresolved"] == 0
+
+
+@pytest.mark.parametrize("setup, expected", [
+    (lambda r: r.update(target_text="سلام"), "translated"),
+    (lambda r: r.update(dropped=True), "dropped_false_detection"),
+    (lambda r: r.update(target_text="سلام", typeset={"status": "overflow"}),
+     "needs_review"),
+    (lambda r: r.update(review=["cannot read this crop"]), "needs_review"),
+    (lambda r: None, "unresolved"),
+])
+def test_each_terminal_state_is_reachable(setup, expected):
+    region = ir.new_region("r1", [0, 0, 10, 10], kind="speech")
+    setup(region)
+    assert ir.region_state(region, "keep") == expected
+
+
+def test_a_kept_sound_effect_is_a_decision_not_a_hole():
+    sfx = ir.new_region("r1", [0, 0, 10, 10], kind="sfx")
+    assert ir.region_state(sfx, "keep") == "kept_by_policy"
+    # Under `translate` the same empty region IS a hole.
+    assert ir.region_state(sfx, "translate") == "unresolved"
+
+
+def test_an_unresolved_region_is_counted_and_still_blocks(finished):
+    """The census is reported, not gated: `unresolved` is a strict subset of
+    what `untranslated-region` already blocks on, so a second code firing on the
+    same rows would be noise. The count still has to be visible."""
+    doc = ir.load_doc(finished)
+    _, region = next(iter(ir.iter_regions(doc)))
+    region["target_text"] = ""
+    region["typeset"] = {}
+    region["review"] = []
+    region["dropped"] = False
+    ir.save_doc(doc, finished)
+
+    report = qa.check_document(finished)
+    assert report["stats"]["states"]["unresolved"] >= 1
+    assert report["by_code"]["untranslated-region"] >= 1
+    assert not report["ok"]
+
+
+def test_unresolved_never_escapes_the_blocking_code(finished):
+    """Why the census is safe to leave ungated, asserted rather than assumed:
+    nothing can be `unresolved` without also being untranslated."""
+    doc = ir.load_doc(finished)
+    policy = doc["meta"].get("sfx_policy", "keep")
+    for _, region in ir.iter_regions(doc):
+        if ir.region_state(region, policy) == "unresolved":
+            assert ir.translatable(region, policy)
+            assert not (region.get("target_text") or "").strip()
+
+
+# --- Did the lettering actually go? ------------------------------------------
+
+def test_a_clean_run_leaves_no_surviving_lettering(finished):
+    assert "source-text-survived" not in qa.check_document(finished)["by_code"]
+
+
+def test_the_gate_catches_a_mask_that_missed_half_the_lettering(finished):
+    """`artwork-modified` proves nothing changed that should not have. This
+    proves the other direction, which nothing else asks."""
+    from PIL import Image
+
+    doc = ir.load_doc(finished)
+    root = ir.doc_dir(finished)
+    victim = next(r for _, r in ir.iter_regions(doc) if r.get("balloon"))
+    mask = masks.load_mask(root / victim["mask"]).copy()
+    mask[: mask.shape[0] // 2, :] = 0
+    Image.fromarray(mask, mode="L").save(root / victim["mask"])
+
+    clean.clean_document(finished)
+    report = qa.check_document(finished)
+    assert report["by_code"]["source-text-survived"] >= 1
+    assert not report["ok"]
+
+
+def test_the_balloon_outline_is_not_mistaken_for_leftover_text(finished):
+    """The first implementation measured over the padded box and read every
+    balloon's own outline as un-removed lettering — 100% survived on a perfect
+    run. Scoping it to the interior is what makes the number mean anything."""
+    doc = ir.load_doc(finished)
+    root = ir.doc_dir(finished)
+    page = doc["pages"][0]
+    before = np.asarray(ir.load_image(root / page["image"]))
+    after = np.asarray(ir.load_image(root / page["clean"]))
+    size = (page["width"], page["height"])
+
+    for region in page["regions"]:
+        if not region.get("balloon") or region.get("fill") in {"none", "keep"}:
+            continue
+        share = qa.surviving_ink(
+            before, after, region, masks.load_mask(root / region["mask"]),
+            size, np,
+        )
+        assert share <= qa.MAX_SURVIVING_INK, f"{region['id']} reads {share:.0%}"
+
+
+def test_free_lettering_is_not_judged_for_survival():
+    """On artwork there is no flat paper to measure against: leftover ink is
+    indistinguishable from the drawing it sits on, so the check declines."""
+    region = ir.new_region("r1", [0, 0, 40, 40], kind="sfx")
+    region["mask_box"] = [0, 0, 40, 40]
+    assert qa.surviving_ink(
+        np.zeros((40, 40, 3), np.uint8), np.zeros((40, 40, 3), np.uint8),
+        region, np.zeros((40, 40), np.uint8), (40, 40), np,
+    ) == 0.0

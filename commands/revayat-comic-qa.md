@@ -22,6 +22,10 @@ Report, in this order:
    `sfx-untranslated` under the `keep` policy is expected.
 4. The stats line: pages, regions, translated, typeset, and
    `artwork_pixels_changed`.
+5. **`stats.states`** — what happened to every detected region, as counts across
+   `translated`, `kept_by_policy`, `dropped_false_detection`, `needs_review` and
+   `unresolved`. Report all five. Four of them are decisions; `unresolved` means
+   a region was detected and then forgotten, and it should be zero.
 
 If a package has already been exported, verify it too:
 
