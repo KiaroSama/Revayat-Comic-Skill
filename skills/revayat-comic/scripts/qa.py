@@ -45,6 +45,7 @@ CODES = {
     "reading-order-broken": "error",
     "archive-invalid": "error",
     "archive-page-count": "error",
+    "source-text-survived": "error",
     "mask-excessive": "warning",
     "duplicate-translation": "warning",
     "low-confidence-region": "warning",
@@ -52,6 +53,11 @@ CODES = {
     "typography": "warning",
     "sfx-untranslated": "warning",
 }
+
+#: How much of a region's original ink may still be sitting outside the mask
+#: after cleaning. A stroke that leaned out of the detector's box leaves a rim
+#: of the source script on the page; below this it is anti-aliasing.
+MAX_SURVIVING_INK = 0.06
 
 #: Below this the detector was guessing, and a region it invented should have
 #: been dropped in the worksheet rather than translated.
@@ -109,6 +115,54 @@ def compare_outside_mask(original_path: Path, final_path: Path, mask_path: Path 
     return changed, int(delta.size // 3), int(outside.max())
 
 
+def surviving_ink(original, cleaned, region: dict[str, Any],
+                  mask, page_size: tuple[int, int], np) -> float:
+    """Share of a balloon's lettering still on the page after cleaning.
+
+    The mirror of ``artwork-modified``, and the hole it leaves. That check
+    proves nothing changed that should not have; **nothing proved that what
+    should have gone, went.** A mask that misses the tail of a stroke leaves a
+    rim of the source script inside the balloon, every count stays correct, and
+    the page ships with Japanese on it.
+
+    **Balloons only, and the restriction is the whole reason it works.** Inside
+    a balloon the paper is flat, so ink left there after cleaning is a missed
+    stroke and nothing else. Measured over the padded box instead, it reads the
+    balloon's own outline as un-removed text and returns 100% on a perfect run —
+    measured, which is how this ended up scoped. For lettering drawn straight
+    onto artwork there is no such separation: leftover ink is indistinguishable
+    from the drawing it sits on, so those regions are not judged here.
+    """
+    balloon = region.get("balloon")
+    if not balloon:
+        return 0.0
+
+    interior = mask_tools.balloon_interior(
+        cleaned, balloon, region.get("polarity", "light"), page_size,
+        inset=mask_tools.OUTLINE_INSET,
+    )
+    x, y, w, h = region["mask_box"]
+    if w <= 0 or h <= 0:
+        return 0.0
+
+    # Where a letter could have been and the mask did not reach.
+    consider = (interior[y:y + h, x:x + w] > 0) & (mask == 0)
+    if consider.sum() < 24:
+        return 0.0
+
+    before = original[y:y + h, x:x + w].astype(np.int16).mean(axis=2)
+    after = cleaned[y:y + h, x:x + w].astype(np.int16).mean(axis=2)
+    # The balloon's own colour, read from the cleaned page where it is flat.
+    paper = float(np.median(after[consider]))
+
+    was_ink = (np.abs(before - paper) > 60) & consider
+    total = int(was_ink.sum())
+    if total < 12:
+        return 0.0
+    still = (np.abs(after - paper) > 60) & was_ink
+    return float(int(still.sum()) / total)
+
+
 # --------------------------------------------------------------------------- #
 # Document checks
 # --------------------------------------------------------------------------- #
@@ -129,6 +183,12 @@ def check_document(doc_path: str | Path, *, strict: bool = False) -> dict[str, A
         "dropped": 0,
         "typeset": 0,
         "artwork_pixels_changed": 0,
+        # Every detected region lands in exactly one of these. Reported, not
+        # gated: `unresolved` is a strict subset of what `untranslated-region`
+        # already blocks on, and two codes firing on identical rows is noise.
+        # The census earns its place by answering a question no single code
+        # does — what happened to all of them.
+        "states": ir.state_census(doc),
     }
     seen_translations: dict[str, list[str]] = defaultdict(list)
 
@@ -183,8 +243,36 @@ def check_document(doc_path: str | Path, *, strict: bool = False) -> dict[str, A
                         pixels=changed, share=round(changed / max(1, total), 6),
                     )
 
+        # Did the source lettering actually go? `artwork-modified` above proves
+        # nothing changed that should not have. This proves the opposite
+        # direction, which nothing else asks.
+        cleaned_name = page.get("clean")
+        if cleaned_name and (root / cleaned_name).exists():
+            import numpy as np
+
+            before = np.asarray(ir.load_image(original))
+            after = np.asarray(ir.load_image(root / cleaned_name))
+            if before.shape == after.shape:
+                for region in page.get("regions", []):
+                    if region.get("fill") in {"none", "keep"} or not region.get("mask"):
+                        continue
+                    survived = surviving_ink(
+                        before, after, region,
+                        mask_tools.load_mask(root / region["mask"]),
+                        (page["width"], page["height"]), np,
+                    )
+                    if survived > MAX_SURVIVING_INK:
+                        findings.add(
+                            "source-text-survived", region["id"],
+                            f"{survived:.0%} of this region's original ink is "
+                            "still on the cleaned page, outside the mask — the "
+                            "mask did not cover the whole of the lettering",
+                            share=round(survived, 3),
+                        )
+
         for region in page.get("regions", []):
             stats["regions"] += 1
+
             if region.get("dropped"):
                 stats["dropped"] += 1
                 continue

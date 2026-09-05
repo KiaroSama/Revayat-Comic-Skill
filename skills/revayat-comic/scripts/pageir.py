@@ -286,6 +286,53 @@ def translatable(region: dict[str, Any], sfx_policy: str = "keep") -> bool:
     return True
 
 
+#: Where a region is allowed to end up. Every detected region must reach exactly
+#: one of these, and **none of them means "it quietly disappeared"** — which is
+#: the point. Completeness is otherwise inferred from a scatter of fields
+#: (``dropped``, ``target_text``, ``typeset.status``), and a region that falls
+#: between them is invisible to every gate: nothing is missing, no count is
+#: wrong, and a balloon simply never got translated.
+REGION_STATES = (
+    "translated",               # carries Persian
+    "kept_by_policy",           # deliberately left as drawn — an SFX under `keep`
+    "dropped_false_detection",  # the reader said there is no text here
+    "needs_review",             # seen, not resolved: overflow, or a noted doubt
+    "unresolved",               # none of the above — always a QA error
+)
+
+
+def region_state(region: dict[str, Any], sfx_policy: str = "keep") -> str:
+    """The one terminal state this region reached. Never guesses in favour."""
+    if region.get("dropped"):
+        return "dropped_false_detection"
+
+    typeset = region.get("typeset") or {}
+    if typeset.get("status") == "overflow":
+        return "needs_review"
+
+    if (region.get("target_text") or "").strip():
+        return "translated"
+
+    if not translatable(region, sfx_policy):
+        return "kept_by_policy"
+
+    # Seen and questioned by a reader, but left without an answer. That is a
+    # different thing from never having been looked at, and it is worth the
+    # distinction: one is a decision, the other is a hole.
+    if region.get("review"):
+        return "needs_review"
+
+    return "unresolved"
+
+
+def state_census(doc: dict[str, Any]) -> dict[str, int]:
+    policy = doc.get("meta", {}).get("sfx_policy", "keep")
+    counts = {state: 0 for state in REGION_STATES}
+    for _, region in iter_regions(doc):
+        counts[region_state(region, policy)] += 1
+    return counts
+
+
 # --------------------------------------------------------------------------- #
 # Geometry
 # --------------------------------------------------------------------------- #

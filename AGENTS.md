@@ -60,22 +60,29 @@ tests/              pytest; fixtures are generated, never committed
    corners of a box around an ellipse are outside the balloon. Clipping to the
    box repaints the artwork there and erases the outline crossing it —
    `masks.balloon_interior` exists because that shipped once.
-4. **Region ids never move.** They are allocated at detection and are what the
+4. **Every region reaches exactly one terminal state.** `pageir.region_state`
+   returns `translated`, `kept_by_policy`, `dropped_false_detection`,
+   `needs_review` or `unresolved` — and there is deliberately no state meaning
+   "it quietly disappeared". Completeness was previously inferred from a scatter
+   of fields, so a region falling between them was invisible to every gate. The
+   census is reported by `qa`, not gated: `unresolved` is a strict subset of
+   what `untranslated-region` already blocks on.
+5. **Region ids never move.** They are allocated at detection and are what the
    worksheet, the mask filenames, the glossary and every QA finding refer to. A
    region that has been answered is `locked`, and `detect` skips its page.
-5. **Never reverse Persian, and never store presentation forms.** The document
+6. **Never reverse Persian, and never store presentation forms.** The document
    holds logical text; shaping happens at draw time. `tests/test_typeset.py`
    asserts it.
-6. **Every CLI entry point calls `ir.use_utf8_stdio()` first.** A Windows
+7. **Every CLI entry point calls `ir.use_utf8_stdio()` first.** A Windows
    console defaults to a legacy code page and raises on the first Persian
    character.
-7. **Write files with `ir.write_text` / `ir.write_bytes`.** They are atomic and
+8. **Write files with `ir.write_text` / `ir.write_bytes`.** They are atomic and
    use `newline=""`, so a document written on Windows still hashes the same as
    one written on Linux.
-8. **Every QA code is declared in `qa.CODES` and documented in `SKILL.md`.** A
+9. **Every QA code is declared in `qa.CODES` and documented in `SKILL.md`.** A
    test enforces both, so a check that emits an undeclared code, or one the
    skill has no action for, fails the build.
-9. **Detection thresholds are command-line flags, not constants.** The right
+10. **Detection thresholds are command-line flags, not constants.** The right
    value is a property of the book. A 900-pixel web scan and a 4000-pixel
    tankobon scan disagree about what "small" means.
 

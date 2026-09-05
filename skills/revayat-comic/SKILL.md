@@ -258,6 +258,7 @@ $PY $SKILL_DIR/scripts/revayat-comic.py qa check --doc $WORK/comic.json
 | Code | Meaning | Action |
 | --- | --- | --- |
 | `artwork-modified` | pixels changed outside the authorised mask | do not ship; re-run clean and typeset for that page |
+| `source-text-survived` | the mask missed part of the lettering, so the original script is still on the cleaned page | re-run `mask` with a larger `--grow` for that page, then `clean` |
 | `source-modified` | an original page file was edited after import | restore it, or re-import |
 | `page-missing` / `page-size-changed` | an output is gone or resized | re-run the stage that makes it |
 | `untranslated-region` | a region has no Persian | translate it, or `drop: yes` |
@@ -273,6 +274,23 @@ $PY $SKILL_DIR/scripts/revayat-comic.py qa check --doc $WORK/comic.json
 | `sfx-untranslated` (warning) | a sound effect was left drawn | expected under the `keep` policy |
 
 Add `--strict` to make warnings blocking, for publication work.
+
+**Read `stats.states` as well as `ok`.** Every detected region lands in exactly
+one terminal state, and there is deliberately no state meaning "it quietly
+disappeared":
+
+| State | Meaning |
+| --- | --- |
+| `translated` | carries Persian |
+| `kept_by_policy` | left as drawn on purpose — a sound effect under `keep` |
+| `dropped_false_detection` | you said there is no text there |
+| `needs_review` | seen but unresolved: overflowing, or a doubt you noted |
+| `unresolved` | **must be zero** — detected and then forgotten |
+
+`unresolved` is not its own error — every region in it is already blocked by
+`untranslated-region`, and two codes on the same rows is noise. The census is
+there to be *read*: the other four are all decisions, so report the counts to
+the user rather than only the total.
 
 ## Step 11 — Export and report
 

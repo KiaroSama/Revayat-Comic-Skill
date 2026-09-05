@@ -123,8 +123,31 @@ rather than resampled. Only their masked pixels are used, so the preservation
 guarantee still holds — which is the point. A generative cleaner is exactly the
 tool you most want a hard boundary around.
 
+## And the other direction: did the lettering actually go?
+
+Everything above proves nothing changed that *should not* have. On its own that
+leaves the mirror-image hole: **nothing proved that what should have gone,
+went.** A mask that misses the tail of a stroke leaves a rim of the source
+script inside the balloon; the page has the right number of balloons, the right
+translations, and Japanese still on it. `qa check` reports that as
+`source-text-survived`.
+
+It measures inside the **balloon interior only**, and that restriction is the
+whole reason it means anything: there the paper is flat, so ink left after
+cleaning is a missed stroke and nothing else. Measured over the padded mask box
+instead, it reads the balloon's own outline as un-removed text and returns 100%
+on a perfect run. For lettering drawn straight onto artwork there is no such
+separation — leftover ink is indistinguishable from the drawing it sits on — so
+those regions are not judged, and that is listed below as a gap rather than
+papered over.
+
+The fix when it fires is a wider mask, not a looser check: re-run `mask` with a
+larger `--grow` for that page, then `clean` again.
+
 ## What this does not cover
 
+- **Free lettering.** `source-text-survived` judges balloons only. A sound
+  effect on artwork whose mask missed a stroke is not caught by anything.
 - **Inside the mask, anything goes.** If the inpainter produces a smear where
   the artwork had detail, no check here will notice. Look at
   `inpaint_heavy_pages`.
