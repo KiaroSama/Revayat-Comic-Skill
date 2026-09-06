@@ -123,6 +123,32 @@ rather than resampled. Only their masked pixels are used, so the preservation
 guarantee still holds — which is the point. A generative cleaner is exactly the
 tool you most want a hard boundary around.
 
+### Give it the whole patch, not the letter shapes
+
+For lettering **drawn onto the artwork** — a sound effect, a sign, a caption with
+no balloon around it — the default mask is the wrong shape to hand a model. It
+is the glyph outlines, so a reconstruction gets clipped back to strokes a few
+pixels wide: the model has to invent artwork inside each letter, and every seam
+lands on a glyph edge, which is exactly where the eye goes. The result reads as
+*repaired*, not as *redrawn*, no matter how good the model is.
+
+```bash
+revayat-comic mask  --doc work/comic.json --free-lettering solid
+revayat-comic clean --doc work/comic.json --external reconstructed/
+```
+
+`solid` covers each region with no balloon as one filled patch, so the model gets
+a coherent area and can redraw what was under the lettering. Balloons are
+untouched by the flag — a solid mask over a balloon would take its outline with
+it, which is the defect the interior clip exists to prevent.
+
+**This mode only works with `--external`.** The choice is recorded in the
+document, and `clean` refuses to run its own cleaners against it: painting a
+solid patch flat, or handing it to Telea, blanks a rectangle out of the drawing.
+Measured with Telea standing in for a model, it erased the speed lines around a
+`BUMP` and left a soft grey blob — worse than the glyph mask, and a fair picture
+of what "not a generative model" means.
+
 ## And the other direction: did the lettering actually go?
 
 Everything above proves nothing changed that *should not* have. On its own that

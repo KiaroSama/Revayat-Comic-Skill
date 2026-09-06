@@ -167,6 +167,21 @@ it does not, do them one at a time — the result is the same, only slower.
 >   - `drop: yes` when there is no text there at all
 >   - `kind: sfx` / `sign` / `narration` / `thought` when it is misclassified
 >   - `speaker: <short stable name>` — the same name every time, on every page
+> - **If the overview shows text with no region on it, add one.** Free lettering
+>   is the weak case, adjacent balloons sometimes come back as a single region,
+>   and a whole panel is occasionally taken for a balloon and swallows what is
+>   drawn inside it — so a full worksheet is not the same as a full page.
+>
+>   ```
+>   @@ +bump sfx horizontal
+>   box: 742 436 58 24
+>   src: BUMP
+>   fa: تلپ
+>   ```
+>
+>   `box:` is `x y w h` in the page's own pixels, which is what `overview.png`
+>   is drawn at, so read the numbers straight off it. Add `polarity: dark` for
+>   white lettering on black. Merging allocates the real region id.
 
 Check what is left at any time:
 
@@ -228,6 +243,19 @@ To use a better cleaner than this ships with, clean the pages elsewhere and
 pass the folder: `--external cleaned/`, named `pNNNN.png`. **Only the masked
 pixels of those images are used**, so even a generative model that redrew half
 the page cannot change artwork it was not asked to touch.
+
+For lettering drawn **onto the artwork**, give the model the whole patch rather
+than the letter shapes — clipped back to strokes a few pixels wide, even a good
+reconstruction reads as repaired rather than redrawn:
+
+```bash
+$PY $SKILL_DIR/scripts/revayat-comic.py mask  --doc $WORK/comic.json --free-lettering solid
+$PY $SKILL_DIR/scripts/revayat-comic.py clean --doc $WORK/comic.json --external reconstructed/
+```
+
+Balloons ignore the flag. `clean` **refuses** solid masks without `--external`,
+because painting one flat or inpainting it blanks a rectangle out of the drawing.
+See `references/artwork-preservation.md`.
 
 ## Step 9 — Set the Persian
 

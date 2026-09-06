@@ -197,6 +197,17 @@ def clean_document(
     external_dir = Path(external).expanduser() if external else None
     if external_dir is not None and not external_dir.is_dir():
         raise FileNotFoundError(f"--external is not a folder: {external_dir}")
+    if (doc["meta"].get("free_lettering_mask") == "solid"
+            and external_dir is None):
+        raise ValueError(
+            "the masks for this document were built with "
+            "`mask --free-lettering solid`, which covers each piece of free "
+            "lettering as a whole patch rather than as letter shapes. That is "
+            "for a generative cleaner: painting it flat or inpainting it would "
+            "blank a rectangle out of the artwork. Either pass --external with "
+            "your reconstructed pages, or rebuild the masks with "
+            "`mask --free-lettering glyphs`."
+        )
 
     totals = {"flat": 0, "inpaint": 0, "external": 0, "keep": 0, "skipped": 0}
     per_page: list[dict[str, Any]] = []

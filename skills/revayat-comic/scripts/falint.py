@@ -74,7 +74,14 @@ _COMMA = re.compile(rf"(?<=[{PERSIAN_LETTER}{PERSIAN_DIGIT}]) *,")
 _SEMICOLON = re.compile(rf"(?<=[{PERSIAN_LETTER}{PERSIAN_DIGIT}]) *;")
 _QUESTION = re.compile(rf"(?<=[{PERSIAN_LETTER}{PERSIAN_DIGIT}]) *\?")
 _ELLIPSIS = re.compile(r"\.{3,}")
-_SPACE_BEFORE_PUNCT = re.compile(rf"[ \t]+([{re.escape(_PERSIAN_PUNCT)}])")
+#: A space before punctuation is a typo — except before an ellipsis that *opens*
+#: a phrase, where it is the only thing separating two sentences. Comic dialogue
+#: is full of them: `…آره. …ببخشید.` lost its space, became one unbreakable
+#: 13-character token, and overflowed a balloon it would otherwise have fitted.
+#: A trailing ellipsis (`سلام…`) is not followed by a letter, so it still closes up.
+_SPACE_BEFORE_PUNCT = re.compile(
+    rf"[ \t]+(?!…[{PERSIAN_LETTER}])([{re.escape(_PERSIAN_PUNCT)}])"
+)
 _MISSING_SPACE_AFTER = re.compile(rf"([،؛؟!:])(?=[{PERSIAN_LETTER}])")
 _MULTI_SPACE = re.compile(r"[ \t]{2,}")
 _QUOTE_PAIR = re.compile(r"[\"“](.+?)[\"”]", re.S)

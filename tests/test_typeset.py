@@ -54,6 +54,66 @@ def test_raqm_only_arguments_are_not_passed_in_fallback_mode():
     assert fallback.draw_kwargs() == {}
 
 
+def _ink_width(shaper, text: str, *, shape: bool = True) -> tuple[int, int]:
+    """Draw one line and return (ink width, ink pixels).
+
+    ``shape=False`` is the deliberately unshaped baseline, and it forces the
+    BASIC layout engine to get there. Asking RAQM for "no shaping" is not a
+    thing: HarfBuzz shapes from the script it detects, and the direction and
+    language arguments only override that detection — so a RAQM baseline would
+    come out shaped and the comparison below would prove nothing.
+    """
+    from PIL import Image, ImageDraw, ImageFont
+
+    layout = shaper.layout if shape else ImageFont.Layout.BASIC
+    font = ImageFont.truetype(str(typeset.find_font()), 48, layout_engine=layout)
+    canvas = Image.new("L", (1600, 160), 255)
+    ImageDraw.Draw(canvas).text(
+        (60, 40), shaper.prepare(text) if shape else text,
+        font=font, fill=0, **(shaper.draw_kwargs() if shape else {}))
+    ink = np.asarray(canvas) < 128
+    columns = np.flatnonzero(ink.any(axis=0))
+    if columns.size == 0:
+        return 0, 0
+    return int(columns[-1] - columns[0] + 1), int(ink.sum())
+
+
+@pytest.mark.skipif(not typeset.raqm_available(),
+                    reason="no RAQM in this Pillow; the fallback is the only path here")
+def test_raqm_shapes_persian_and_agrees_with_the_fallback():
+    """The half of the shaping code that Windows and macOS can never run.
+
+    Pillow carries RAQM only in its Linux x64 wheel, so this is the one place
+    the good path exists at all — and until now nothing checked that it *worked*,
+    only that it was switched on. Two things are asserted, and the first is the
+    one that matters:
+
+    1. **RAQM actually joins the letters.** Persian drawn without shaping comes
+       out as isolated forms, which are markedly wider than the joined ones. If
+       a future Pillow silently stopped shaping, the text would still render and
+       every other test would still pass — this width comparison is what would
+       notice.
+    2. **Both paths agree.** Windows ships the reshaper output to readers and
+       Linux ships RAQM's; if they disagreed by much, a chapter would look
+       different depending on who built it.
+    """
+    pytest.importorskip("arabic_reshaper")
+    pytest.importorskip("bidi")
+    text = "سلام دنیا، این یک آزمایش است"
+
+    raqm = typeset.Shaper()
+    assert raqm.mode == "raqm"
+    shaped_width, shaped_ink = _ink_width(raqm, text)
+    unshaped_width, _ = _ink_width(raqm, text, shape=False)
+    fallback_width, fallback_ink = _ink_width(typeset.Shaper(force_fallback=True), text)
+
+    assert shaped_ink > 0 and fallback_ink > 0
+    # Joined is narrower than isolated. A 5% margin only says "not identical".
+    assert shaped_width < unshaped_width * 0.95
+    assert abs(shaped_width - fallback_width) <= 0.20 * fallback_width
+    assert abs(shaped_ink - fallback_ink) <= 0.30 * fallback_ink
+
+
 def test_the_document_is_never_reversed_in_place(translated):
     """Rule one: the logical text stays logical. Shaping happens at draw time."""
     typeset.typeset_document(translated)
@@ -140,6 +200,49 @@ def test_the_minimum_size_is_a_floor_not_a_suggestion():
     fitted = typeset.fit_region(
         _canvas(120, 90), enormous, _ellipse_mask(120, 90), np, shaper,
         typeset.find_font(), max_size=40, min_size=22,
+    )
+    assert fitted is None
+
+
+def test_no_word_is_ever_dropped_at_any_size():
+    """**The one that matters most in this file.** Every word goes on the page or
+    the region overflows — there is no third outcome, and there used to be.
+
+    A balloon reading `پس بهتره بری خونه، نه؟` came back typeset as `نه؟` at the
+    largest size the fitter had, with `status: ok`. When the first word of a line
+    was too wide, the guard against it measured the empty accumulator instead of
+    the word, an empty string measures zero, and the word was quietly discarded —
+    then so was the next, and the next, until some short token at the end fitted
+    and was reported as the whole balloon.
+
+    Nothing else would have caught it: the counts were right, QA saw a placed
+    region, and the page looked finished. Only reading it did.
+    """
+    shaper = typeset.Shaper()
+    font = typeset.find_font()
+    text = "پس بهتره بری خونه، نه؟"
+    expected = text.split()
+
+    for width, height in ((400, 300), (170, 130), (116, 154), (90, 200), (300, 60)):
+        fitted = typeset.fit_region(
+            _canvas(width, height), text, _ellipse_mask(width, height), np,
+            shaper, font, max_size=64, min_size=8,
+        )
+        if fitted is None:
+            continue                       # refusing is the other honest answer
+        placed = " ".join(line["text"] for line in fitted["lines"]).split()
+        assert placed == expected, (
+            f"{width}x{height} at size {fitted['size']} dropped "
+            f"{[w for w in expected if w not in placed]}"
+        )
+
+
+def test_a_single_word_too_wide_for_the_shape_overflows_rather_than_vanishing():
+    """The narrow path of the same bug, isolated: one long word, no room."""
+    shaper = typeset.Shaper()
+    fitted = typeset.fit_region(
+        _canvas(60, 200), "غیرقابل‌پیش‌بینی‌ترین", _ellipse_mask(60, 200), np,
+        shaper, typeset.find_font(), max_size=64, min_size=40,
     )
     assert fitted is None
 

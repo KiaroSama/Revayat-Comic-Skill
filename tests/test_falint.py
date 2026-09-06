@@ -150,3 +150,23 @@ def test_linting_a_document_groups_by_code(translated):
     ir.save_doc(doc, translated)
     report = falint.lint_document(translated)
     assert report["by_code"].get("source-script-left") == 1
+
+
+def test_a_leading_ellipsis_keeps_the_space_that_separates_two_sentences():
+    """`...آره. ...ببخشید.` is two balloonfuls of speech, and the space between
+    them is the only thing holding them apart.
+
+    Stripping whitespace before punctuation is right for a comma and right for a
+    full stop, and wrong for an ellipsis that *opens* a phrase — comic dialogue
+    is full of those. Welded together the pair became one unbreakable
+    thirteen-character token, which no line-wrapper can split, and the balloon
+    overflowed. Found on a real page.
+    """
+    assert falint.fix_text("...آره. ...ببخشید.") == "…آره. …ببخشید."
+    assert falint.fix_text("چی؟ ...نمی‌دانم") == "چی؟ …نمی‌دانم"
+
+
+def test_a_trailing_ellipsis_still_closes_up():
+    """The other half: nothing follows it, so the space before it is a typo."""
+    assert falint.fix_text("سلام ...") == "سلام…"
+    assert falint.fix_text("خوبم ، ممنون") == "خوبم، ممنون"

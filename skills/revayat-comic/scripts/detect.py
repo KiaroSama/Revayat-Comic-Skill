@@ -14,9 +14,17 @@ Three things are found, in descending order of how reliable they are:
 2. **Panels.** A recursive cut along the gutters. Panels matter only for reading
    order, so being approximately right is enough.
 3. **Free lettering** — sound effects, signs, captions drawn over artwork. This
-   is the weak case and it is reported as such: low confidence, and the skill
-   tells the reader to add what was missed rather than pretending the page is
-   fully covered.
+   is the weak case and it is reported as such: every region it returns carries
+   low confidence, and the reader is shown the crop and asked to drop it if
+   there is no text there.
+
+**What the reader cannot do, and it matters**: the worksheet can drop a region,
+re-label it and name its speaker, but it cannot **add** a balloon the detector
+missed, or **split** one region that covers two. On a real chapter both happen
+several times per volume — adjacent balloons merge, and a panel is sometimes
+returned as one balloon because a panel interior is also a light region inside
+an outline. Text in those balloons is lost, silently, and only a reader looking
+at `overview.png` will see it. Do not read a full worksheet as a full page.
 
 Both polarities are searched: white balloons with black text, and black
 balloons with white text, which are common in flashbacks and night scenes.
@@ -63,6 +71,23 @@ DEFAULTS = {
     # Smallest piece of free lettering worth reporting, as a share of the page's
     # smaller side. Below it, the matches are panel corners and border joints.
     "sfx_min_side": 0.035,
+    # What separates a word from a piece of drawing. Measured on a real volume
+    # (Sekirei v01, Yen Press): every one of these three is needed, and none of
+    # them is about how the marks *look* — only about how a set of them relates.
+    #
+    # A word has several marks. Two eyes, or a button and its shadow, do not.
+    # Three and not more, because a real sound effect is often three characters
+    # (ドドド) and the size test below does the discriminating anyway: measured
+    # over four real pages, moving this from 5 to 3 admitted one extra false
+    # positive in total and made short effects reachable at all.
+    "sfx_min_glyphs": 3,
+    # Letters in one piece of lettering are near enough the same size; artwork
+    # is not. This is the strongest of the three, and the only one that does not
+    # care about orientation or how many lines the block runs to.
+    "sfx_size_uniformity": 0.80,
+    # How far the marks stray across their own line, in multiples of a mark.
+    # Screentone and hair pass the size test and fail here.
+    "sfx_max_spread": 1.5,
 }
 
 
@@ -300,6 +325,53 @@ def _text_inside(gray, balloon: dict[str, Any], options: dict[str, float]) -> li
 # Free lettering
 # --------------------------------------------------------------------------- #
 
+def _looks_like_lettering(group: list[list[int]], options: dict[str, float]) -> bool:
+    """Is this cluster of marks a piece of writing, or a piece of drawing?
+
+    Nothing here looks at a single mark, because a single mark cannot tell you:
+    an eye and a letter O are the same blob. What separates writing is how a
+    *set* of marks relates — several of them, near enough one size, sitting
+    along a line. Measured against a real volume where the alternative was 22
+    clusters per page, of which two were text.
+
+    The size test does the most work and is the one to trust: letters cut from
+    one font are within a factor of two of each other, while hair, screentone
+    and cloth folds produce marks of every size at once. It is also the only
+    test here that does not care about orientation, so vertical Japanese and a
+    four-line English caption pass it equally.
+
+    `ponytail: the spread test measures one block, so lettering running past
+    roughly five lines reads as scattered and is dropped. Free lettering that
+    long is rare — it would be in a box, and boxes are found as balloons — and
+    the reader is shown the page anyway. Split the block by line if that stops
+    being true.`
+    """
+    count = len(group)
+    if count < options["sfx_min_glyphs"]:
+        return False
+
+    sizes = sorted(max(box[2], box[3]) for box in group)
+    median = sizes[count // 2] if count % 2 else (sizes[count // 2 - 1] + sizes[count // 2]) / 2
+    median = max(1.0, float(median))
+    alike = sum(1 for size in sizes if 0.55 * median <= size <= 1.8 * median)
+    if alike / count < options["sfx_size_uniformity"]:
+        return False
+
+    # Spread across the line, from the smaller eigenvalue of the centres'
+    # covariance — orientation-free, so it reads horizontal and vertical
+    # lettering the same way.
+    xs = [box[0] + box[2] / 2 for box in group]
+    ys = [box[1] + box[3] / 2 for box in group]
+    mx, my = sum(xs) / count, sum(ys) / count
+    sxx = sum((x - mx) ** 2 for x in xs) / count
+    syy = sum((y - my) ** 2 for y in ys) / count
+    sxy = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / count
+    half_trace = (sxx + syy) / 2
+    gap = max(0.0, half_trace * half_trace - (sxx * syy - sxy * sxy)) ** 0.5
+    across = max(0.0, half_trace - gap) ** 0.5
+    return across / median <= options["sfx_max_spread"]
+
+
 def _free_lettering(gray, taken: Sequence[Sequence[int]],
                     options: dict[str, float]) -> list[dict[str, Any]]:
     """Clusters of glyph-sized shapes that are not inside any balloon.
@@ -340,7 +412,7 @@ def _free_lettering(gray, taken: Sequence[Sequence[int]],
             continue
 
         for group in _cluster(seeds):
-            if len(group) < 2:
+            if not _looks_like_lettering(group, options):
                 continue
             box = _hull(group, width, height)
             if max(box[2], box[3]) < options["sfx_min_side"] * smaller:

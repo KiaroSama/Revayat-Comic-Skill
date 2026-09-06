@@ -36,11 +36,16 @@ from typing import Any, Sequence
 
 import pageir as ir
 
-HEADER = re.compile(r"^@@\s+(?P<id>[A-Za-z0-9_#-]+)(?:\s+(?P<rest>.*))?$")
-FIELD = re.compile(r"^(?P<name>src|fa|kind|speaker|note|drop)\s*:\s?(?P<value>.*)$")
+HEADER = re.compile(r"^@@\s+(?P<id>\+?[A-Za-z0-9_#-]+)(?:\s+(?P<rest>.*))?$")
+FIELD = re.compile(
+    r"^(?P<name>src|fa|kind|speaker|note|drop|box|polarity)\s*:\s?(?P<value>.*)$")
+
+#: `box: x y w h`, in the page's own pixels — the same pixels `overview.png`
+#: is drawn at, so a reader can take the numbers straight off it.
+BOX = re.compile(r"^\s*(\d+)[ ,]+(\d+)[ ,]+(\d+)[ ,]+(\d+)\s*$")
 FINGERPRINT = re.compile(r"^#\s*fingerprint:\s*(?P<value>[0-9a-f]{64})\s*$", re.M)
 
-FIELDS = ("src", "fa", "kind", "speaker", "note", "drop")
+FIELDS = ("src", "fa", "kind", "speaker", "note", "drop", "box", "polarity")
 
 _DIRECTION_WORDS = {
     "rtl": "right to left (Japanese order: the rightmost balloon is first)",
@@ -106,6 +111,20 @@ def page_worksheet(doc: dict[str, Any], page: dict[str, Any], fingerprint: str) 
         "#   kind:    speech | thought | narration | sfx | sign | unknown",
         "#   speaker: a short stable name, the same one every time",
         "#   drop:    yes   — there is no text here at all",
+        "#",
+        "# Something the detector missed entirely? Add it. Free lettering is",
+        "# the weak case, adjacent balloons sometimes come back as one region,",
+        "# and a whole panel is occasionally taken for a balloon — so a page can",
+        "# be missing text that is plainly there in overview.png.",
+        "#",
+        "#   @@ +bump sfx horizontal",
+        "#   box: 742 436 58 24        <- x y w h, in the page's own pixels,",
+        "#                                read straight off overview.png",
+        "#   src: BUMP",
+        "#   fa: تلپ",
+        "#",
+        "# Add `polarity: dark` when the lettering is white on black. After a",
+        "# merge that added regions, run `mask` again before `clean`.",
         "#",
     ]
     lines += _glossary_table(doc)
@@ -248,6 +267,64 @@ def _apply(region: dict[str, Any], block: dict[str, str],
     return bool(target)
 
 
+def _next_region_id(page: dict[str, Any]) -> str:
+    """The next free `pNNNNrMMM` on this page."""
+    used = 0
+    for region in page.get("regions", []):
+        _, _, tail = region["id"].partition("r")
+        if tail.isdigit():
+            used = max(used, int(tail))
+    return f"{page['id']}r{used + 1:03d}"
+
+
+def _add_region(page: dict[str, Any], slug: str, block: dict[str, str],
+                report: dict[str, Any]) -> bool:
+    """Create a region the detector never found, from a `box:` the reader read.
+
+    The counterpart to `drop`, and the page needs both. Detection returns the
+    balloons it is sure of; free lettering it is not sure of at all, adjacent
+    balloons sometimes come back welded into one region, and a panel is
+    occasionally taken for a balloon and swallows everything drawn inside it.
+    Each of those loses text that is plainly there on the page, and until this
+    existed the reader could see it and had no way to say so.
+    """
+    label = f"{page['id']}:{slug}"
+    match = BOX.match(block.get("box", ""))
+    if not match:
+        report["bad_added_regions"].append(f"{label}: needs `box: x y w h`")
+        return False
+
+    x, y, w, h = (int(value) for value in match.groups())
+    width, height = page.get("width") or 0, page.get("height") or 0
+    if w < 2 or h < 2:
+        report["bad_added_regions"].append(f"{label}: box is {w}x{h}")
+        return False
+    bbox = ir.clamp_bbox([x, y, w, h], width, height) if width and height else [x, y, w, h]
+    if bbox[2] < 2 or bbox[3] < 2:
+        report["bad_added_regions"].append(f"{label}: box falls outside the page")
+        return False
+
+    kind = (block.get("kind") or "sfx").strip().lower()
+    if kind not in ir.REGION_KINDS:
+        report["bad_kind"].append(f"{label}: {kind}")
+        return False
+
+    region = ir.new_region(
+        _next_region_id(page), bbox, kind=kind,
+        orientation="vertical" if bbox[3] > 1.6 * bbox[2] else "horizontal",
+        # Named `reader` on purpose: this box came from someone looking at the
+        # page, so `detect` must not treat it as one of its own guesses.
+        detector="reader", confidence=1.0,
+    )
+    region["balloon"] = None
+    region["polarity"] = "dark" if block.get("polarity", "").strip().lower() == "dark" else "light"
+    region["locked"] = True
+    page.setdefault("regions", []).append(region)
+    _apply(region, block, report)
+    report["added"].append(f"{region['id']} ({slug})")
+    return bool((region.get("target_text") or "").strip())
+
+
 def merge_document(
     doc_path: str | Path,
     worksheets: str | Path | None = None,
@@ -260,6 +337,7 @@ def merge_document(
     folder = Path(worksheets) if worksheets else root / "worksheets"
     fingerprint = ir.fingerprint(doc)
     policy = doc["meta"].get("sfx_policy", "keep")
+    direction = doc["meta"].get("reading_direction", "rtl")
 
     if not folder.exists():
         return {"ok": False, "error": f"no worksheets at {folder}"}
@@ -275,9 +353,12 @@ def merge_document(
         "duplicate_regions": [],
         "empty_translation": [],
         "stale_worksheets": [],
+        "added": [],
+        "bad_added_regions": [],
     }
 
     by_page = {page["id"]: page for page in doc["pages"]}
+    consumed: list[Path] = []
     for page_id, page in by_page.items():
         if not page.get("regions"):
             continue
@@ -297,7 +378,8 @@ def merge_document(
         for region_id, block in blocks.items():
             if int(block.get("_seen", 1)) > 1:
                 report["duplicate_regions"].append(region_id)
-        report["unknown_regions"] += sorted(set(blocks) - known)
+        additions = sorted(key for key in blocks if key.startswith("+"))
+        report["unknown_regions"] += sorted(set(blocks) - known - set(additions))
 
         for region in page["regions"]:
             block = blocks.get(region["id"])
@@ -310,6 +392,26 @@ def merge_document(
             elif not region.get("dropped") and ir.translatable(region, policy):
                 report["empty_translation"].append(region["id"])
 
+        for slug in additions:
+            if _add_region(page, slug[1:] or "added", blocks[slug], report):
+                report["merged"] += 1
+        if additions:
+            # A new box changes what comes before what, and it has no mask yet.
+            ir.assign_reading_order(page, direction)
+        consumed.append(path)
+
+    if report["added"]:
+        # Adding a region changes the document fingerprint, which would make
+        # every worksheet just merged look stale to the *next* merge — the
+        # reader would be told to re-translate work they had only added to.
+        # Re-stamp what was consumed, so the loop stays closed.
+        fresh = ir.fingerprint(doc)
+        for path in consumed:
+            text = ir.read_text(path)
+            if FINGERPRINT.search(text):
+                ir.write_text(path, FINGERPRINT.sub(
+                    f"# fingerprint: {fresh}", text, count=1))
+
     ir.stamp_stage(doc, "worksheet", {"merged": report["merged"]})
     ir.save_doc(doc, doc_path)
 
@@ -317,9 +419,12 @@ def merge_document(
         report["missing_outputs"] or report["missing_regions"]
         or report["unknown_regions"] or report["duplicate_regions"]
         or report["stale_worksheets"] or report["empty_translation"]
-        or report["bad_kind"]
+        or report["bad_kind"] or report["bad_added_regions"]
     )
     report["ok"] = not blocking
+    if report["added"]:
+        report["next"] = ("regions were added, so they have no mask yet — "
+                          "run `mask` again before `clean`")
     for key in ("missing_regions", "unknown_regions", "empty_translation"):
         report[key] = report[key][:25]
     return report

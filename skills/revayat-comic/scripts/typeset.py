@@ -308,6 +308,40 @@ def _measure(draw, text: str, font, shaper: Shaper) -> tuple[int, int]:
     return box[2] - box[0], box[3] - box[1]
 
 
+#: A row counts as part of a balloon's body once it is at least this wide,
+#: relative to the widest row. Below it, the shape is a tail or a spur.
+BODY_WIDTH = 0.5
+
+
+def _body(widths: Sequence[int]) -> tuple[int, int]:
+    """``(first row, height)`` of the part of the shape text can actually go in.
+
+    A speech balloon is not its bounding box: it has a **tail**, and the tail can
+    be as tall as the balloon. Centring a block of text in the bounding box then
+    lands it in the tail, where every row is a few pixels wide, and the region is
+    reported as overflowing at every size down to the floor — measured on a real
+    page, on a balloon with plenty of room in it.
+
+    So the block is centred on the longest run of rows that are wide enough to
+    be the body. On a shape with no tail every row qualifies and this is the
+    bounding box again.
+    """
+    if not widths:
+        return 0, 0
+    threshold = max(widths) * BODY_WIDTH
+    best_start = best_length = run_start = run_length = 0
+    for index, width in enumerate(widths):
+        if width >= threshold:
+            if run_length == 0:
+                run_start = index
+            run_length += 1
+            if run_length > best_length:
+                best_start, best_length = run_start, run_length
+        else:
+            run_length = 0
+    return best_start, best_length
+
+
 def _wrap(draw, tokens: Sequence[str], font, shaper: Shaper,
           width_for_line) -> list[str] | None:
     """Greedy wrap where each line asks how wide *it* is allowed to be."""
@@ -323,14 +357,25 @@ def _wrap(draw, tokens: Sequence[str], font, shaper: Shaper,
             continue
         if current:
             lines.append(current)
-            current = token
+            current = ""
             available = width_for_line(len(lines))
             if available <= 0:
                 return None
-        if _measure(draw, current, font, shaper)[0] > available:
+        if _measure(draw, token, font, shaper)[0] > available:
             # One word that does not fit on a line of its own. Splitting a
             # Persian word is worse than a smaller font, so the caller retries.
+            #
+            # This measures the TOKEN, not `current`. Measuring `current` looked
+            # equivalent and was not: when the very first word of a line is too
+            # wide, `current` is still empty, an empty string measures 0, the
+            # guard never fires and the word is dropped on the floor. The loop
+            # then does the same to every word that follows, and returns whatever
+            # short token happened to fit last — one line, status `ok`, the rest
+            # of the sentence gone. Measured on a real page: a balloon reading
+            # `پس بهتره بری خونه، نه؟` was typeset as `نه؟` at size 64 and
+            # reported as placed.
             return None
+        current = token
     if current:
         lines.append(current)
     return lines or None
@@ -350,9 +395,12 @@ def fit_region(
     left, right = int(columns[0]), int(columns[-1]) + 1
     region_mask = mask[top:bottom, left:right]
     widths, starts = _row_widths(region_mask, np)
-    height = bottom - top
     tokens = _tokens(text)
     if not tokens:
+        return None
+
+    body_top, body_height = _body(widths)
+    if body_height <= 0:
         return None
 
     for size in range(int(max_size), int(min_size) - 1, -1):
@@ -367,10 +415,10 @@ def fit_region(
         count = 1
         for _ in range(4):
             block = count * step
-            if block > height:
+            if block > body_height:
                 lines = None
                 break
-            offset = (height - block) // 2
+            offset = body_top + (body_height - block) // 2
 
             def width_for_line(index: int, offset=offset, step=step) -> int:
                 start = offset + index * step

@@ -77,15 +77,23 @@ def balloon_interior(page_rgb, balloon, polarity: str, page_size: tuple[int, int
         gray = 255 - gray
     _, light = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-    count, labels, _, _ = cv2.connectedComponentsWithStats(light, connectivity=8)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(light, connectivity=8)
+    if count < 2:
+        return canvas
+
+    areas = stats[1:, cv2.CC_STAT_AREA]
+    largest = 1 + int(np.argmax(areas))
     centre = int(labels[h // 2, w // 2])
-    if centre == 0:
-        # The centre of the balloon landed on a letter. Take the largest
-        # component instead; on a balloon that is always the paper.
-        sizes = [int((labels == label).sum()) for label in range(1, count)]
-        if not sizes:
-            return canvas
-        centre = 1 + int(max(range(len(sizes)), key=lambda index: sizes[index]))
+    # The paper is far and away the biggest light component inside a balloon's
+    # own box, so anything much smaller under the centre pixel is not it. Two
+    # ways that happens, and only the first used to be handled: the centre lands
+    # on a letter (label 0), or it lands on a *speck* — a dot of screentone, an
+    # anti-aliased edge, the gap inside an `o`. Measured on a real page: the
+    # centre hit a 113-pixel fleck, the interior came back empty, cleaning had
+    # nothing to paint, and the English stayed on the finished page with every
+    # count reporting success. Only `source-text-survived` noticed.
+    if centre == 0 or int(stats[centre, cv2.CC_STAT_AREA]) < 0.5 * int(areas[largest - 1]):
+        centre = largest
 
     inside = ((labels == centre).astype(np.uint8)) * 255
     # The letters are holes in that component. Filling them is unambiguous here:
@@ -125,8 +133,21 @@ def region_mask(
     *,
     grow: float = DEFAULT_GROW,
     pad: float = DEFAULT_PAD,
+    solid_free: bool = False,
 ):
-    """``(mask, box)`` — an 8-bit mask and the page-space box it covers."""
+    """``(mask, box)`` — an 8-bit mask and the page-space box it covers.
+
+    ``solid_free`` covers a region that has **no balloon** — lettering drawn
+    straight onto the artwork — as one filled area instead of the glyph shapes.
+
+    That is the wrong shape for the built-in cleaners, which would blank a
+    rectangle out of the drawing, and the right one for a generative cleaner:
+    clipped back to letter shapes, a reconstruction has to invent artwork inside
+    strokes a few pixels wide and every seam lands on a glyph edge, which is
+    exactly where the eye looks. Given the whole patch it can redraw what was
+    under the lettering. Only usable with ``clean --external``, and ``clean``
+    refuses the combination without it.
+    """
     cv2, np = _cv2(), _numpy()
     width, height = page_size
     smaller = min(width, height)
@@ -135,6 +156,10 @@ def region_mask(
     x, y, w, h = box
     if w <= 0 or h <= 0:
         return np.zeros((1, 1), np.uint8), [x, y, 1, 1]
+
+    balloon = region.get("balloon")
+    if solid_free and not balloon:
+        return np.full((h, w), 255, np.uint8), box
 
     window = page_rgb[y:y + h, x:x + w]
     mask = _ink_mask(window, region.get("polarity", "light"))
@@ -147,7 +172,6 @@ def region_mask(
     # slivers of the old background surviving between them.
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
 
-    balloon = region.get("balloon")
     if balloon:
         # Clip to the balloon's real interior, inset so the outline itself is
         # structurally out of reach. Not the bounding box — see balloon_interior.
@@ -166,6 +190,7 @@ def build_document(
     grow: float = DEFAULT_GROW,
     pad: float = DEFAULT_PAD,
     pages: Sequence[str] | None = None,
+    solid_free: bool = False,
 ) -> dict[str, Any]:
     np = _numpy()
     doc_path = Path(doc_path)
@@ -188,7 +213,8 @@ def build_document(
         union = np.zeros((page["height"], page["width"]), np.uint8)
 
         for region in page["regions"]:
-            mask, box = region_mask(rgb, region, size, grow=grow, pad=pad)
+            mask, box = region_mask(rgb, region, size, grow=grow, pad=pad,
+                                    solid_free=solid_free)
             relative = f"masks/{page['id']}/{region['id']}.png"
             ir.write_bytes(
                 root / relative,
@@ -211,6 +237,9 @@ def build_document(
             "coverage": page["mask_coverage"],
         })
 
+    # Recorded so `clean` can refuse the one combination that would destroy
+    # artwork: a solid free-lettering mask handed to the built-in cleaners.
+    doc["meta"]["free_lettering_mask"] = "solid" if solid_free else "glyphs"
     ir.stamp_stage(doc, "masks", {"written": written})
     ir.save_doc(doc, doc_path)
 
@@ -261,6 +290,13 @@ def main(argv: list[str] | None = None) -> int:
                              f"the page's smaller side (default {DEFAULT_GROW})")
     parser.add_argument("--pad", type=float, default=DEFAULT_PAD,
                         help="margin added around the detector's text box")
+    parser.add_argument("--free-lettering", choices=("glyphs", "solid"),
+                        default="glyphs",
+                        help="how to mask lettering drawn onto the artwork with "
+                             "no balloon around it. `glyphs` (default) covers the "
+                             "letter shapes; `solid` covers the whole region so a "
+                             "generative cleaner can redraw what was under it — "
+                             "that one only works with `clean --external`")
     args = parser.parse_args(argv)
 
     report = build_document(
@@ -268,6 +304,7 @@ def main(argv: list[str] | None = None) -> int:
         grow=args.grow,
         pad=args.pad,
         pages=[p for p in args.pages.split(",") if p] or None,
+        solid_free=args.free_lettering == "solid",
     )
     ir.emit(report)
     return 0

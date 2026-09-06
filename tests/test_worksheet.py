@@ -245,3 +245,64 @@ def test_a_locked_glossary_entry_is_printed_in_the_worksheet(detected):
     worksheet.build_document(detected)
     text = (ir.doc_dir(detected) / "worksheets" / "p0001.txt").read_text("utf-8")
     assert "هاروکا" in text and "binding" in text
+
+
+# --- Adding what the detector missed ----------------------------------------
+
+_ADDED = "\n@@ +bump sfx horizontal\nbox: 300 900 120 40\nsrc: BUMP\nfa: تلپ\n"
+
+
+def test_a_reader_can_add_a_region_the_detector_never_found(detected):
+    """The counterpart to `drop`, and a page needs both.
+
+    Free lettering is the detector's weak case, adjacent balloons sometimes come
+    back welded into one region, and a panel is occasionally taken for a balloon
+    and swallows everything drawn inside it. Each of those loses text that is
+    plainly there — measured on a real chapter, where a `BUMP` effect went
+    undetected because the panel around it had been claimed as a balloon.
+    """
+    worksheet.build_document(detected)
+    _fill(detected, extra=_ADDED)
+    report = worksheet.merge_document(detected)
+
+    assert report["ok"], report
+    assert report["bad_added_regions"] == []
+    assert len(report["added"]) == len(ir.load_doc(detected)["pages"])
+
+    page = ir.load_doc(detected)["pages"][0]
+    added = [r for r in page["regions"] if r["detector"] == "reader"]
+    assert len(added) == 1
+    region = added[0]
+    assert region["bbox"] == [300, 900, 120, 40]
+    assert region["kind"] == "sfx"
+    assert region["target_text"] == "تلپ"
+    assert region["balloon"] is None
+    assert region["id"] not in {r["id"] for r in page["regions"] if r is not region}
+    # It has to take its place in the reading order, not sit outside it.
+    assert region["reading_order"] >= 1
+    orders = [r["reading_order"] for r in page["regions"] if not r.get("dropped")]
+    assert len(set(orders)) == len(orders)
+
+
+def test_an_added_region_without_a_box_is_refused_not_guessed(detected):
+    """There is no sane default for *where*, so the merge says so and fails."""
+    worksheet.build_document(detected)
+    _fill(detected, extra="\n@@ +bump sfx horizontal\nsrc: BUMP\nfa: تلپ\n")
+    report = worksheet.merge_document(detected)
+
+    assert not report["ok"]
+    assert any("box" in message for message in report["bad_added_regions"])
+    assert all(r["detector"] != "reader"
+               for _, r in ir.iter_regions(ir.load_doc(detected)))
+
+
+def test_adding_a_region_does_not_make_its_own_worksheet_stale(detected):
+    """A new region changes the document fingerprint, so without re-stamping the
+    very worksheet that added it would be rejected on the next merge — telling
+    the reader to re-translate work they had only just added to."""
+    worksheet.build_document(detected)
+    _fill(detected, extra=_ADDED)
+    assert worksheet.merge_document(detected)["ok"]
+
+    again = worksheet.merge_document(detected)
+    assert again["stale_worksheets"] == []
