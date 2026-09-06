@@ -44,10 +44,12 @@ runs, the pages are correct to read, and `doctor` says so. See
 | Symptom | Fix |
 | --- | --- |
 | `pages_without_text` on most pages | thresholds do not fit this book — see `detection.md` |
-| whole panels detected as balloons | lower `--balloon-max-area` |
+| whole panels detected as balloons | lower `--balloon-max-area`, or `drop: yes` the region and add the real balloons back with `box:` — see `detection.md` |
+| two balloons come back as one region | the same fix: drop it, add each one back with `box:` |
+| text on the page with no region on it | add it: `@@ +<name>` with `box: x y w h` |
 | balloons missed | raise `--ink-max`, lower `--balloon-min-solidity` |
 | dozens of low-confidence regions | `--no-sfx`, then `drop: yes` on what is left |
-| `reading-order-broken` at QA | re-run `detect` for that page |
+| `reading-order-broken` at QA | a region has no reading order, or two share one. **Not** caused by `drop: yes` — dropping leaves a gap and that is fine |
 
 Detection never runs on a page whose regions have been answered. If you *want*
 to re-detect a page after translating it, clear `locked` on its regions — and
@@ -62,6 +64,16 @@ than lettering. Fix the detection, or `drop: yes` the region, before cleaning.
 Growing the mask cannot cause this on a balloon — a balloon's mask is clipped to
 the balloon and cannot spread past it.
 
+`clean` refusing with *"the masks for this document were built with
+`mask --free-lettering solid`"* is not a fault: solid masks cover each piece of
+free lettering as a whole patch, which is for a generative cleaner. Pass
+`--external` with your reconstructed pages, or rebuild the masks with
+`--free-lettering glyphs`.
+
+`source-text-survived` at QA, on a region you added yourself, usually means the
+`box:` was drawn a little too tight and clipped a letter. Widen the box; do not
+widen the gate.
+
 ## Worksheets
 
 | Field in the merge report | What happened | Fix |
@@ -72,7 +84,13 @@ the balloon and cannot spread past it.
 | `duplicate_regions` | an id appears twice | re-do that page |
 | `empty_translation` | `src:` filled, `fa:` empty | fill it, or `drop: yes` |
 | `bad_kind` | `kind:` is not one of the six | fix the value |
+| `bad_added_regions` | an `@@ +<name>` block has no usable `box: x y w h` | add one; there is no default for *where* |
 | `stale_worksheets` | regions changed after translation | re-do those pages |
+
+`added` in the report lists regions you created with `@@ +<name>`. They have no
+mask yet, so run `mask` again before `clean`. Merging the same sheet twice
+updates those regions rather than making more, and re-drawing a `box:` moves the
+one that is already there.
 
 `refused: stale-worksheets` from `worksheet build` means the same thing earlier:
 finished worksheets no longer match the regions. `--force` overrides it and
