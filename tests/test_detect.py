@@ -153,3 +153,64 @@ def test_a_reviewed_page_is_not_re_detected(detected):
 def test_sfx_can_be_switched_off(sample_page):
     result = detect.detect_page(sample_page, find_sfx=False)
     assert not [r for r in result["regions"] if r["kind"] == "sfx"]
+
+
+def _fill_lettering_naive(mask, np, max_side):
+    """The shape the fill had before it was vectorised, kept as the reference."""
+    import cv2
+
+    height, width = mask.shape
+    canvas = np.zeros((height + 2, width + 2), np.uint8)
+    canvas[1:-1, 1:-1] = mask
+    flooded = canvas.copy()
+    scratch = np.zeros((height + 4, width + 4), np.uint8)
+    cv2.floodFill(flooded, scratch, (0, 0), 255)
+    holes = cv2.bitwise_not(flooded)[1:-1, 1:-1]
+
+    count, labels, stats = detect._components(holes, np)
+    keep = np.zeros_like(mask)
+    for label in range(1, count):
+        x, y, w, h, area = (int(stats[label][index]) for index in range(5))
+        if max(w, h) > max_side:
+            continue
+        if area / float(max(1, w * h)) < 0.30:
+            continue
+        keep[labels == label] = 255
+    return cv2.bitwise_or(mask, keep)
+
+
+@pytest.mark.timeout(60)
+def test_the_lettering_fill_is_the_same_answer_and_not_page_squared():
+    """Painting each kept hole with `keep[labels == label] = 255` scans the whole
+    page once per hole, and a page of screentone has thousands of them.
+
+    Measured on a real 1897x2702 scan: this one function was **419 s of a 420 s
+    page**, so a 191-page volume would have taken most of a day. Vectorised it is
+    0.25 s, for the same twelve balloons. The naive form is kept here as the
+    reference, because the fix is only worth anything if the answer is identical.
+
+    The fixture is deliberately small. At the size where the difference is
+    obvious the *reference* cannot finish inside a test timeout, which is the
+    point but not a thing to assert on.
+    """
+    import cv2
+
+    page = np.full((520, 400), 255, np.uint8)
+    for y in range(10, 510, 12):                 # screentone: many small holes
+        for x in range(10, 390, 12):
+            page[y:y + 4, x:x + 4] = 0
+    # A balloon: a large thin ring that must NOT be filled, with lettering in it.
+    cv2.ellipse(page, (200, 260), (120, 90), 0, 0, 360, 255, -1)
+    cv2.ellipse(page, (200, 260), (120, 90), 0, 0, 360, 0, 3)
+    for index in range(4):
+        x = 130 + index * 32
+        page[236:284, x:x + 18] = 0
+
+    _, light = cv2.threshold(page, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    max_side = detect.DEFAULTS["glyph_max"] * 400
+
+    fast = detect._fill_lettering(light, np, max_side)
+    reference = _fill_lettering_naive(light, np, max_side)
+    assert np.array_equal(fast, reference)
+    # What the fill must not do to a balloon is
+    # `test_white_balloons_survive_the_lettering_fill`, on a fixture built for it.

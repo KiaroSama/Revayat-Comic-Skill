@@ -156,3 +156,62 @@ def test_a_missing_rarfile_names_the_package(tmp_path, monkeypatch):
     path.write_bytes(b"x")
     with pytest.raises(pageir.MissingDependency, match="rarfile"):
         readers.import_source(path, tmp_path / "work")
+
+
+def _rar_writer():
+    """A binary that can *create* a RAR, or None. There is no free one."""
+    import shutil
+
+    found = shutil.which("rar") or shutil.which("Rar")
+    if found:
+        return found
+    for candidate in (r"C:\Program Files\WinRAR\Rar.exe",
+                      r"C:\Program Files (x86)\WinRAR\Rar.exe",
+                      r"G:\Program Files\WinRAR\Rar.exe"):
+        if Path(candidate).is_file():
+            return candidate
+    return None
+
+
+def test_a_real_rar_round_trips(tmp_path):
+    """The one this project could not run for its first three weeks.
+
+    RAR compression is proprietary and no free writer exists, so a fabricated
+    archive tests the fabrication — the suite covered routing and both failure
+    paths and said plainly that a real RAR was untested. It stayed untested
+    until a machine with WinRAR turned up, and the first real `.cbr` found a
+    defect immediately: a RAR5 archive *opens* without an unrar backend and only
+    fails when a member is **read**, so guarding the constructor alone let the
+    failure out as a raw traceback from inside rarfile.
+
+    Skips where either half of the toolchain is missing, which is most machines
+    and every CI runner.
+    """
+    rar = _rar_writer()
+    if rar is None:
+        pytest.skip("no RAR writer on this machine; there is no free one")
+    rarfile = pytest.importorskip("rarfile")
+    try:
+        rarfile.tool_setup()
+    except rarfile.RarCannotExec:
+        pytest.skip("rarfile has no unrar backend it can run")
+
+    import subprocess
+    from tests_support import manga_page, page_bytes
+
+    source = tmp_path / "pages"
+    source.mkdir()
+    for index in (1, 2, 3):
+        (source / f"{index:03d}.png").write_bytes(page_bytes(manga_page(balloons=1)))
+
+    archive = tmp_path / "chapter.cbr"
+    result = subprocess.run(
+        [rar, "a", "-ep1", "-idq", str(archive), str(source / "*.png")],
+        capture_output=True, timeout=120,
+    )
+    assert archive.is_file(), result.stderr.decode(errors="replace")
+    assert archive.read_bytes()[:4] == b"Rar!", "the tool did not write a RAR"
+
+    doc = readers.import_source(archive, tmp_path / "work")
+    assert doc["kind"] == "cbr"
+    assert doc["pages"] == 3

@@ -220,14 +220,20 @@ def _fill_lettering(mask, np, max_side: float):
     holes = cv2.bitwise_not(flooded)[1:-1, 1:-1]
 
     count, labels, stats = _components(holes, np)
-    keep = np.zeros_like(mask)
-    for label in range(1, count):
-        x, y, w, h, area = (int(stats[label][index]) for index in range(5))
-        if max(w, h) > max_side:
-            continue
-        if area / float(max(1, w * h)) < 0.30:
-            continue
-        keep[labels == label] = 255
+
+    # Decide per label, then paint in **one** pass. Painting inside the loop
+    # (`keep[labels == label] = 255`) compares the whole page once per hole, and
+    # a page of screentone has thousands of holes: measured at 1897x2702, this
+    # single function was 419 s of a 420 s page, and a 191-page volume would
+    # have taken most of a day. The vectorised form is the same output.
+    sides = np.maximum(stats[:, cv2.CC_STAT_WIDTH], stats[:, cv2.CC_STAT_HEIGHT])
+    boxes = np.maximum(1, stats[:, cv2.CC_STAT_WIDTH] * stats[:, cv2.CC_STAT_HEIGHT])
+    solidity = stats[:, cv2.CC_STAT_AREA] / boxes.astype(np.float64)
+    allowed = (sides <= max_side) & (solidity >= 0.30)
+    allowed[0] = False                      # label 0 is the background
+    if count < 2 or not allowed[1:count].any():
+        return mask
+    keep = np.where(allowed[labels], np.uint8(255), np.uint8(0))
     return cv2.bitwise_or(mask, keep)
 
 
