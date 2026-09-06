@@ -260,6 +260,14 @@ def check_document(doc_path: str | Path, *, strict: bool = False) -> dict[str, A
             after = np.asarray(ir.load_image(root / cleaned_name))
             if before.shape == after.shape:
                 for region in page.get("regions", []):
+                    # A dropped region is the reader saying there is no text
+                    # here, so its "surviving ink" is artwork and measuring it
+                    # means nothing. It has to be checked explicitly: a region
+                    # dropped *after* an earlier clean still carries that run's
+                    # `fill`, and on the first real chapter that stale value let
+                    # a hand-split balloon pair be reported at 100% survived.
+                    if region.get("dropped"):
+                        continue
                     if region.get("fill") in {"none", "keep"} or not region.get("mask"):
                         continue
                     survived = surviving_ink(

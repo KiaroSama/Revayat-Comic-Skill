@@ -222,3 +222,41 @@ def test_solid_masks_are_recorded_and_refused_by_the_built_in_cleaners(detected)
     masks.build_document(detected)
     assert ir.load_doc(detected)["meta"]["free_lettering_mask"] == "glyphs"
     clean.clean_document(detected)          # and now it runs
+
+
+def test_an_added_speech_region_gets_its_balloon_found_for_it(detected):
+    """The point of splitting one region into two: each half has to *be* a
+    balloon, or the mask is not clipped to an interior and Persian can be set
+    over the outline."""
+    doc = ir.load_doc(detected)
+    page = doc["pages"][0]
+    balloon = [r for r in page["regions"] if r.get("balloon")][0]
+    bx, by, bw, bh = balloon["bbox"]
+
+    page["regions"].append(dict(
+        ir.new_region(f"{page['id']}r900", [bx, by, bw, bh], kind="speech",
+                      detector="reader", confidence=1.0),
+        balloon=None, polarity=balloon.get("polarity", "light"),
+        added_as="split", target_text="سلام",
+    ))
+    ir.save_doc(doc, detected)
+
+    report = masks.build_document(detected)
+    assert report["balloons_derived"] >= 1
+
+    added = [r for _, r in ir.iter_regions(ir.load_doc(detected))
+             if r.get("added_as") == "split"][0]
+    assert added["balloon"] is not None
+    x, y, w, h = added["balloon"]
+    assert x <= bx and y <= by and x + w >= bx + bw and y + h >= by + bh
+
+
+def test_a_panel_sized_component_is_not_accepted_as_a_derived_balloon(detected):
+    """The guard that keeps a whole panel out. A box drawn on open artwork has
+    no balloon, and inventing one would clip the mask to the wrong shape."""
+    doc = ir.load_doc(detected)
+    page = doc["pages"][0]
+    rgb = np.asarray(ir.load_image(ir.doc_dir(detected) / page["image"]))
+    size = (page["width"], page["height"])
+    whole_page = [0, 0, page["width"], page["height"]]
+    assert masks.find_balloon(rgb, whole_page, "light", size) is None

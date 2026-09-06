@@ -306,3 +306,77 @@ def test_adding_a_region_does_not_make_its_own_worksheet_stale(detected):
 
     again = worksheet.merge_document(detected)
     assert again["stale_worksheets"] == []
+
+
+def test_merging_the_same_sheet_twice_updates_the_added_region(detected):
+    """A worksheet is merged more than once — after a correction, after a
+    shortened translation. Without a stable identity for the added box, the
+    second merge made a second copy and then reported the first as a region the
+    sheet had forgotten. Measured: three merges, three `bump` regions.
+    """
+    worksheet.build_document(detected)
+    _fill(detected, extra=_ADDED)
+    first = worksheet.merge_document(detected)
+    assert first["ok"], first
+
+    second = worksheet.merge_document(detected)
+    assert second["ok"], second
+    assert second["added"] == []
+    assert second["missing_regions"] == []
+
+    page = ir.load_doc(detected)["pages"][0]
+    assert len([r for r in page["regions"] if r["detector"] == "reader"]) == 1
+
+
+def test_moving_an_added_box_moves_the_region_and_forgets_its_balloon(detected):
+    """Re-drawing the box is how a reader corrects one that clipped a letter."""
+    worksheet.build_document(detected)
+    _fill(detected, extra=_ADDED)
+    assert worksheet.merge_document(detected)["ok"]
+
+    path = ir.doc_dir(detected) / "worksheets" / "p0001.done.txt"
+    path.write_text(path.read_text("utf-8").replace("box: 300 900 120 40",
+                                                    "box: 290 890 150 60"),
+                    encoding="utf-8")
+    assert worksheet.merge_document(detected)["ok"]
+
+    page = ir.load_doc(detected)["pages"][0]
+    added = [r for r in page["regions"] if r["detector"] == "reader"]
+    assert len(added) == 1
+    assert added[0]["bbox"] == [290, 890, 150, 60]
+    assert added[0]["balloon"] is None      # `mask` derives it again from the new box
+
+
+def test_the_kind_on_an_added_header_is_honoured(detected):
+    """`@@ +eh speech horizontal` says speech. Reading only the `kind:` field
+    left every added region an sfx, which for a split balloon means no interior
+    is found and Persian can be set over the outline."""
+    worksheet.build_document(detected)
+    _fill(detected, extra="\n@@ +eh speech horizontal\nbox: 300 900 120 40\n"
+                          "src: EH?\nfa: ها؟\n")
+    assert worksheet.merge_document(detected)["ok"]
+
+    page = ir.load_doc(detected)["pages"][0]
+    added = [r for r in page["regions"] if r["detector"] == "reader"][0]
+    assert added["kind"] == "speech"
+    assert added["orientation"] == "horizontal"
+
+
+def test_dropping_a_region_forgets_what_an_earlier_run_did_to_it(detected):
+    """Otherwise the stale `fill` speaks for a region nobody is cleaning."""
+    worksheet.build_document(detected)
+    doc = ir.load_doc(detected)
+    page = doc["pages"][0]
+    victim = [r for r in page["regions"] if not r.get("dropped")][0]
+    victim["fill"] = "flat"
+    victim["typeset"] = {"status": "ok", "size": 20}
+    ir.save_doc(doc, detected)
+
+    _fill(detected, drop=(victim["id"],))
+    worksheet.merge_document(detected)
+
+    after = [r for _, r in ir.iter_regions(ir.load_doc(detected))
+             if r["id"] == victim["id"]][0]
+    assert after["dropped"] is True
+    assert after["fill"] == "none"
+    assert after["typeset"] == {}

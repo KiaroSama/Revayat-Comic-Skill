@@ -214,6 +214,14 @@ def parse_worksheet(text: str) -> dict[str, dict[str, str]]:
             region_id = header.group("id")
             current = blocks.setdefault(region_id, {"_seen": 0})
             current["_seen"] = int(current.get("_seen", 0)) + 1
+            # `@@ <id> <kind> <orientation>`. For an existing region these are
+            # echoed back from the document and ignored; for an added one they
+            # are the only place the kind is written, so they are kept.
+            words = (header.group("rest") or "").split()
+            if words and words[0] in ir.REGION_KINDS:
+                current["_kind"] = words[0]
+            if len(words) > 1 and words[1] in ir.ORIENTATIONS:
+                current["_orientation"] = words[1]
             field = None
             continue
         if current is None:
@@ -238,6 +246,12 @@ def _apply(region: dict[str, Any], block: dict[str, str],
         region["dropped"] = True
         region["target_text"] = ""
         region["source_text"] = ""
+        # Forget what an earlier run did to it. A region dropped after it had
+        # already been cleaned and typeset kept that run's `fill` and `typeset`
+        # records, and those stale values then spoke for a region nobody was
+        # cleaning any more.
+        region["fill"] = "none"
+        region["typeset"] = {}
         report["dropped"].append(region["id"])
         return True
 
@@ -278,7 +292,7 @@ def _next_region_id(page: dict[str, Any]) -> str:
 
 
 def _add_region(page: dict[str, Any], slug: str, block: dict[str, str],
-                report: dict[str, Any]) -> bool:
+                report: dict[str, Any]) -> bool:  # noqa: C901 - one flow, read top to bottom
     """Create a region the detector never found, from a `box:` the reader read.
 
     The counterpart to `drop`, and the page needs both. Detection returns the
@@ -304,19 +318,36 @@ def _add_region(page: dict[str, Any], slug: str, block: dict[str, str],
         report["bad_added_regions"].append(f"{label}: box falls outside the page")
         return False
 
-    kind = (block.get("kind") or "sfx").strip().lower()
+    kind = (block.get("kind") or block.get("_kind") or "sfx").strip().lower()
     if kind not in ir.REGION_KINDS:
         report["bad_kind"].append(f"{label}: {kind}")
         return False
 
+    # A worksheet is merged more than once — after a correction, after a
+    # shortened translation. The `+slug` is the reader's name for the box, so it
+    # identifies the region on every later merge; without that, each merge made
+    # another copy and reported the previous ones as regions the worksheet had
+    # forgotten.
+    existing = next((r for r in page.get("regions", [])
+                     if r.get("added_as") == slug), None)
+    if existing is not None:
+        if existing["bbox"] != bbox:
+            existing["bbox"] = bbox
+            existing["balloon"] = None      # re-derived by `mask` from the new box
+        existing["kind"] = kind
+        _apply(existing, block, report)
+        return bool((existing.get("target_text") or "").strip())
+
     region = ir.new_region(
         _next_region_id(page), bbox, kind=kind,
-        orientation="vertical" if bbox[3] > 1.6 * bbox[2] else "horizontal",
+        orientation=block.get("_orientation")
+        or ("vertical" if bbox[3] > 1.6 * bbox[2] else "horizontal"),
         # Named `reader` on purpose: this box came from someone looking at the
         # page, so `detect` must not treat it as one of its own guesses.
         detector="reader", confidence=1.0,
     )
     region["balloon"] = None
+    region["added_as"] = slug
     region["polarity"] = "dark" if block.get("polarity", "").strip().lower() == "dark" else "light"
     region["locked"] = True
     page.setdefault("regions", []).append(region)
@@ -381,7 +412,15 @@ def merge_document(
         additions = sorted(key for key in blocks if key.startswith("+"))
         report["unknown_regions"] += sorted(set(blocks) - known - set(additions))
 
+        # Regions the reader added are addressed by their `+slug` block, not by
+        # an `@@ <id>` block of their own, so they are not missing from the sheet.
+        slugs = {slug[1:] for slug in additions}
+        covered = {region["id"] for region in page["regions"]
+                   if region.get("added_as") in slugs}
+
         for region in page["regions"]:
+            if region["id"] in covered:
+                continue
             block = blocks.get(region["id"])
             if block is None:
                 report["missing_regions"].append(region["id"])
