@@ -80,17 +80,25 @@ def _from_zip(path: Path, pages_dir: Path) -> list[Path]:
     return written
 
 
+#: Said in two places, because a RAR5 archive opens without a backend and only
+#: fails when a member is read.
+_NEEDS_UNRAR = (
+    "rarfile needs an unrar binary it can run to read a CBR, and there is none "
+    "on PATH.\n"
+    "    Linux/macOS: install `unrar` or `libarchive-tools`\n"
+    "    Windows:     install WinRAR, then add its folder to PATH — the file\n"
+    "                 rarfile needs is UnRAR.exe, beside WinRAR.exe\n"
+    "    Either way:  re-saving the file as CBZ needs no extra tool at all\n"
+    "({error})"
+)
+
+
 def _from_rar(path: Path, pages_dir: Path) -> list[Path]:
     rarfile = ir.require("rarfile", "rarfile", "reading CBR archives")
     try:
         archive = rarfile.RarFile(str(path))
     except rarfile.RarCannotExec as error:  # pragma: no cover - depends on host
-        raise ir.MissingDependency(
-            "rarfile needs an unrar/bsdtar binary on PATH to open a CBR.\n"
-            "    Linux/macOS: install `unrar` or `libarchive-tools`\n"
-            "    Windows:     install WinRAR, or convert the file to CBZ\n"
-            f"({error})"
-        ) from error
+        raise ir.MissingDependency(_NEEDS_UNRAR.format(error=error)) from error
     except rarfile.Error as error:
         # A file named .cbr that is not a RAR, or one that is truncated. Without
         # this the user gets a bare `rarfile.NotRarFile` traceback from inside a
@@ -104,15 +112,24 @@ def _from_rar(path: Path, pages_dir: Path) -> list[Path]:
         ) from error
 
     written: list[Path] = []
-    with archive:
-        members = _image_members(archive.namelist())
-        if not members:
-            raise ValueError(f"{path.name} contains no images.")
-        for index, member in enumerate(members):
-            suffix = Path(member).suffix.lower()
-            target = pages_dir / f"{ir.page_id_for(index)}{suffix}"
-            ir.write_bytes(target, archive.read(member))
-            written.append(target)
+    try:
+        with archive:
+            members = _image_members(archive.namelist())
+            if not members:
+                raise ValueError(f"{path.name} contains no images.")
+            for index, member in enumerate(members):
+                suffix = Path(member).suffix.lower()
+                target = pages_dir / f"{ir.page_id_for(index)}{suffix}"
+                ir.write_bytes(target, archive.read(member))
+                written.append(target)
+    except rarfile.RarCannotExec as error:  # pragma: no cover - depends on host
+        # **Opening a RAR5 archive succeeds without a backend; reading one does
+        # not.** rarfile defers the tool to the first `read`, so guarding only
+        # the constructor above let the failure through as a raw traceback out
+        # of a dependency. Found by building a real `.cbr` with WinRAR's
+        # `Rar.exe` and importing it on a machine where `UnRAR.exe` was not on
+        # PATH — the exact situation a Windows user is in.
+        raise ir.MissingDependency(_NEEDS_UNRAR.format(error=error)) from error
     return written
 
 

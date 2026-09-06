@@ -167,10 +167,16 @@ it does not, do them one at a time — the result is the same, only slower.
 >   - `drop: yes` when there is no text there at all
 >   - `kind: sfx` / `sign` / `narration` / `thought` when it is misclassified
 >   - `speaker: <short stable name>` — the same name every time, on every page
+> - **Check every crop for two balloons in one box.** This is the commonest way
+>   the page loses text, it happens several times a volume, and the detector
+>   cannot see it — four different measurements were tried and none separates a
+>   touching pair from one balloon with a tail. **You can see it instantly**: the
+>   crop shows two outlines and two blocks of text. When it does, `drop: yes` the
+>   region and add each balloon back with its own `box:`.
 > - **If the overview shows text with no region on it, add one.** Free lettering
->   is the weak case, adjacent balloons sometimes come back as a single region,
->   and a whole panel is occasionally taken for a balloon and swallows what is
->   drawn inside it — so a full worksheet is not the same as a full page.
+>   is the weak case, and a whole panel is occasionally taken for a balloon and
+>   swallows what is drawn inside it — so a full worksheet is not the same as a
+>   full page.
 >
 >   ```
 >   @@ +bump sfx horizontal
