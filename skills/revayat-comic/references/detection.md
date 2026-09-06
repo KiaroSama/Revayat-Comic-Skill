@@ -93,6 +93,9 @@ means.
 | `--gutter-min-span` | 0.012 | how wide a gutter must be |
 | `--panel-min-area` | 0.02 | smallest panel worth reporting |
 | `--sfx-min-side` | 0.035 | smallest piece of free lettering |
+| `--sfx-min-glyphs` | 3 | how many marks make a word |
+| `--sfx-size-uniformity` | 0.80 | how alike those marks must be |
+| `--sfx-max-spread` | 1.5 | how far they may stray across their own line |
 
 ## Symptoms and fixes
 
@@ -107,6 +110,24 @@ means.
 | `pages_without_text` on most pages | the thresholds do not fit this book | start with `--balloon-min-area 0.0003 --ink-min 0.008` |
 | balloons missed **only** on a high-resolution scan | the outline is a hairline relative to the page | see *Resolution* below |
 
+## Free lettering, and what those three knobs are for
+
+An eye and a letter O are the same blob, so nothing about a *single* mark can
+say which is which. What separates writing is how a **set** of marks relates:
+several of them, near enough one size, sitting along a line. That is all three
+knobs above, and on real artwork they do the heavy lifting — a textless splash
+page produced nineteen regions without them, and three with.
+
+`--sfx-size-uniformity` is the one to reach for first and the one to trust: a
+font's letters are within a factor of two of each other, while hair, screentone
+and cloth folds produce every size at once, and it is the only test here that
+does not care about orientation or how many lines the lettering runs to.
+`--sfx-max-spread` catches what passes on size. Lower `--sfx-min-glyphs` below 3
+only if you are losing two-character effects and can live with the noise.
+
+The pass is still the weak one, and it stays that way: everything it returns is
+low confidence, and the reader is asked to drop what is not text.
+
 ## Correcting a region
 
 You do not edit boxes by hand. The worksheet is where corrections go, because
@@ -115,6 +136,39 @@ that is where the reader is already looking at the crop:
 - `drop: yes` — there is no text here
 - `kind:` — it is a sign, not speech
 - `speaker:` — who is talking
+- `@@ +<name>` with `box: x y w h` — **there is text here and no region on it**
+
+The last one is the counterpart to `drop`, and a real page needs both. Free
+lettering is missed, adjacent balloons come back welded into one region, and a
+panel is sometimes taken for a balloon and swallows what is drawn inside it —
+each of those loses text that is plainly there in `overview.png`.
+
+**Splitting a merged pair** is a drop plus two adds:
+
+```
+@@ p0005r011 speech horizontal
+drop: yes
+
+@@ +eh speech horizontal
+box: 744 434 50 26
+src: EH?
+fa: ها؟
+
+@@ +leaving speech horizontal
+box: 612 522 138 78
+src: YOU'RE LEAVING ALREADY?
+fa: به این زودی می‌ری؟
+```
+
+Say `speech` on the header and `mask` finds the balloon around each box for you,
+so both halves are clipped to their own interior like any detected balloon. Say
+nothing, or `sfx`, and the box is treated as lettering on open artwork. Re-run
+`mask` after a merge that added regions; merging again updates the same regions
+rather than making more, and re-drawing a `box:` moves the one that is there.
+
+Draw the box around **all** of the lettering. One drawn a few pixels too tight
+on the left left the `A` of `ALREADY` on the cleaned page — `source-text-survived`
+caught it, and the fix was a wider box, not a looser gate.
 
 A region that has been answered is **locked**, and a later `detect` run skips
 its page rather than renumbering ids the worksheet already refers to.

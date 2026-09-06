@@ -107,6 +107,48 @@ under `keep` is expected and harmless.
 The last one is common on textured pages. Look at the crop; `drop: yes` if the
 detector found screentone rather than a sound effect.
 
+## The one it did not find at all
+
+Detection misses effects, and a whole panel taken for a balloon silences the
+free-lettering pass across everything drawn inside it — which is how a `BUMP`
+went undetected on a real page while every count reported success. Add it from
+the worksheet rather than accepting the loss:
+
+```
+@@ +bump sfx horizontal
+box: 760 435 42 24
+src: BUMP
+fa: تلپ
+```
+
+`box:` is `x y w h` in the page's own pixels, read straight off `overview.png`;
+add `polarity: dark` for white lettering on black, and re-run `mask` afterwards.
+See `detection.md` for the same mechanism used to split a merged pair.
+
+## Reconstructing what was under it
+
+Under `translate` the original lettering has to come off the artwork, and the
+built-in cleaners are honest but limited: Telea propagates surrounding structure
+inwards and will not redraw a speed line it has erased. For effects that sit on
+real drawing, hand the whole patch to a generative cleaner instead of asking it
+to paint inside letter shapes:
+
+```bash
+revayat-comic mask  --doc work/comic.json --free-lettering solid
+revayat-comic clean --doc work/comic.json --external reconstructed/
+```
+
+`clean` refuses solid masks without `--external`, because painting one flat
+blanks a rectangle out of the drawing. Full reasoning in
+`artwork-preservation.md`.
+
+## Leaving one effect as drawn under `translate`
+
+There is no per-region `keep`: the policy is document-wide. To translate the
+chapter's effects but leave a particular piece of lettering in the artwork —
+a background shop sign, a logo — `drop: yes` it. The wording of `drop` says "no
+text here", which is not quite what you mean, and it is the only lever there is.
+
 ## What is not implemented
 
 Redrawing stylised lettering — matching the original's slant, stroke weight,

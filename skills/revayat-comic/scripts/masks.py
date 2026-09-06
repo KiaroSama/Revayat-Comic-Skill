@@ -116,6 +116,80 @@ def balloon_interior(page_rgb, balloon, polarity: str, page_size: tuple[int, int
     return canvas
 
 
+#: Region kinds that live inside a balloon. `sfx`, `sign` and `unknown` are
+#: lettering on the artwork and have no interior to find.
+BALLOON_KINDS = ("speech", "thought", "narration")
+
+#: A derived balloon may not be larger than this share of the page. Above it the
+#: component is a panel or the page background, not a balloon — the same ceiling
+#: `detect` uses, for the same reason.
+MAX_DERIVED_BALLOON = 0.13
+
+
+def find_balloon(page_rgb, bbox, polarity: str, page_size: tuple[int, int]):
+    """The balloon around a box the reader drew, or ``None``.
+
+    A region added by hand carries a text box and nothing else, so cleaning and
+    typesetting would treat it as lettering on open artwork: the mask would not
+    be clipped to an interior and Persian could be set straight over the
+    outline. That matters most for the case the add feature exists to serve —
+    **splitting one region that covers two balloons**, where both halves are
+    balloons and neither knows it.
+
+    So the enclosing light component is found the same way `balloon_interior`
+    finds the paper, and accepted only if it really encloses the box and is
+    small enough to be a balloon rather than a panel.
+    """
+    cv2, np = _cv2(), _numpy()
+    width, height = page_size
+    x, y, w, h = ir.clamp_bbox(bbox, width, height)
+    if w < 4 or h < 4:
+        return None
+
+    # Look in a window around the box: the balloon is bigger than its lettering.
+    margin = max(w, h)
+    wx, wy, ww, wh = ir.clamp_bbox(
+        [x - margin, y - margin, w + 2 * margin, h + 2 * margin], width, height)
+    window = page_rgb[wy:wy + wh, wx:wx + ww]
+    gray = cv2.cvtColor(window, cv2.COLOR_RGB2GRAY) if window.ndim == 3 else window
+    if polarity == "dark":
+        gray = 255 - gray
+    _, light = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(light, connectivity=8)
+    if count < 2:
+        return None
+
+    # Seed from the paper *around* the lettering, not from the middle of it. The
+    # centre of a text box usually lands on a letter, which is label 0, and
+    # falling back to "the biggest component in the window" then picks the page
+    # background rather than the balloon — measured on the fixture, where it
+    # found nothing at all. A ring just outside the box is inside the balloon
+    # when there is one, and is artwork when there is not.
+    ring = [(x - wx + w // 2, y - wy - 4), (x - wx + w // 2, y - wy + h + 3),
+            (x - wx - 4, y - wy + h // 2), (x - wx + w + 3, y - wy + h // 2),
+            (x - wx + w // 2, y - wy + h // 2)]
+    seen: dict[int, int] = {}
+    for column, row in ring:
+        if 0 <= row < wh and 0 <= column < ww:
+            label = int(labels[row, column])
+            if label:
+                seen[label] = seen.get(label, 0) + 1
+
+    cap = MAX_DERIVED_BALLOON * width * height
+    for label, _votes in sorted(seen.items(), key=lambda item: -item[1]):
+        bx, by, bw, bh = (int(stats[label, index]) for index in
+                          (cv2.CC_STAT_LEFT, cv2.CC_STAT_TOP,
+                           cv2.CC_STAT_WIDTH, cv2.CC_STAT_HEIGHT))
+        found = [wx + bx, wy + by, bw, bh]
+        encloses = (found[0] <= x and found[1] <= y
+                    and found[0] + found[2] >= x + w
+                    and found[1] + found[3] >= y + h)
+        if encloses and bw * bh <= cap:
+            return found
+    return None
+
+
 def _ink_mask(window, polarity: str):
     """Glyph pixels inside a crop, as 0/255."""
     cv2 = _cv2()
@@ -200,6 +274,7 @@ def build_document(
     from PIL import Image
 
     written = 0
+    derived = 0
     per_page: list[dict[str, Any]] = []
     for page in doc["pages"]:
         if pages and page["id"] not in pages:
@@ -213,6 +288,14 @@ def build_document(
         union = np.zeros((page["height"], page["width"]), np.uint8)
 
         for region in page["regions"]:
+            # A box the reader drew arrives with no balloon. Find it, so a
+            # hand-split pair of balloons is masked and typeset like any other.
+            if (region.get("detector") == "reader" and not region.get("balloon")
+                    and region["kind"] in BALLOON_KINDS):
+                region["balloon"] = find_balloon(
+                    rgb, region["bbox"], region.get("polarity", "light"), size)
+                derived += region["balloon"] is not None
+
             mask, box = region_mask(rgb, region, size, grow=grow, pad=pad,
                                     solid_free=solid_free)
             relative = f"masks/{page['id']}/{region['id']}.png"
@@ -240,7 +323,7 @@ def build_document(
     # Recorded so `clean` can refuse the one combination that would destroy
     # artwork: a solid free-lettering mask handed to the built-in cleaners.
     doc["meta"]["free_lettering_mask"] = "solid" if solid_free else "glyphs"
-    ir.stamp_stage(doc, "masks", {"written": written})
+    ir.stamp_stage(doc, "masks", {"written": written, "balloons_derived": derived})
     ir.save_doc(doc, doc_path)
 
     # A mask covering a third of the page is not lettering; something matched
@@ -250,6 +333,7 @@ def build_document(
     return {
         "document": str(doc_path),
         "masks_written": written,
+        "balloons_derived": derived,
         "pages": per_page,
         "excessive_coverage": excessive,
         "warning": (
