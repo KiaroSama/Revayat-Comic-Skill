@@ -33,11 +33,13 @@ venv/
 
 # --- Revayat Comic working directories and outputs ---
 *_revayat-comic/
-/work/
-# …and any second working folder. A real chapter's pages are someone else's
-# artwork, and `work2/` held 109 MB of it before this line existed.
-/work[0-9]*/
-/out/
+# A working folder holds someone else's artwork — `work2/` held 109 MB of it
+# before any of these lines existed. The names a real run produces are not the
+# name the README uses, so these cover the class rather than the example:
+# measured, `work-sekirei/`, `out-fa/` and `runA/` were all committable.
+/work*/
+/out*/
+/run*/
 
 # Comic pages and archives are someone else's artwork. Never commit them; the
 # test suite draws its own fixtures instead.
