@@ -405,3 +405,37 @@ def test_free_lettering_is_not_judged_for_survival():
         np.zeros((40, 40, 3), np.uint8), np.zeros((40, 40, 3), np.uint8),
         region, np.zeros((40, 40), np.uint8), (40, 40), np,
     ) == 0.0
+
+
+def test_dropping_a_false_detection_is_not_a_broken_reading_order(finished):
+    """`drop: yes` is the correction the worksheet asks for by name, and it
+    leaves a gap in the numbering every single time.
+
+    The check used to require the surviving regions to be numbered 1..N, so it
+    fired on all ten pages of the first real chapter — every one of them
+    correctly translated. A gate that goes off on the documented workflow is how
+    people learn to skip reading the gate.
+    """
+    doc = ir.load_doc(finished)
+    page = doc["pages"][0]
+    live = [r for r in page["regions"] if not r.get("dropped")]
+    assert len(live) >= 2, "fixture needs at least two regions to drop one"
+    live[0]["dropped"] = True
+    ir.save_doc(doc, finished)
+
+    report = qa.check_document(finished)
+    assert "reading-order-broken" not in report["by_code"]
+
+
+def test_two_regions_sharing_a_reading_order_is_still_caught(finished):
+    """Loosening the check must not turn it off: a repeated number is a real
+    ordering fault and still fails."""
+    doc = ir.load_doc(finished)
+    page = doc["pages"][0]
+    live = [r for r in page["regions"] if not r.get("dropped")]
+    assert len(live) >= 2
+    live[1]["reading_order"] = live[0]["reading_order"]
+    ir.save_doc(doc, finished)
+
+    report = qa.check_document(finished)
+    assert report["by_code"].get("reading-order-broken") == 1

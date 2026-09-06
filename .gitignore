@@ -34,6 +34,9 @@ venv/
 # --- Revayat Comic working directories and outputs ---
 *_revayat-comic/
 /work/
+# …and any second working folder. A real chapter's pages are someone else's
+# artwork, and `work2/` held 109 MB of it before this line existed.
+/work[0-9]*/
 /out/
 
 # Comic pages and archives are someone else's artwork. Never commit them; the

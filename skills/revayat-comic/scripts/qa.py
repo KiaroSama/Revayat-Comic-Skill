@@ -210,13 +210,19 @@ def check_document(doc_path: str | Path, *, strict: bool = False) -> dict[str, A
                 f"{page['mask_coverage']:.0%} of the page is inside an edit mask",
             )
 
+        # Reading order has to be a real order: every surviving region numbered,
+        # and no two sharing a number. It does **not** have to be 1..N. Dropping
+        # a false detection is the correction the worksheet asks for by name, and
+        # it leaves a gap every time — requiring contiguity here made this fire on
+        # all ten pages of the first real chapter, which is how a gate teaches
+        # people to ignore it.
         orders = [region.get("reading_order") or 0
                   for region in page.get("regions", [])
                   if not region.get("dropped")]
-        if orders and sorted(orders) != list(range(1, len(orders) + 1)):
+        if orders and (min(orders) < 1 or len(set(orders)) != len(orders)):
             findings.add(
                 "reading-order-broken", page["id"],
-                f"reading order is not 1..{len(orders)}: {sorted(orders)[:12]}",
+                f"reading order is missing or repeated on this page: {sorted(orders)[:12]}",
             )
 
         final = page.get("final")

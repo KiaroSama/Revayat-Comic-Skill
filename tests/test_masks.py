@@ -7,6 +7,7 @@ so these tests are about what it must *not* cover as much as what it must.
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 import masks
 import pageir as ir
@@ -132,3 +133,92 @@ def test_excessive_coverage_is_reported(detected):
     report = masks.build_document(detected, grow=0.01)
     assert "p0001" in report["excessive_coverage"]
     assert "28%" in report["warning"]
+
+
+def test_a_speck_under_the_balloon_centre_does_not_empty_the_interior():
+    """The interior is the balloon's paper, and the paper is the *biggest* light
+    thing inside a balloon's own box — never whatever the centre pixel happens
+    to land on.
+
+    Found on a real page. The centre of one balloon fell on a 113-pixel fleck of
+    screentone, `balloon_interior` returned it as the interior, eroding by the
+    outline inset wiped it out, the mask came back empty, cleaning had nothing to
+    paint and the English stayed on the finished page — with every count
+    reporting success. Only `source-text-survived` noticed.
+
+    The old code fell back to the largest component only when the centre landed
+    on a *letter*. A speck is light, so it never triggered.
+    """
+    from PIL import Image, ImageDraw
+
+    width, height = 200, 160
+    page = Image.new("RGB", (width, height), "black")
+    draw = ImageDraw.Draw(page)
+    draw.ellipse([10, 10, width - 10, height - 10], fill="white", outline="black", width=3)
+    # A letter across the middle, with one isolated light speck at the exact
+    # centre pixel — the shape that used to be mistaken for the whole balloon.
+    draw.rectangle([60, 60, 140, 100], fill="black")
+    cx, cy = width // 2, height // 2
+    draw.rectangle([cx - 1, cy - 1, cx + 1, cy + 1], fill="white")
+
+    interior = masks.balloon_interior(
+        np.asarray(page), [0, 0, width, height], "light", (width, height),
+        inset=masks.OUTLINE_INSET,
+    )
+    covered = int((interior > 0).sum())
+    assert covered > 0.25 * width * height, (
+        f"interior collapsed to {covered} px; the speck was taken for the paper"
+    )
+
+
+def test_free_lettering_can_be_masked_solid_for_a_generative_cleaner(detected):
+    """Lettering drawn onto the artwork has no balloon to protect, and clipping a
+    reconstruction back to the letter shapes is what makes it look repaired
+    rather than redrawn: every seam lands on a glyph edge, which is where the eye
+    goes. `--free-lettering solid` hands the whole patch over instead.
+    """
+    doc = ir.load_doc(detected)
+    page = doc["pages"][0]
+    free = [r for r in page["regions"] if not r.get("balloon")]
+    assert free, "fixture has no free lettering to mask"
+
+    rgb = np.asarray(ir.load_image(ir.doc_dir(detected) / page["image"]))
+    size = (page["width"], page["height"])
+    glyphs, _ = masks.region_mask(rgb, free[0], size)
+    solid, box = masks.region_mask(rgb, free[0], size, solid_free=True)
+
+    assert (solid > 0).all()
+    assert (solid > 0).sum() > (glyphs > 0).sum()
+    assert solid.shape == (box[3], box[2])
+
+
+def test_a_balloon_is_never_masked_solid(detected):
+    """The option is for free lettering only. A solid mask over a balloon would
+    take its outline with it, which is the defect the interior clip exists for."""
+    doc = ir.load_doc(detected)
+    page = doc["pages"][0]
+    balloons = [r for r in page["regions"] if r.get("balloon")]
+    assert balloons
+
+    rgb = np.asarray(ir.load_image(ir.doc_dir(detected) / page["image"]))
+    size = (page["width"], page["height"])
+    plain, _ = masks.region_mask(rgb, balloons[0], size)
+    asked, _ = masks.region_mask(rgb, balloons[0], size, solid_free=True)
+    assert (plain == asked).all()
+
+
+def test_solid_masks_are_recorded_and_refused_by_the_built_in_cleaners(detected):
+    """The one combination that would destroy artwork, blocked at the door: a
+    solid patch painted flat or inpainted blanks a rectangle out of the drawing.
+    """
+    import clean
+
+    masks.build_document(detected, solid_free=True)
+    assert ir.load_doc(detected)["meta"]["free_lettering_mask"] == "solid"
+
+    with pytest.raises(ValueError, match="free-lettering solid"):
+        clean.clean_document(detected)
+
+    masks.build_document(detected)
+    assert ir.load_doc(detected)["meta"]["free_lettering_mask"] == "glyphs"
+    clean.clean_document(detected)          # and now it runs
