@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import struct
 import zipfile
+import zlib
 from pathlib import Path
 
 import pytest
 
 import pageir as ir
 import readers
-from tests_support import manga_page, page_bytes, write_pages
+from tests_support import manga_page, page_bytes, write_cbz, write_pages
 
 
 def test_natural_sort_puts_page_2_before_page_10():
@@ -122,9 +124,10 @@ def test_pdf_import_keeps_the_original_page_bytes(tmp_path):
 
 # --- CBR ---------------------------------------------------------------------
 # There is no free RAR *writer* — RAR compression is proprietary and libarchive
-# is read-only for it — so a real round-trip cannot be built here or in CI. What
-# can be covered is the routing and the failure path, which is where the code
-# this project owns actually lives.
+# is read-only for it — so no test can build one at run time. A genuine archive
+# therefore travels as base64 text in `data/real-rar.b64` and is decoded below,
+# which gives a real round-trip on every runner that has a RAR *reader*. The
+# routing and failure paths come first because they hold on every machine.
 
 def test_a_cbr_extension_routes_to_the_rar_reader(tmp_path):
     path = tmp_path / "chapter.cbr"
@@ -256,3 +259,78 @@ def test_a_real_chapter_passes_the_limits(tmp_path):
 def test_a_tiny_member_is_not_judged_by_ratio():
     """A 40-byte entry expanding to 4 KB is a header, not an attack."""
     readers.check_archive_limits("chapter.cbz", [("meta.png", 4096, 40)])
+
+
+def test_a_single_huge_member_is_refused_on_its_own():
+    """The 6 GB member an audit found sitting inside the old limits: the running
+    total only fails once it crosses the ceiling, and the first entry never
+    does. This one is deliberately under the total, so nothing except the
+    per-member cap can be what refuses it."""
+    size = readers.MAX_MEMBER_BYTES + 1
+    assert size < readers.MAX_TOTAL_BYTES, "the total ceiling would mask this"
+    # Stored size equals uncompressed, so the ratio guard cannot fire either.
+    with pytest.raises(ValueError, match="MB entry"):
+        readers.check_archive_limits("chapter.cbz", [("p.png", size, size)])
+
+
+def _png_declaring(width: int, height: int) -> bytes:
+    """A valid PNG header claiming `width` x `height`, with nothing behind it.
+
+    Sixty-six bytes. Pillow reads the size out of IHDR before it decodes a
+    single pixel, which is both the whole of the attack and the whole of the
+    defence.
+    """
+    def chunk(tag: bytes, payload: bytes) -> bytes:
+        body = tag + payload
+        return (struct.pack(">I", len(payload)) + body
+                + struct.pack(">I", zlib.crc32(body)))
+
+    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header)
+            + chunk(b"IDAT", zlib.compress(b"\0")) + chunk(b"IEND", b""))
+
+
+def test_a_decompression_bomb_is_refused_and_the_message_names_the_file(tmp_path):
+    """No archive limit can see this one: the member is 66 bytes and expands to
+    66 bytes. It is the *decoded* size that is 3.6 gigapixels, and Pillow only
+    raises past twice its own ceiling — under that it warns, which reaches the
+    user as a stray line on stderr and a page that quietly costs 10 GB."""
+    path = tmp_path / "chapter.cbz"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("001.png", _png_declaring(60_000, 60_000))
+
+    with pytest.raises(ValueError, match=r"p0001\.png") as refused:
+        readers.import_source(path, tmp_path / "work")
+    assert "megapixels" in str(refused.value)
+
+
+def test_a_pdf_with_too_many_pages_is_refused_before_rendering(tmp_path):
+    """Page count is known from the document; rendering to find out costs a
+    pixmap per page."""
+    pymupdf = pytest.importorskip("pymupdf")
+
+    source = tmp_path / "everything.pdf"
+    document = pymupdf.open()
+    for _ in range(readers.MAX_PAGES + 1):
+        document.new_page(width=200, height=300)
+    document.save(str(source))
+    document.close()
+
+    with pytest.raises(ValueError, match="pages"):
+        readers.import_source(source, tmp_path / "work")
+    # Rendering even the first page would have left a file behind.
+    assert not any((tmp_path / "work" / "pages").iterdir())
+
+
+def test_a_real_chapter_clears_every_new_limit_with_room(tmp_path):
+    """A guard that fires on a genuine page is worse than no guard at all. A
+    drawn 1000x1500 page is 1.5 of the 80 megapixels allowed and kilobytes of
+    the half gigabyte, and the chapter is 3 pages of 2000."""
+    path = write_cbz(tmp_path / "chapter.cbz", pages=3)
+    report = readers.import_source(path, tmp_path / "work")
+    assert report["pages"] == 3
+
+    biggest = max(page.stat().st_size
+                  for page in (tmp_path / "work" / "pages").iterdir())
+    assert biggest * 100 < readers.MAX_MEMBER_BYTES
+    assert 1000 * 1500 * 10 < readers.MAX_PAGE_PIXELS
