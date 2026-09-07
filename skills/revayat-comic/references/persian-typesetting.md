@@ -30,12 +30,19 @@ Pillow, built against libraqm, does both properly through HarfBuzz and FriBidi.
 The text stays logical all the way to the draw call, and Pillow is told
 `direction="rtl", language="fa"`.
 
-**It is only available in Pillow's Linux x64 wheels.** The Windows and macOS
-wheels do not carry a working RAQM, because libraqm loads libfribidi at runtime
-and neither platform ships one. This is not a mistake you made and there is no
-`pip install` that fixes it; building Pillow from source against libraqm does.
+**RAQM is not a Linux-only feature, whatever this project used to say.**
+Pillow's wheels carry libraqm on every platform; libraqm loads **FriBiDi** at run
+time, and Linux images normally have one while Windows and macOS normally do not.
+Put a FriBiDi DLL on `PATH` — `fribidi.dll`, `fribidi-0.dll` or
+`libfribidi-0.dll` — and `features.check("raqm")` turns true on Windows.
+Measured: one already on this machine beside another tool flipped it on, and the
+RAQM test that had never run here passed. Beside `python.exe` is **not** enough;
+it has to be a directory in the DLL search order.
 
-### The reshaper fallback — the normal path on Windows and macOS
+There is no `pip install` that supplies FriBiDi; it is a system library. On
+Windows it ships with several common tools, and any one of their DLLs will do.
+
+### The reshaper fallback — what runs without FriBiDi
 
 `arabic-reshaper` picks the right form for every letter, and `python-bidi`
 reorders the result for display. The page is correct to read. Two things differ:

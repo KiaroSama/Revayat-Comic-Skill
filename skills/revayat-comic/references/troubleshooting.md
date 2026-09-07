@@ -23,10 +23,14 @@ pip install arabic-reshaper python-bidi
 
 ## `"raqm": false` — is this broken?
 
-No. Pillow's wheels carry a working RAQM only on Linux x64, because libraqm
-loads libfribidi at runtime and Windows and macOS do not ship one. The fallback
-runs, the pages are correct to read, and `doctor` says so. See
-`persian-typesetting.md` for what differs.
+No — and it is fixable, which this page used to deny. Pillow carries libraqm on
+every platform; what is missing is **FriBiDi**, which libraqm loads at run time.
+Put `fribidi.dll`, `fribidi-0.dll` or `libfribidi-0.dll` on `PATH` and `doctor`
+reports `"raqm": true` on the next run. It must be a directory in the DLL search
+order — beside `python.exe` does not work.
+
+Without it the fallback runs, the pages are correct to read, and `doctor` says
+so. See `persian-typesetting.md` for what differs between the two paths.
 
 ## Import
 
@@ -38,6 +42,7 @@ runs, the pages are correct to read, and `doctor` says so. See
 | pages in the wrong order | rare; the archive uses a naming scheme nothing can sort | extract to a folder, rename `0001.png`… and import the folder |
 | `webtoon_strips` is not empty | this is a webtoon | `--direction ltr` |
 | PDF import is slow | pages are being rendered, not extracted | expected when a page is not one embedded image |
+| an error naming a page count, a GB total, an MB entry or megapixels | the import guards — 2000 pages, 2 GB, 512 MB an entry, 80 MP a page | split a series into volumes, or lower `--dpi` for a PDF whose page rectangle is huge |
 
 ## Detection
 

@@ -117,11 +117,17 @@ Every tracked text file must be UTF-8; CI enforces that too.
 
 ## Two things that are true and surprising
 
-**Pillow's wheels only carry a working RAQM on Linux x64.** libraqm loads
-libfribidi at runtime and Windows and macOS do not ship one, so
-`features.check("raqm")` is `False` there and the `arabic-reshaper` +
-`python-bidi` fallback is the normal path, not an edge case. Do not treat it as
-a broken install.
+**RAQM is not a Linux-only feature, whatever this project used to say.**
+Pillow's wheels carry libraqm on every platform; libraqm loads **FriBiDi** at run
+time, and Linux images normally have one while Windows and macOS normally do not.
+Put a FriBiDi DLL on `PATH` — `fribidi.dll`, `fribidi-0.dll` or
+`libfribidi-0.dll` — and `features.check("raqm")` turns true on Windows.
+Measured: one already on this machine beside another tool flipped it on, and the
+RAQM test that had never run here passed. Beside `python.exe` is **not** enough;
+it has to be a directory in the DLL search order.
+
+Without one the `arabic-reshaper` + `python-bidi` fallback runs, the pages are
+correct to read, and that is a note rather than a broken install.
 
 **`arabic-reshaper` deletes harakat by default**, and U+0654 is not decoration
 in Persian: it carries the ezafe, so `خانهٔ ما` silently becomes `خانه ما`. The

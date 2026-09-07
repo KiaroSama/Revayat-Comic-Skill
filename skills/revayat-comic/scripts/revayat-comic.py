@@ -108,9 +108,7 @@ def doctor() -> dict[str, object]:
             persian["shaping_note"] = (
                 "Pillow has no RAQM here, so Persian is shaped by "
                 "arabic-reshaper and reordered by python-bidi. Pages come out "
-                "correct to read. This is expected on Windows and macOS: "
-                "Pillow's wheels carry a working RAQM only on Linux x64, "
-                "because it needs libfribidi at runtime."
+                "correct to read. Pillow's wheels DO carry libraqm on Windows and macOS as well as Linux; what is missing here is FriBiDi, which libraqm loads at run time. On Windows, put a `fribidi.dll` (or `fribidi-0.dll` / `libfribidi-0.dll`) on PATH and RAQM turns on — beside python.exe is not enough, it has to be a directory in the DLL search order. Measured: with one on PATH this machine reports raqm true."
             )
             persian["fallback_installed"] = have_fallback
             if not have_fallback:
