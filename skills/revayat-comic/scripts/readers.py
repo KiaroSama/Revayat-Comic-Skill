@@ -16,6 +16,7 @@ import argparse
 import re
 import shutil
 import sys
+import warnings
 import zipfile
 from pathlib import Path
 from typing import Any, Iterable
@@ -75,8 +76,28 @@ def _image_members(names: Iterable[str]) -> list[str]:
 #: Most members an archive may declare.
 MAX_MEMBERS = 20_000
 
-#: Most bytes an archive may expand to in total.
-MAX_TOTAL_BYTES = 8 * 1024 ** 3
+#: Most pages one run may import, whatever the container. A chapter is tens of
+#: pages and a fat volume a few hundred; 2000 is a whole series in one file, and
+#: every page past this one costs a model call in a later stage.
+MAX_PAGES = 2_000
+
+#: Most bytes an archive may expand to in total. A 400-page volume at 4 MB a
+#: page is 1.6 GB, which is the largest genuine import there is; 2 GB clears it
+#: and is still inside what a desktop process should ever be asked to write.
+MAX_TOTAL_BYTES = 2 * 1024 ** 3
+
+#: Most bytes a single member may expand to. A 300-DPI page scan is single-digit
+#: megabytes, and even an uncompressed 600-DPI double spread is about 200 MB, so
+#: half a gigabyte is already a hundred pages in one entry. Without this a 6 GB
+#: member passed: the running total only fails once it crosses the ceiling, and
+#: the first entry never does.
+MAX_MEMBER_BYTES = 512 * 1024 ** 2
+
+#: Most pixels one page may decode or render to. A 600-DPI A4 double-page spread
+#: is 9920 x 7016 — about 70 megapixels, and the largest scan anyone has. At 80
+#: the guard clears that and still refuses the 66-byte PNG whose header declares
+#: 60000 x 60000 and costs 10 GB to decode.
+MAX_PAGE_PIXELS = 80_000_000
 
 #: How far one member may expand relative to its stored size. Real image formats
 #: are already compressed, so a large ratio means the payload is not a page.
@@ -103,18 +124,64 @@ def check_archive_limits(name: str, members) -> None:
                 f"{name} declares more than {MAX_MEMBERS} entries. A comic "
                 "chapter has hundreds; this is not one."
             )
-        total += max(0, int(uncompressed or 0))
+        size = max(0, int(uncompressed or 0))
+        if size > MAX_MEMBER_BYTES:
+            raise ValueError(
+                f"{name} holds a {size // 1024 ** 2} MB entry ({member}). A page "
+                "scan is single-digit megabytes; nothing in a comic is that big."
+            )
+        total += size
         if total > MAX_TOTAL_BYTES:
             raise ValueError(
                 f"{name} expands to more than {MAX_TOTAL_BYTES // 1024 ** 3} GB. "
                 "Extract it yourself and import the folder if it is genuine."
             )
         stored = int(compressed or 0)
-        if stored >= RATIO_FLOOR and uncompressed > stored * MAX_RATIO:
+        if stored >= RATIO_FLOOR and size > stored * MAX_RATIO:
             raise ValueError(
-                f"{name} contains an entry that expands {uncompressed // max(1, stored)}x "
+                f"{name} contains an entry that expands {size // max(1, stored)}x "
                 f"({member}). Page images are already compressed; this is not one."
             )
+
+
+def _check_page_count(name: str, pages: int) -> None:
+    """Refuse an import longer than a volume, whatever container it came in.
+
+    The archive limits bound what a *download* costs; this bounds what the rest
+    of the pipeline is handed, and it is the only one of them a folder of loose
+    scans or a PDF passes through at all.
+    """
+    if pages > MAX_PAGES:
+        raise ValueError(
+            f"{name} holds {pages} pages. A chapter is tens of pages and a "
+            f"volume a few hundred; split it and import one at a time."
+        )
+
+
+def _load_page(path: Path):
+    """Open a page image, refusing one that decodes to an absurd bitmap.
+
+    Sixty-six bytes of PNG header can declare 60000 x 60000 pixels, and Pillow
+    will allocate ten gigabytes trying to decode it — nothing upstream can see
+    that coming, because the *file* is tiny. Pillow's own guard raises above
+    twice ``MAX_IMAGE_PIXELS`` and only warns between the two, and neither
+    reaches the user as anything but a traceback or a stray line on stderr, so
+    both become one ValueError that names the file.
+    """
+    ir.require("PIL", "pillow", "reading comic pages")
+    from PIL import Image
+
+    Image.MAX_IMAGE_PIXELS = MAX_PAGE_PIXELS
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            return ir.load_image(path)
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning) as error:
+        raise ValueError(
+            f"{path.name} decodes to more than {MAX_PAGE_PIXELS // 1_000_000} "
+            f"megapixels ({error}). A comic page is a scan, not a bitmap that "
+            f"size."
+        ) from error
 
 
 # --------------------------------------------------------------------------- #
@@ -134,6 +201,7 @@ def _from_zip(path: Path, pages_dir: Path) -> list[Path]:
                 f"{path.name} contains no images. A CBZ is a ZIP of page "
                 f"images; this one holds {len(archive.namelist())} other entries."
             )
+        _check_page_count(path.name, len(members))
         for index, member in enumerate(members):
             suffix = Path(member).suffix.lower()
             target = pages_dir / f"{ir.page_id_for(index)}{suffix}"
@@ -183,6 +251,7 @@ def _from_rar(path: Path, pages_dir: Path) -> list[Path]:
             members = _image_members(archive.namelist())
             if not members:
                 raise ValueError(f"{path.name} contains no images.")
+            _check_page_count(path.name, len(members))
             for index, member in enumerate(members):
                 suffix = Path(member).suffix.lower()
                 target = pages_dir / f"{ir.page_id_for(index)}{suffix}"
@@ -203,6 +272,7 @@ def _from_pdf(path: Path, pages_dir: Path, dpi: int) -> list[Path]:
     pymupdf = ir.require("pymupdf", "pymupdf", "reading comic PDFs")
     written: list[Path] = []
     with pymupdf.open(str(path)) as document:
+        _check_page_count(path.name, document.page_count)
         for index, page in enumerate(document):
             target = pages_dir / f"{ir.page_id_for(index)}.png"
             payload = _single_embedded_image(document, page)
@@ -212,6 +282,18 @@ def _from_pdf(path: Path, pages_dir: Path, dpi: int) -> list[Path]:
                 # was already at its native resolution and softens screentone.
                 ir.write_bytes(target, payload)
             else:
+                # A page rectangle is declared, not measured: 200 inches square
+                # is a legal PDF and renders to 3.6 gigapixels at 300 DPI, an
+                # allocation the process does not come back from. Checked here
+                # rather than up front because a page that is one embedded scan
+                # is never rendered at all.
+                area = (page.rect.width * dpi / 72) * (page.rect.height * dpi / 72)
+                if area > MAX_PAGE_PIXELS:
+                    raise ValueError(
+                        f"{path.name} page {index + 1} would render to "
+                        f"{int(area) // 1_000_000} megapixels at {dpi} DPI. "
+                        f"Re-export it at a real page size, or lower --dpi."
+                    )
                 pixmap = page.get_pixmap(dpi=dpi)
                 ir.write_bytes(target, pixmap.tobytes("png"))
             written.append(target)
@@ -255,6 +337,7 @@ def _from_directory(path: Path, pages_dir: Path) -> list[Path]:
     )
     if not candidates:
         raise ValueError(f"No page images in {path}")
+    _check_page_count(path.name, len(candidates))
     written: list[Path] = []
     for index, source in enumerate(candidates):
         target = pages_dir / f"{ir.page_id_for(index)}{source.suffix.lower()}"
@@ -341,7 +424,7 @@ def import_source(
 
     sizes: list[tuple[int, int]] = []
     for index, file in enumerate(files):
-        image = ir.load_image(file)
+        image = _load_page(file)
         width, height = image.size
         sizes.append((width, height))
         doc["pages"].append(
