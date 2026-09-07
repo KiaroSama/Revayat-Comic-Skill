@@ -134,6 +134,7 @@ You do not edit boxes by hand. The worksheet is where corrections go, because
 that is where the reader is already looking at the crop:
 
 - `drop: yes` — there is no text here
+- `keep: yes` — there *is* text, and it stays in the artwork
 - `kind:` — it is a sign, not speech
 - `speaker:` — who is talking
 - `@@ +<name>` with `box: x y w h` — **there is text here and no region on it**

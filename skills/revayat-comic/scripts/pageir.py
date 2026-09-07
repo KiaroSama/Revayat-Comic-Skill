@@ -281,6 +281,12 @@ def translatable(region: dict[str, Any], sfx_policy: str = "keep") -> bool:
     An SFX under the ``keep`` policy is deliberately left in the artwork, so it
     is not a hole in the translation and QA must not report one.
     """
+    if region.get("keep"):
+        # The reader looked at it and said: this is real lettering, leave it in
+        # the artwork. Distinct from `dropped`, which says there is no text here
+        # — using `drop` for this made the census classify real text as a false
+        # detection, which is the one thing the census exists to rule out.
+        return False
     if region["kind"] == "sfx":
         return sfx_policy in {"translate", "bilingual", "annotate"}
     return True
