@@ -162,10 +162,19 @@ only its masked pixels are ever used.
 
 ## What it is honest about
 
-- **No real comic has been through it yet.** Every fixture is generated from
-  rectangles and ellipses, so detection thresholds are plausible rather than
-  tuned. Expect to move the knobs in `references/detection.md` on a real scan —
-  they are all command-line flags for exactly that reason.
+- **Two real volumes have been through it; that is not a corpus.** Chapters of
+  *Sekirei* and *Gleipnir* were translated, cleaned, typeset and exported, and
+  each one found defects the generated fixtures could not. Two books is enough to
+  show the pipeline holds and nowhere near enough to have met every drawing
+  style: the second book's borderless balloons and white-on-black lettering were
+  both invisible until it arrived. Expect to move the knobs in
+  `references/detection.md` on a new scan — they are all command-line flags for
+  exactly that reason.
+- **Free lettering is the weak detector, and merged balloons are the weak
+  region.** Two speech balloons drawn touching come back as one; five automatic
+  ways of splitting them were measured and none is good enough to ship. You fix
+  it from the crop with `drop: yes` and two `@@ +name` blocks, which takes a few
+  seconds and is documented.
 - **Sound effects drawn into the artwork stay drawn** under the default policy.
   Redrawing hand-lettering — matching slant, stroke weight, outline and
   perspective — is a lettering job, and a half-hearted version looks worse than

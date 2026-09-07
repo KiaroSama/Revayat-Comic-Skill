@@ -81,12 +81,13 @@ def _ink_width(shaper, text: str, *, shape: bool = True) -> tuple[int, int]:
 @pytest.mark.skipif(not typeset.raqm_available(),
                     reason="no RAQM in this Pillow; the fallback is the only path here")
 def test_raqm_shapes_persian_and_agrees_with_the_fallback():
-    """The half of the shaping code that Windows and macOS can never run.
+    """The half of the shaping code that used to be believed unreachable here.
 
-    Pillow carries RAQM only in its Linux x64 wheel, so this is the one place
-    the good path exists at all — and until now nothing checked that it *worked*,
-    only that it was switched on. Two things are asserted, and the first is the
-    one that matters:
+    Pillow carries libraqm everywhere and loads FriBiDi at run time, so this runs
+    wherever a FriBiDi library is on the loader's path — Linux CI always, Windows
+    once a `fribidi` DLL is on PATH. Until it first ran, nothing checked that
+    RAQM *worked*, only that it was switched on. Two things are asserted, and the
+    first is the one that matters:
 
     1. **RAQM actually joins the letters.** Persian drawn without shaping comes
        out as isolated forms, which are markedly wider than the joined ones. If
