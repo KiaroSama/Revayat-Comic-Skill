@@ -143,7 +143,8 @@ def clean_page(
         if region.get("dropped") or not region.get("mask"):
             counts["skipped"] += 1
             continue
-        if region["kind"] == "sfx" and policy in {"keep", "annotate"}:
+        if region.get("keep") or (
+                region["kind"] == "sfx" and policy in {"keep", "annotate"}):
             # The artwork *is* the sound effect. Erasing it to write the same
             # thing in Persian is a loss, so these two policies leave it drawn.
             region["fill"] = "keep"

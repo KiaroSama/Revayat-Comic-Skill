@@ -65,7 +65,7 @@ present. Read them now, not after building a chapter:
 | Field | Meaning | Action |
 | --- | --- | --- |
 | `"raqm": true` | Pillow shapes and reorders Persian itself, through HarfBuzz and FriBidi | nothing; this is the good path |
-| `"raqm": false` | Persian will be pre-shaped by hand into presentation forms | works, but tell the user; a Pillow wheel with RAQM is better |
+| `"raqm": false` | Persian will be pre-shaped by hand into presentation forms | works, and it is fixable: libraqm is in every Pillow wheel and needs a **FriBiDi** library at run time. Put `fribidi.dll` / `fribidi-0.dll` / `libfribidi-0.dll` on PATH (Windows) or install `libfribidi` (Linux/macOS) |
 | `"font"` is a path | a Persian-capable font was found | nothing |
 | `"font": null` | there is no font on this machine that can draw Persian | install Vazirmatn, then pass `--font` at step 9 |
 | `"font_draws_persian": false` | the font was found but renders tofu | pick another; `--font` at step 9 |
@@ -165,6 +165,10 @@ it does not, do them one at a time — the result is the same, only slower.
 > - Never summarise, never skip a balloon, never merge two.
 > - If a crop shows the detector was wrong, correct it:
 >   - `drop: yes` when there is no text there at all
+>   - `keep: yes` when there **is** text and it should stay in the artwork — a
+>     background shop sign, a logo, an effect you do not want replaced. Do not
+>     reach for `drop` here: it means "no text", and using it makes the terminal
+>     census count real lettering as a false detection.
 >   - `kind: sfx` / `sign` / `narration` / `thought` when it is misclassified
 >   - `speaker: <short stable name>` — the same name every time, on every page
 > - **Check every crop for two balloons in one box.** This is the commonest way

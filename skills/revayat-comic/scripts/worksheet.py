@@ -38,14 +38,15 @@ import pageir as ir
 
 HEADER = re.compile(r"^@@\s+(?P<id>\+?[A-Za-z0-9_#-]+)(?:\s+(?P<rest>.*))?$")
 FIELD = re.compile(
-    r"^(?P<name>src|fa|kind|speaker|note|drop|box|polarity)\s*:\s?(?P<value>.*)$")
+    r"^(?P<name>src|fa|kind|speaker|note|drop|keep|box|polarity)\s*:\s?(?P<value>.*)$")
 
 #: `box: x y w h`, in the page's own pixels — the same pixels `overview.png`
 #: is drawn at, so a reader can take the numbers straight off it.
 BOX = re.compile(r"^\s*(\d+)[ ,]+(\d+)[ ,]+(\d+)[ ,]+(\d+)\s*$")
 FINGERPRINT = re.compile(r"^#\s*fingerprint:\s*(?P<value>[0-9a-f]{64})\s*$", re.M)
 
-FIELDS = ("src", "fa", "kind", "speaker", "note", "drop", "box", "polarity")
+FIELDS = ("src", "fa", "kind", "speaker", "note", "drop", "keep", "box",
+          "polarity")
 
 _DIRECTION_WORDS = {
     "rtl": "right to left (Japanese order: the rightmost balloon is first)",
@@ -111,6 +112,7 @@ def page_worksheet(doc: dict[str, Any], page: dict[str, Any], fingerprint: str) 
         "#   kind:    speech | thought | narration | sfx | sign | unknown",
         "#   speaker: a short stable name, the same one every time",
         "#   drop:    yes   — there is no text here at all",
+        "#   keep:    yes   — there IS text, leave it in the artwork",
         "#",
         "# Something the detector missed entirely? Add it. Free lettering is",
         "# the weak case, adjacent balloons sometimes come back as one region,",
@@ -255,6 +257,21 @@ def _apply(region: dict[str, Any], block: dict[str, str],
         report["dropped"].append(region["id"])
         return True
 
+    if block.get("keep", "").strip().lower() in {"yes", "true", "1"}:
+        # Real lettering the reader wants left in the artwork — a shop sign, a
+        # logo, an effect the policy would otherwise translate. `drop` would
+        # have said "there is no text here", which is a different claim and
+        # made `stats.states` count real text as a false detection.
+        region["keep"] = True
+        region["dropped"] = False
+        region["source_text"] = block.get("src", "").strip()
+        region["target_text"] = ""
+        region["fill"] = "none"
+        region["typeset"] = {}
+        report["kept"].append(region["id"])
+        return True
+    region.pop("keep", None)
+
     source = block.get("src", "").strip()
     target = block.get("fa", "").strip()
     kind = block.get("kind", "").strip().lower()
@@ -376,6 +393,7 @@ def merge_document(
     report: dict[str, Any] = {
         "merged": 0,
         "dropped": [],
+        "kept": [],
         "reclassified": [],
         "bad_kind": [],
         "missing_outputs": [],

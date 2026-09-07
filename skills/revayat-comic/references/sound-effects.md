@@ -144,10 +144,23 @@ blanks a rectangle out of the drawing. Full reasoning in
 
 ## Leaving one effect as drawn under `translate`
 
-There is no per-region `keep`: the policy is document-wide. To translate the
-chapter's effects but leave a particular piece of lettering in the artwork —
-a background shop sign, a logo — `drop: yes` it. The wording of `drop` says "no
-text here", which is not quite what you mean, and it is the only lever there is.
+The policy is document-wide; `keep: yes` is the per-region exception to it.
+
+```
+@@ p0004r012 sign vertical
+src: 出雲荘
+keep: yes
+note: a background shop sign — artwork, not dialogue
+```
+
+The region ends as `kept_by_policy`, `clean` and `typeset` leave it alone, and
+QA does not report it as untranslated.
+
+**Do not use `drop: yes` for this.** `drop` means *there is no text here*, and
+using it for real lettering makes `stats.states` count that lettering as
+`dropped_false_detection` — which is the exact thing the census exists to rule
+out. This project made that mistake on its first real chapter, on a Japanese
+billboard, because `keep` did not exist yet.
 
 ## What is not implemented
 

@@ -134,9 +134,13 @@ def shape_fallback(text: str) -> str:
     shaping would break in the wrong place. Line breaking therefore happens on
     the logical text, before this is ever called.
 
-    Not a rare path. Pillow's wheels only carry a working RAQM on Linux x64, so
-    on Windows and macOS this is what runs unless the user built Pillow
-    themselves.
+    Not a rare path, and not the platform limit it was long documented as.
+    Pillow's wheels carry libraqm everywhere; libraqm loads **FriBiDi** at run
+    time, and Linux images normally have one while Windows and macOS normally do
+    not. Put a `fribidi` DLL on PATH — `fribidi.dll`, `fribidi-0.dll` or
+    `libfribidi-0.dll` — and `features.check("raqm")` turns true on Windows.
+    Measured on this project's own machine, where the claim had been repeated in
+    five files.
     """
     ir.require("bidi", "python-bidi", "Persian direction without RAQM")
     from bidi.algorithm import get_display
@@ -516,7 +520,8 @@ def typeset_page(
         if region.get("dropped") or not text:
             skipped += 1
             continue
-        if region["kind"] == "sfx" and policy == "keep":
+        if region.get("keep") or (
+                region["kind"] == "sfx" and policy == "keep"):
             skipped += 1
             continue
 
@@ -631,10 +636,8 @@ def typeset_document(
         "warning": None if shaper.raqm else (
             "Pillow has no RAQM here, so Persian was shaped and reordered by "
             "arabic-reshaper and python-bidi instead of HarfBuzz and FriBidi. "
-            "The pages are correct to read. This is the normal path on Windows "
-            "and macOS — Pillow's wheels carry a working RAQM only on Linux "
-            "x64 — so it is a note, not a fault. See "
-            "references/persian-typesetting.md for what differs."
+            "The pages are correct to read, so this is a note, not a fault. "
+            "Pillow's wheels DO carry libraqm on Windows and macOS as well as Linux; what is missing here is FriBiDi, which libraqm loads at run time. On Windows, put a `fribidi.dll` (or `fribidi-0.dll` / `libfribidi-0.dll`) on PATH and RAQM turns on — beside python.exe is not enough, it has to be a directory in the DLL search order. Measured: with one on PATH this machine reports raqm true. See references/persian-typesetting.md for what differs."
         ),
         "next": (
             f"{len(overflow)} region(s) did not fit at the minimum size. Shorten "
