@@ -47,10 +47,23 @@ jobs:
           sudo apt-get install -y --no-install-recommends fonts-noto-core
           fc-list :lang=fa family | head -5
 
+      # No runner can *write* a RAR — the format is proprietary and there is no
+      # free writer — so `tests/data/real-rar.b64` carries a genuine one and this
+      # supplies something that can read it. Without a backend the CBR test skips
+      # and the reader goes untested on every machine but a developer's.
+      - name: Install a RAR reader
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y --no-install-recommends unar libarchive-tools
+          unar -v | head -1 || true
+          bsdtar --version | head -1 || true
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r skills/revayat-comic/requirements.txt
+          # Optional for users, required here: it is what the CBR reader tests need.
+          python -m pip install rarfile
 
       - name: Run tests
         env:
