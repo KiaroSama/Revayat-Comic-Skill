@@ -58,7 +58,8 @@ function Get-AgentRoot {
         'cursor'      { '.cursor' }
         'cline'       { '.cline' }
         'hermes'      { '.hermes' }
-        'opencode'    { '.opencode' }
+        'opencode'    { if ($Scope -eq 'user') { '.config/opencode' }
+                        else { '.opencode' } }
         'antigravity' { '.agents' }
     }
     $base = if ($InstallScope -eq 'user') { $HOME } else { $ProjectPath }

@@ -158,60 +158,101 @@ def test_a_missing_rarfile_names_the_package(tmp_path, monkeypatch):
         readers.import_source(path, tmp_path / "work")
 
 
-def _rar_writer():
-    """A binary that can *create* a RAR, or None. There is no free one."""
-    import shutil
+#: A real RAR, carried as base64 text. See the file's own header for why.
+REAL_RAR = Path(__file__).with_name("data") / "real-rar.b64"
 
-    found = shutil.which("rar") or shutil.which("Rar")
-    if found:
-        return found
-    for candidate in (r"C:\Program Files\WinRAR\Rar.exe",
-                      r"C:\Program Files (x86)\WinRAR\Rar.exe",
-                      r"G:\Program Files\WinRAR\Rar.exe"):
-        if Path(candidate).is_file():
-            return candidate
-    return None
+
+def _real_rar_bytes() -> bytes:
+    import base64
+
+    body = "".join(line.strip() for line in REAL_RAR.read_text("utf-8").splitlines()
+                   if line.strip() and not line.startswith("#"))
+    return base64.b64decode(body)
 
 
 def test_a_real_rar_round_trips(tmp_path):
     """The one this project could not run for its first three weeks.
 
-    RAR compression is proprietary and no free writer exists, so a fabricated
-    archive tests the fabrication — the suite covered routing and both failure
-    paths and said plainly that a real RAR was untested. It stayed untested
-    until a machine with WinRAR turned up, and the first real `.cbr` found a
-    defect immediately: a RAR5 archive *opens* without an unrar backend and only
-    fails when a member is **read**, so guarding the constructor alone let the
-    failure out as a raw traceback from inside rarfile.
+    RAR compression is proprietary and there is no free writer, so no CI runner
+    can build an archive and a fabricated one would test the fabrication. The
+    fixture is therefore a **genuine** RAR — written once by `Rar.exe`, stored as
+    base64 text so nothing binary is committed — and this only needs a *reader*,
+    which CI installs.
 
-    Skips where either half of the toolchain is missing, which is most machines
-    and every CI runner.
+    Reading a real one immediately found a defect that three weeks of routing
+    tests had not: a RAR5 archive **opens** without an unrar backend and only
+    fails when a member is read, so guarding the constructor alone let the
+    failure out as a raw traceback from inside rarfile.
     """
-    rar = _rar_writer()
-    if rar is None:
-        pytest.skip("no RAR writer on this machine; there is no free one")
     rarfile = pytest.importorskip("rarfile")
     try:
         rarfile.tool_setup()
     except rarfile.RarCannotExec:
-        pytest.skip("rarfile has no unrar backend it can run")
-
-    import subprocess
-    from tests_support import manga_page, page_bytes
-
-    source = tmp_path / "pages"
-    source.mkdir()
-    for index in (1, 2, 3):
-        (source / f"{index:03d}.png").write_bytes(page_bytes(manga_page(balloons=1)))
+        pytest.skip("no unrar/unar/bsdtar backend on this machine")
 
     archive = tmp_path / "chapter.cbr"
-    result = subprocess.run(
-        [rar, "a", "-ep1", "-idq", str(archive), str(source / "*.png")],
-        capture_output=True, timeout=120,
-    )
-    assert archive.is_file(), result.stderr.decode(errors="replace")
-    assert archive.read_bytes()[:4] == b"Rar!", "the tool did not write a RAR"
+    archive.write_bytes(_real_rar_bytes())
+    assert archive.read_bytes()[:4] == b"Rar!", "the fixture is not a RAR"
 
     doc = readers.import_source(archive, tmp_path / "work")
     assert doc["kind"] == "cbr"
+    assert doc["pages"] == 2
+
+    pages = sorted((tmp_path / "work" / "pages").iterdir())
+    assert [p.name for p in pages] == ["p0001.png", "p0002.png"]
+    assert all(p.stat().st_size > 0 for p in pages)
+
+
+def test_the_real_rar_fixture_is_text_and_decodes(tmp_path):
+    """It is committed as text on purpose; a binary would fail the repository's
+    own artwork and UTF-8 gates. If it ever stops decoding, the file was edited
+    by something that reflowed it."""
+    REAL_RAR.read_text("utf-8")            # must be valid UTF-8
+    signature = _real_rar_bytes()[:8]
+    assert signature.startswith(b"Rar!")
+    assert signature[4] == 0x1A and signature[5] == 0x07   # RAR5 marker
+
+
+# --- Untrusted archives -----------------------------------------------------
+
+def test_a_zip_bomb_is_refused_before_anything_is_written(tmp_path):
+    """A CBZ is a file someone downloaded. A few kilobytes of zeros expand to
+    gigabytes, and nothing bounded that: the reader never extracts an
+    attacker-controlled *path*, but it would happily write the payload."""
+    path = tmp_path / "chapter.cbz"
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("001.png", b"\0" * (64 * 1024 * 1024))
+
+    with pytest.raises(ValueError, match="expands"):
+        readers.import_source(path, tmp_path / "work")
+    # The working folder gets created before the reader runs; what must not
+    # happen is 64 MB of it landing on disk.
+    pages = tmp_path / "work" / "pages"
+    assert not pages.exists() or not any(pages.iterdir())
+
+
+def test_an_archive_with_absurdly_many_entries_is_refused(tmp_path):
+    counted = ((f"{i}.png", 10, 10) for i in range(readers.MAX_MEMBERS + 5))
+    with pytest.raises(ValueError, match="entries"):
+        readers.check_archive_limits("chapter.cbz", counted)
+
+
+def test_an_archive_that_expands_past_the_ceiling_is_refused():
+    huge = (("p.png", readers.MAX_TOTAL_BYTES // 4, readers.MAX_TOTAL_BYTES // 4)
+            for _ in range(5))
+    with pytest.raises(ValueError, match="GB"):
+        readers.check_archive_limits("chapter.cbz", huge)
+
+
+def test_a_real_chapter_passes_the_limits(tmp_path):
+    """The guard must not fire on anything real. Page images are already
+    compressed, so their ratio is near 1."""
+    write_cbz = pytest.importorskip("tests_support").write_cbz
+    path = write_cbz(tmp_path / "chapter.cbz", pages=3)
+    doc = readers.import_source(path, tmp_path / "work")
     assert doc["pages"] == 3
+
+
+def test_a_tiny_member_is_not_judged_by_ratio():
+    """A 40-byte entry expanding to 4 KB is a header, not an attack."""
+    readers.check_archive_limits("chapter.cbz", [("meta.png", 4096, 40)])

@@ -58,6 +58,10 @@ if [ "$SCOPE" = "project" ]; then
 fi
 
 # Where each agent keeps its config. The skill lands in <folder>/skills/<name>.
+# `$2` is the scope, because one agent does not use the same folder for both:
+# OpenCode reads a project's `.opencode/skills` but the user's lives under
+# `~/.config/opencode/skills`, per its own documentation. Installing to
+# `~/.opencode/skills` put the skill somewhere OpenCode never looks.
 agent_folder() {
     case "$1" in
         claude)      printf '.claude' ;;
@@ -66,7 +70,8 @@ agent_folder() {
         cursor)      printf '.cursor' ;;
         cline)       printf '.cline' ;;
         hermes)      printf '.hermes' ;;
-        opencode)    printf '.opencode' ;;
+        opencode)    if [ "$2" = user ]; then printf '.config/opencode'
+                     else printf '.opencode'; fi ;;
         antigravity) printf '.agents' ;;
     esac
 }
@@ -121,7 +126,7 @@ installed=""
 skipped=""
 
 for name in $TARGETS; do
-    folder="$(agent_folder "$name")"
+    folder="$(agent_folder "$name" "$SCOPE")"
     base="$HOME"
     [ "$SCOPE" = "project" ] && base="$PROJECT_PATH"
     root="$base/$folder/skills"

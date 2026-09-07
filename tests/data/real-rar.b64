@@ -1,0 +1,25 @@
+# A real RAR archive of two generated fixture pages, base64-encoded.
+#
+# RAR compression is proprietary and there is no free writer, so no CI
+# runner can build one — which left the reader untested everywhere but a
+# developer machine with WinRAR. These are the genuine bytes of an archive
+# written once by `Rar.exe`, carried as text so the repository stays free of
+# committed binaries. The pages inside are this project's own fixtures.
+#
+UmFyIRoHAQDz4YLrCwEFBwAGAQGAgIAAo/u43iICAwuLAwSLAyDpY9ERgAAABjAxLnBuZwoDAmzY
+A9FePt0BiVBORw0KGgoAAAANSUhEUgAAAEAAAABaCAAAAAAtTw//AAABUklEQVR4nO2XMU7EMBBF
+/wxIQJU0iIPQQsEBkPYIHILrUNEg0XOcbWlTgoQ0KCKgJPY447ELFPk3u8r4P0++nNghQZm40I8G
+wD/I4DRRo79/icVCsmXegJDobtEvJAEUH6tdlshA7ZZjJZJwHj2ySJXEOr0ygPP8Y5l0AG36QwJn
++gMCr4smQhxANv9IoOSzQNbJVx2QtYFlC4xCsaOBRQtcrQOv2O1sgDBESS3htWaLhu0uhSUxrL0B
+1FwHYk1h0SqvSia/0gGCN67mn2fFyCSs37yMPELw5qbKWxuKN1eUb+8oPmBUOOLUOGSZxfahDaCJ
+UShuALQM0DJAy2CXGQwPXRng/jrjuDpJftQ93twe5V06yRSm3/MXeT6MIC/g4lM+rjwA/s3iBDjL
+vv9ZiF9veL3zAGg6YPSHY/90CfSDFzB4pq/8wbGPh8kh9ph2BvgGaLsBG0+dPU0AAAAASUVORK5C
+YIKJvJPdIgIDC7ADBLADIHaS9ZWAAAAGMDIucG5nCgMCvCoE0V4+3QGJUE5HDQoaCgAAAA1JSERS
+AAAAQAAAAFoIAAAAAC1PD/8AAAF3SURBVHic7ZaxSgNBEIZnhhSKFtdZaS3YCApWCr5B3kAQ7LTy
+eRTFRrANFj5B3sBGfICAINgkEPklcMrd7c7d7O4VcuzfJNzs/+2fyd7uMihNkuinDKB/0INRS43/
+vrUsFkaXuQPC0N3QH7QC2D9WewzPQO0n+0oMdx69ZZ4qwzq9MkDC/Ksy6wDu9LsECfQ7BGkWTQQ/
+gG3+FYFb3wW2Tt5IwNYA9QhCiZKIALUI0luCWEm0MwPcJqJtCTdVWTRidyks+LD2ANTnOoC1C7Wo
+0iiZ/EoCcnZczV/tlVAgobnzCoURnJ2bez7aKPlwpfTjnZIvGD1ccfq4ZJkl9qEZoEkoUZIBlHtA
+uQeUezDIHtwe77+EElDR7OT7dRdhGpWc4mLK94tL2f6ITLD2iIcxgLvzwARUfq4vMN8C3vZmkYCN
+JeY7+DqYBvrx+y8sn+npFGfXR6Et4PKCUYzfi5vJ1SFtTiIBnxQnifQ5CQbzMkVIYkwDA/wAZbxH
+SM4RMhwAAAAASUVORK5CYIIdd1ZRAwUEAA==

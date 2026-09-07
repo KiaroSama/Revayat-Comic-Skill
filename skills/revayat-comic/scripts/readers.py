@@ -60,12 +60,74 @@ def _image_members(names: Iterable[str]) -> list[str]:
 
 
 # --------------------------------------------------------------------------- #
+# Limits on an untrusted archive
+# --------------------------------------------------------------------------- #
+#
+# A CBZ or CBR is a file someone downloaded, and both formats can be made
+# hostile without being malformed: a few kilobytes of zeros expand to gigabytes,
+# and a member count in the millions costs memory before a single byte is read.
+# The reader never extracts an attacker-controlled *path* — members are copied
+# into generated `pNNNN` names — but nothing bounded what they cost.
+#
+# These are far above any real comic. A 400-page volume at 4 MB a page is 1.6 GB
+# and 400 members; a page that decompresses 200x is not a scan.
+
+#: Most members an archive may declare.
+MAX_MEMBERS = 20_000
+
+#: Most bytes an archive may expand to in total.
+MAX_TOTAL_BYTES = 8 * 1024 ** 3
+
+#: How far one member may expand relative to its stored size. Real image formats
+#: are already compressed, so a large ratio means the payload is not a page.
+MAX_RATIO = 250
+
+#: Smallest stored size worth applying the ratio to. A 40-byte member expanding
+#: to 4 KB is not an attack, it is a header.
+RATIO_FLOOR = 4096
+
+
+def check_archive_limits(name: str, members) -> None:
+    """Refuse an archive that would cost more than any real comic.
+
+    `members` is an iterable of `(member name, uncompressed, compressed)`.
+    Raises ``ValueError``, which the dispatcher turns into a message rather than
+    a traceback.
+    """
+    total = 0
+    count = 0
+    for member, uncompressed, compressed in members:
+        count += 1
+        if count > MAX_MEMBERS:
+            raise ValueError(
+                f"{name} declares more than {MAX_MEMBERS} entries. A comic "
+                "chapter has hundreds; this is not one."
+            )
+        total += max(0, int(uncompressed or 0))
+        if total > MAX_TOTAL_BYTES:
+            raise ValueError(
+                f"{name} expands to more than {MAX_TOTAL_BYTES // 1024 ** 3} GB. "
+                "Extract it yourself and import the folder if it is genuine."
+            )
+        stored = int(compressed or 0)
+        if stored >= RATIO_FLOOR and uncompressed > stored * MAX_RATIO:
+            raise ValueError(
+                f"{name} contains an entry that expands {uncompressed // max(1, stored)}x "
+                f"({member}). Page images are already compressed; this is not one."
+            )
+
+
+# --------------------------------------------------------------------------- #
 # Sources
 # --------------------------------------------------------------------------- #
 
 def _from_zip(path: Path, pages_dir: Path) -> list[Path]:
     written: list[Path] = []
     with zipfile.ZipFile(path) as archive:
+        check_archive_limits(path.name, (
+            (info.filename, info.file_size, info.compress_size)
+            for info in archive.infolist()
+        ))
         members = _image_members(archive.namelist())
         if not members:
             raise ValueError(
@@ -114,6 +176,10 @@ def _from_rar(path: Path, pages_dir: Path) -> list[Path]:
     written: list[Path] = []
     try:
         with archive:
+            check_archive_limits(path.name, (
+                (info.filename, info.file_size, info.compress_size)
+                for info in archive.infolist()
+            ))
             members = _image_members(archive.namelist())
             if not members:
                 raise ValueError(f"{path.name} contains no images.")
