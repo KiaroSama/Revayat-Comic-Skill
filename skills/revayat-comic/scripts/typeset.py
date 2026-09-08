@@ -513,6 +513,27 @@ def _text_colour(region: dict[str, Any]) -> tuple[tuple[int, int, int], tuple[in
     return (18, 18, 18), None
 
 
+def _restore(canvas, region: dict[str, Any], root: Path, np) -> None:
+    """Put a region's original pixels back, bounded by its own mask.
+
+    The mirror of `clean._composite` and bounded the same way: only pixels the
+    mask authorises are written, so restoring can no more damage neighbouring
+    artwork than cleaning could. Needed because the decision to leave an effect
+    drawn can only be *finally* made once the Persian has been fitted, and by
+    then `clean` has already erased it.
+    """
+    Image, _, _ = _pil()
+    original = np.asarray(ir.load_image(root / region["_page_image"]))
+    x, y, w, h = region["mask_box"]
+    mask = mask_tools.load_mask(root / region["mask"])
+    # `np.asarray(canvas)` is a read-only view of Pillow's own buffer; crop to a
+    # real array, choose per pixel, and paste the result back.
+    patch = np.array(canvas.crop((x, y, x + w, y + h)))
+    keep = mask[..., None] > 0
+    patch = np.where(keep, original[y:y + h, x:x + w], patch).astype(patch.dtype)
+    canvas.paste(Image.fromarray(patch), (x, y))
+
+
 def typeset_page(
     doc_path: Path,
     page: dict[str, Any],
@@ -530,6 +551,9 @@ def typeset_page(
 
     source = page.get("clean") or page["image"]
     canvas = ir.load_image(root / source).copy()
+    for region in page.get("regions", []):
+        # `_restore` needs the untouched page, not the cleaned one.
+        region["_page_image"] = page["image"]
     clean_rgb = np.asarray(canvas)
     draw = ImageDraw.Draw(canvas)
     size = (page["width"], page["height"])
@@ -561,27 +585,37 @@ def typeset_page(
         # measured from the mask `clean` erased, and matched only where the
         # measurement holds up. A balloon, a straight effect, or a region with
         # no mask of its own all take the flat path below.
-        drawn = None
-        if stylise and region["kind"] == "sfx" and region.get("mask"):
+        # `clean` measured this already, before it erased anything — reuse its
+        # answer rather than measuring a second time. Two measurements of one
+        # region can disagree, and only one of them decided whether the original
+        # ink is still on the page.
+        drawn = region.get("lettering")
+        if drawn is None and stylise and region["kind"] == "sfx" \
+                and region.get("mask"):
             drawn = lettering.measure(
                 mask_tools.load_mask(root / region["mask"]), np,
                 origin=region.get("mask_box", (0, 0))[:2],
             )
+        if not stylise:
+            drawn = None
 
         if drawn is not None and drawn["verdict"] == "unreliable":
-            # The geometry could not be read, so the effect stays drawn and a
-            # person is asked to look. Stamping type that is confidently wrong
-            # about its own angle over hand lettering is worse than leaving the
-            # original — the judgement `sound-effects.md` has always made.
+            # `clean` saw this coming and did not erase it, so the lettering is
+            # still on the page and "left as drawn" is true about actual pixels.
+            # Stamping type that is confidently wrong about its own angle over
+            # hand lettering is worse than leaving the original.
             #
             # This is the code declining to replace, never overriding a reader:
             # an explicit `keep: yes` was already honoured further up the loop.
-            region["fill"] = "none"
+            # `clean` already left this drawn and recorded `keep`; do not
+            # overwrite that with "none", which claims nothing was decided.
+            region["fill"] = "keep"
             region["typeset"] = {"status": "unreliable",
                                  "style": "unreliable",
-                                 "reason": drawn["reason"]}
-            region.setdefault("review", []).append(
-                f"sound effect left as drawn: {drawn['reason']}")
+                                 "reason": drawn.get("reason", "")}
+            note = f"sound effect left as drawn: {drawn.get('reason', '')}"
+            if note not in region.get("review", []):
+                region.setdefault("review", []).append(note)
             unreliable.append(region["id"])
             skipped += 1
             continue
@@ -593,6 +627,26 @@ def typeset_page(
             if done is not None:
                 painted.append(done.pop("box"))
                 record = {"status": "ok", **done}
+            elif drawn["verdict"] in {"curved", "warped"}:
+                # A strongly stylised effect that will not fit its own shape.
+                # Setting it flat would replace an arc of hand lettering with a
+                # horizontal line of type — the "visibly worse" case
+                # `sound-effects.md` exists to avoid. `clean` already erased it,
+                # so the honest answer is to put the original ink back under its
+                # own mask and ask for a person.
+                _restore(canvas, region, root, np)
+                # The original ink is back on the page, so that is what `fill`
+                # has to say — whatever `clean` did has been undone.
+                region["fill"] = "keep"
+                region["typeset"] = {"status": "unreliable", "style": drawn["verdict"],
+                                     "reason": "the Persian does not fit the "
+                                               "shape the lettering was drawn in"}
+                region.setdefault("review", []).append(
+                    f"sound effect restored as drawn: the Persian does not fit "
+                    f"the {drawn['verdict']} shape it was lettered in")
+                unreliable.append(region["id"])
+                skipped += 1
+                continue
 
         if record is None:
             area = interior_mask(clean_rgb, region, size)
@@ -641,6 +695,9 @@ def typeset_page(
 
         region["typeset"] = record
         placed += 1
+
+    for region in page.get("regions", []):
+        region.pop("_page_image", None)
 
     relative = f"final/{page['id']}.png"
     ir.save_image(canvas, root / relative)

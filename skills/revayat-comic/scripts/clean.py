@@ -28,6 +28,7 @@ import sys
 from pathlib import Path
 from typing import Any, Sequence
 
+import lettering
 import masks as mask_tools
 import pageir as ir
 import providers
@@ -179,10 +180,12 @@ def clean_page(
     external: Path | None = None,
     provider: Any = None,
     report: list[dict[str, Any]] | None = None,
+    solid_free_mask: bool = False,
 ) -> dict[str, Any]:
     np = _numpy()
     root = ir.doc_dir(doc_path)
     report = report if report is not None else []
+    solid_free = solid_free_mask
     base = np.asarray(ir.load_image(root / page["image"])).copy()
 
     supplied = None
@@ -223,20 +226,52 @@ def clean_page(
         if w <= 0 or h <= 0 or not mask.any():
             counts["skipped"] += 1
             continue
+
+        # Can the typesetter match how this effect was drawn? The question has
+        # to be asked HERE, before anything is erased. Asked later — after the
+        # ink is gone — "leave it as drawn" is a promise about pixels that no
+        # longer exist, and the page ends up with a blank patch where the
+        # lettering was. The mask is the same evidence either way, so nothing
+        # is lost by asking early.
+        if region["kind"] == "sfx" and policy not in {"keep", "annotate"}:
+            drawn = lettering.measure(
+                mask, np, origin=region.get("mask_box", (0, 0))[:2])
+            if drawn is not None:
+                # The whole measurement, not a summary: `typeset` renders from
+                # it, and a second measurement of the same region could disagree
+                # with the one that decided whether to erase.
+                region["lettering"] = dict(drawn)
+                if drawn["verdict"] == "unreliable":
+                    region["fill"] = "keep"
+                    region.setdefault("review", []).append(
+                        f"sound effect left as drawn: {drawn['reason']}")
+                    counts["keep"] += 1
+                    continue
+
         window = base[y:y + h, x:x + w]
 
-        if supplied is not None:
+        allowed = None
+        if region.get("balloon"):
+            interior = mask_tools.balloon_interior(
+                base, region["balloon"], region.get("polarity", "light"),
+                (page["width"], page["height"]),
+                inset=mask_tools.OUTLINE_INSET,
+            )
+            allowed = interior[y:y + h, x:x + w]
+        strategy, colour = choose_strategy(window, mask, np, allowed)
+
+        # Escalation, not replacement. A flat balloon is repaired by reading its
+        # own colour and painting it back — exact, instant, and better than any
+        # model. Handing every region to a provider because one region needs one
+        # would resample artwork that was already perfect, and cost a call per
+        # page to do it. The provider takes over exactly where the deterministic
+        # tiers stop being enough: a region that needs inpainting, or a solid
+        # free-lettering patch, which is what a generative cleaner is for.
+        needs_reconstruction = strategy == "inpaint" or (
+            solid_free and not region.get("balloon"))
+        if supplied is not None and needs_reconstruction:
             repaired, strategy, colour = supplied[y:y + h, x:x + w], "external", None
         else:
-            allowed = None
-            if region.get("balloon"):
-                interior = mask_tools.balloon_interior(
-                    base, region["balloon"], region.get("polarity", "light"),
-                    (page["width"], page["height"]),
-                    inset=mask_tools.OUTLINE_INSET,
-                )
-                allowed = interior[y:y + h, x:x + w]
-            strategy, colour = choose_strategy(window, mask, np, allowed)
             repaired = _repair(window, mask, strategy, colour, np)
 
         base[y:y + h, x:x + w] = _composite(window, repaired, mask, np)
@@ -266,19 +301,20 @@ def clean_document(
     external_dir = Path(external).expanduser() if external else None
     if external_dir is not None and not external_dir.is_dir():
         raise FileNotFoundError(f"--external is not a folder: {external_dir}")
+    edit_provider = providers.get("image_edit", provider)
     if (doc["meta"].get("free_lettering_mask") == "solid"
-            and external_dir is None):
+            and external_dir is None and edit_provider is None):
         raise ValueError(
             "the masks for this document were built with "
             "`mask --free-lettering solid`, which covers each piece of free "
             "lettering as a whole patch rather than as letter shapes. That is "
             "for a generative cleaner: painting it flat or inpainting it would "
-            "blank a rectangle out of the artwork. Either pass --external with "
+            "blank a rectangle out of the artwork. Either pass --provider "
+            "with an image-edit provider, or --external with "
             "your reconstructed pages, or rebuild the masks with "
             "`mask --free-lettering glyphs`."
         )
 
-    edit_provider = providers.get("image_edit", provider)
     provider_report: list[dict[str, Any]] = []
     totals = {"flat": 0, "inpaint": 0, "external": 0, "keep": 0, "skipped": 0}
     per_page: list[dict[str, Any]] = []
@@ -287,16 +323,22 @@ def clean_document(
             continue
         if not page.get("regions"):
             continue
-        counts = clean_page(doc_path, page, policy=policy,
-                            external=external_dir, provider=edit_provider,
-                            report=provider_report)
+        counts = clean_page(
+            doc_path, page, policy=policy, external=external_dir,
+            provider=edit_provider, report=provider_report,
+            solid_free_mask=doc["meta"].get("free_lettering_mask") == "solid",
+        )
         for key, value in counts.items():
             totals[key] += value
         per_page.append({"page": page["id"], **counts})
 
     stamp = {"totals": totals}
     if provider_report:
+        # Persisted, not just reported: the CLI output is gone as soon as the
+        # terminal scrolls, and "what did the model actually touch" has to be
+        # answerable from the document months later.
         stamp["provider"] = provider
+        stamp["provider_calls"] = provider_report
     ir.stamp_stage(doc, "clean", stamp)
     ir.save_doc(doc, doc_path)
 
@@ -338,6 +380,7 @@ def main(argv: list[str] | None = None) -> int:
         args.doc,
         external=args.external,
         pages=[p for p in args.pages.split(",") if p] or None,
+        provider=args.provider,
     )
     ir.emit(report)
     return 0

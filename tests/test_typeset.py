@@ -7,6 +7,7 @@ import pytest
 
 from PIL import Image
 
+import clean
 import lettering
 import masks
 import pageir as ir
@@ -589,4 +590,63 @@ def test_a_run_on_a_fallback_face_says_so(translated, monkeypatch):
     report = typeset.typeset_document(translated)
     assert report["vazir"] is False
     assert "Vazir" in report["font_note"]
+
+
+def test_an_unreliable_effect_survives_the_real_clean_to_typeset_flow(
+        translated):
+    """THE invariant, measured against the page as it arrived.
+
+    `clean` runs before `typeset`, so a decision made at typeset time to "leave
+    the lettering as drawn" is a promise about pixels that were erased two
+    stages earlier. The previous version of this test compared the final page to
+    `page["clean"]` — the already-cleaned input — and so could not see the loss
+    at all. It compares to `page["image"]` now, which is the only comparison
+    that means anything.
+    """
+    blob = np.zeros((150, 150), np.uint8)
+    blob[40:110, 35:115] = 255                 # no long axis: unreliable
+    page, region = _sfx_page(translated, mask=blob, box=(120, 140, 150, 150))
+    root = ir.doc_dir(translated)
+    original = np.asarray(ir.load_image(root / page["image"]))
+
+    clean.clean_document(translated)
+    typeset.typeset_document(translated)
+
+    after_doc = ir.load_doc(translated)
+    after = after_doc["pages"][0]["regions"][0]
+    assert after["typeset"]["status"] == "unreliable"
+    assert after["fill"] == "keep", "clean erased it before typeset could decide"
+
+    final = np.asarray(ir.load_image(root / after_doc["pages"][0]["final"]))
+    x, y, w, h = after["mask_box"]
+    delta = np.abs(final.astype(int) - original.astype(int)).max(axis=2)
+    assert delta[y:y + h, x:x + w].max() == 0, \
+        "the original lettering is not on the final page"
+
+
+def test_a_stylised_effect_that_will_not_fit_is_restored_not_flattened(
+        translated, monkeypatch):
+    """A curved effect whose Persian will not fit its arc must not quietly
+    become a horizontal line of type across the artwork. `clean` has already
+    erased it by then, so the original ink is put back under its own mask."""
+    page, region = _sfx_page(translated, mask=_arc(34), box=(60, 60, 320, 160),
+                             text="\u0628\u0648\u0645")
+    root = ir.doc_dir(translated)
+    original = np.asarray(ir.load_image(root / page["image"]))
+
+    clean.clean_document(translated)
+    # The measurement stands; only the fitting fails.
+    monkeypatch.setattr(lettering, "render", lambda *a, **k: None)
+    typeset.typeset_document(translated)
+
+    after_doc = ir.load_doc(translated)
+    after = after_doc["pages"][0]["regions"][0]
+    assert after["typeset"]["status"] == "unreliable"
+    assert after["typeset"]["style"] == "curved"
+    assert after.get("review")
+
+    final = np.asarray(ir.load_image(root / after_doc["pages"][0]["final"]))
+    x, y, w, h = after["mask_box"]
+    delta = np.abs(final.astype(int) - original.astype(int)).max(axis=2)
+    assert delta[y:y + h, x:x + w].max() == 0
 
