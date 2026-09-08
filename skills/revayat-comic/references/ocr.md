@@ -94,6 +94,12 @@ What it will not do is the point of it:
 | region is **locked** | the committed value is kept; the engine's reading is recorded as a disagreement and the region goes to review |
 | confidence below `--min-confidence` (0.65) | **nothing is written**; a review note says how unsure it was |
 | engine errors, times out or declines | recorded as a failed call; nothing is written; the run continues |
+| the stage is run a second time | work it already finished is **not re-requested** — no call, no cost, no chance of a different answer replacing a good one |
+
+`--vision <name>` adds an optional third opinion: a vision provider is shown the
+crop and asked to comment on a *disagreement only*. It never writes to the
+document; its answer becomes a review note. Everything above works with it
+absent, which is the default.
 
 Every outcome lands in `region["provenance"]` with the provider name, the
 status, the confidence and a timestamp, so a later run can tell a machine's
