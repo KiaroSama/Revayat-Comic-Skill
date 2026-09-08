@@ -49,6 +49,7 @@ so. See `persian-typesetting.md` for what differs between the two paths.
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | `no <role> provider named 'x'` | the name is not registered | the error lists what is; a provider is registered by importing the module that calls `providers.register` |
+| `--provider` was set and `provider_calls` is empty | every region was repaired exactly by the deterministic tiers | working as intended — an all-flat page costs no model call; check `totals.inpaint` if you expected escalation |
 | `clean` ran but `provider_calls` says `fell_back` | the model errored, timed out, refused or returned the wrong size | the reason is in the same record; the classical cleaners ran instead and the page is complete |
 | `ocr` wrote nothing | every reading was below `--min-confidence` (0.65) | look at the crops; a low-confidence reading is deliberately never written |
 | `ocr` reports disagreements | the engine read a **locked** region differently | not an error: the committed value was kept and the reading recorded beside it |

@@ -130,9 +130,28 @@ tool you most want a hard boundary around.
 revayat-comic clean --doc work/comic.json --provider <name>
 ```
 
-Same seam, one fewer step: the model's page is returned into exactly the
-variable an `--external` folder fills, so it takes the identical per-region
-composite and participates in none of the arithmetic that bounds it.
+Same composite, one fewer step: the model's page goes through the identical
+per-region masking and participates in none of the arithmetic that bounds it.
+
+**But it is not treated like `--external`, and the difference is deliberate.**
+
+| | who decided | which regions |
+| --- | --- | --- |
+| `--external` | a person, about the whole page | **every** authorised region |
+| `--provider` | the pipeline, per region | only where the deterministic tiers give up |
+
+`--external` means somebody looked at the chapter and replaced these pages. It
+would be wrong to second-guess that region by region and quietly use only a
+fraction of what they supplied.
+
+A provider is the pipeline choosing to spend a model call, so it escalates: a
+flat balloon is repaired by reading its own colour and painting it back — exact,
+instant, better than any model — and the provider is reached only for a region
+that needs inpainting, or a solid free-lettering patch.
+
+**Which means an all-flat page never calls the model at all.** The call is made
+lazily, at the first region that actually needs it, once per page. A chapter of
+ordinary dialogue balloons costs nothing.
 
 **Proved against a hostile provider, not a polite one.** The test fake discards
 the page entirely and returns flat red — every pixel changed — and the assertion
