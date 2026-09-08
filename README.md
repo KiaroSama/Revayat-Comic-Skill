@@ -69,10 +69,15 @@ python skills/revayat-comic/scripts/revayat-comic.py doctor
 `"ready": true` and you are done. Two fields under `persian` decide whether the
 output is *correct* rather than merely present:
 
-- **`"font"`** — the Persian face it will draw with. If it is `null`, install
-  [Vazirmatn](https://github.com/rastikerdar/vazirmatn/releases). No font ships
-  with this repository: a font file is a separately licensed binary and does not
-  belong in a GPL source tree.
+- **`"font"`** and **`"vazir"`** — the Persian face it will draw with, and
+  whether that face is the house one. **Persian here is set in Vazir**;
+  [Vazirmatn](https://github.com/rastikerdar/vazirmatn/releases) is the current
+  release of that family and any weight works, including the variable build. No
+  font ships with this repository: a font file is a separately licensed binary
+  and does not belong in a GPL source tree. Tahoma, Noto Naskh Arabic and Geeza
+  Pro all draw correct Persian, so a run on one of them looks fine and is not
+  the house face — which is why `"vazir": false` comes with a note instead of
+  passing quietly.
 - **`"raqm"`** — whether Pillow shapes Arabic script itself. **This is not a
   platform limit.** Pillow ships libraqm in the wheel on every platform; what
   libraqm loads at run time is **FriBiDi**, and Linux images usually have one

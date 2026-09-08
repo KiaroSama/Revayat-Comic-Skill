@@ -164,33 +164,61 @@ using it for real lettering makes `stats.states` count that lettering as
 out. This project made that mistake on its first real chapter, on a Japanese
 billboard, because `keep` did not exist yet.
 
-## Slant, and what is still not implemented
+## Matching lettering that was drawn
 
-Under `translate`, a sound effect whose lettering was drawn **on a slant** is now
-set on that slant. The angle is not guessed: `clean` has already erased the
-lettering by the time the typesetter runs, so it is measured from the region's
-own mask — the shape of what was erased — with `minAreaRect`, which gives the
-baseline, the space the words filled upright, and an aspect ratio saying how far
-to trust the answer.
+Under `translate`, a sound effect is set the way it was drawn. Nothing here is
+guessed: `clean` has already erased the lettering by the time the typesetter
+runs, so every number comes from the region's own mask — the shape of what was
+erased. `lettering.measure` reads it and returns one verdict.
 
-That last part is the gate. A word set diagonally is long and thin and gives a
-confident angle; a compact cluster of overlapping glyphs gives whatever angle the
-fit landed on, so anything below `SFX_MIN_ELONGATION` and any slant under
-`SFX_MIN_ANGLE` takes the flat path instead. Straight lettering — most lettering
-— is unaffected. `--flat-sfx` turns the whole thing off, and `typeset.style` in
-the region records which path ran, `rotated` or `flat`.
+| Verdict | What the mask showed | What happens |
+| --- | --- | --- |
+| `flat` | straight lettering | the ordinary path, unchanged |
+| `rotated` | a baseline on a slant | set on the same slant |
+| `curved` | a baseline following an arc | bent along the same arc |
+| `warped` | one end drawn smaller than the other | warped into the same trapezoid |
+| `unreliable` | the geometry could not be read | **left as drawn**, sent to review |
 
-The outline is heavier on this path than in a balloon (`size // 8` against
-`size // 12`), because a sound effect sits on artwork rather than on paper and
-the stroke is the only thing keeping it legible.
+**The gates are the point, not an afterthought.** `minAreaRect` always returns an
+angle and a quadratic always fits, so what decides whether an answer means
+anything is measured separately: `MIN_ELONGATION` on the ink's aspect ratio
+(no long axis, no baseline), a residual check on the curve fit (a quadratic
+through a cloud is not an arc), `MAX_CURVE` (a fold that deep is usually two
+effects caught in one mask), and `MAX_SPILL` on the finished bitmap, so a
+transform that has gone wrong cannot stamp type across a neighbouring panel.
 
-**Still not implemented: perspective and curve.** Lettering that recedes into a
-panel or bends along an arc needs a mesh warp and a font matched to the
-original's hand, and a half-hearted version looks worse than leaving the Japanese
-in place. Stroke weight beyond the outline, and matching the original's actual
-face, are also out.
+**The whole line is shaped once and only the bitmap is bent.** Persian joins;
+placing characters one at a time around an arc produces isolated letters, not a
+word. The text goes through the same fitter every balloon uses, horizontally,
+and the finished image is displaced column by column for a curve or warped
+through four points for perspective. Every letter keeps the form its neighbours
+gave it.
 
-**None of this decides whether to replace an effect at all.** That is the
-reader's call, and it is `keep: yes` on the region. The code will not quietly
-skip lettering somebody asked it to translate: a silent skip is exactly the hole
-the five terminal states exist to make visible.
+A shadow is drawn under everything at `SHADOW_OFFSET` of the type size, and the
+outline is heavier here than in a balloon (`size // 8` against `size // 12`),
+because a sound effect sits on artwork rather than on paper and the stroke is
+the only thing keeping it legible.
+
+`--flat-sfx` turns every transform off. `typeset.style` on the region records
+which path ran, and `typeset.angle`, `curvature` and `taper` record what was
+measured.
+
+## `unreliable` means keep, and that is deliberate
+
+When the measurement does not hold up, the effect **stays drawn** and the region
+carries a `review` note saying why. It reaches `needs_review` in the terminal
+census — never `translated`, because nothing was put on the page.
+
+This is the one place the code declines to replace lettering. Stamping type that
+is confidently wrong about its own angle over a hand-drawn effect is worse than
+leaving the Japanese, which is the judgement this file has always made. It is
+not an override of the reader: an explicit `keep: yes` is honoured earlier and
+separately, and nothing here ever contradicts one.
+
+## Still not implemented
+
+Matching the original's **hand** — its actual typeface, its stroke modulation,
+its per-glyph flourishes — is out, and so is anything that needs a mesh warp
+finer than the four-point one. Those need a lettering artist or a font drawn to
+match, and a half-hearted version looks worse than leaving the source in place.
+
