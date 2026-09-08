@@ -30,6 +30,7 @@ from typing import Any, Sequence
 
 import masks as mask_tools
 import pageir as ir
+import providers
 
 #: Standard deviation, in 8-bit levels, below which a background counts as flat.
 #: Screentone is not flat and must not be filled; measured dot patterns sit well
@@ -41,6 +42,19 @@ FEATHER = 2
 
 #: Telea's radius. Larger reconstructs more context and smears more.
 INPAINT_RADIUS = 4
+
+#: What an image model is told it is doing. Kept here rather than in each
+#: adapter so every provider gets the same brief, and so the brief is reviewable.
+PROVIDER_INSTRUCTIONS = (
+    "Reconstruct the artwork underneath the white areas of the mask. Keep every "
+    "line, screentone and gradient outside those areas exactly as it is. Do not "
+    "add text, signatures, watermarks or new elements. Return the whole page at "
+    "its original pixel size."
+)
+
+#: A hosted image model on a full page is slow; a stalled one must not hold a
+#: chapter. Past this the classical cleaners run instead.
+PROVIDER_TIMEOUT = 180.0
 
 
 def _cv2():
@@ -110,15 +124,65 @@ def _composite(base, repaired, mask, np):
             + repaired.astype(np.float32) * alpha).round().astype(np.uint8)
 
 
+def _from_provider(provider, base, page, root, np, report) -> Any:
+    """Ask an image model to redraw the page, and hand back only an array.
+
+    What comes back is a *candidate*, never a page. It is returned into exactly
+    the same variable an `--external` folder fills, so it goes through the same
+    per-region hard-mask composite below and cannot reach a pixel the mask does
+    not authorise. That is not a policy the provider is asked to respect; it is
+    arithmetic it does not participate in.
+
+    Any failure at all — timeout, exception, refusal, a page that came back the
+    wrong size — returns ``None``, and the stage carries on with the classical
+    cleaners it would have used with no provider configured. A generative
+    cleaner that is having a bad day must not be able to stall a chapter.
+    """
+    from PIL import Image
+
+    page_png = mask_tools._encode_png(Image.fromarray(base))
+    mask_png = (root / page["mask"]).read_bytes() if page.get("mask") else b""
+    result = providers.call(
+        provider, "image_edit", page_png, mask_png, PROVIDER_INSTRUCTIONS,
+        timeout=PROVIDER_TIMEOUT,
+    )
+    record = result.as_provenance()
+    if not result.ok:
+        report.append({"page": page["id"], **record, "outcome": "fell_back"})
+        return None
+
+    try:
+        import io
+
+        candidate = np.asarray(
+            Image.open(io.BytesIO(result.data)).convert("RGB"))
+    except Exception as error:  # noqa: BLE001 - a provider may return anything
+        report.append({"page": page["id"], **record, "outcome": "unreadable",
+                       "detail": f"{type(error).__name__}: {error}"})
+        return None
+
+    if candidate.shape != base.shape:
+        report.append({"page": page["id"], **record, "outcome": "wrong_size",
+                       "detail": f"{candidate.shape[1]}x{candidate.shape[0]} "
+                                 f"against {base.shape[1]}x{base.shape[0]}"})
+        return None
+
+    report.append({"page": page["id"], **record, "outcome": "composited"})
+    return candidate
+
+
 def clean_page(
     doc_path: Path,
     page: dict[str, Any],
     *,
     policy: str,
     external: Path | None = None,
+    provider: Any = None,
+    report: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     np = _numpy()
     root = ir.doc_dir(doc_path)
+    report = report if report is not None else []
     base = np.asarray(ir.load_image(root / page["image"])).copy()
 
     supplied = None
@@ -137,6 +201,9 @@ def clean_page(
                     f"but {page['id']} is {base.shape[1]}x{base.shape[0]}. A "
                     "cleaned page has to be the same size as the original."
                 )
+
+    if supplied is None and provider is not None:
+        supplied = _from_provider(provider, base, page, root, np, report)
 
     counts = {"flat": 0, "inpaint": 0, "external": 0, "keep": 0, "skipped": 0}
     for region in page.get("regions", []):
@@ -191,6 +258,7 @@ def clean_document(
     *,
     external: str | Path | None = None,
     pages: Sequence[str] | None = None,
+    provider: str | None = None,
 ) -> dict[str, Any]:
     doc_path = Path(doc_path)
     doc = ir.load_doc(doc_path)
@@ -210,6 +278,8 @@ def clean_document(
             "`mask --free-lettering glyphs`."
         )
 
+    edit_provider = providers.get("image_edit", provider)
+    provider_report: list[dict[str, Any]] = []
     totals = {"flat": 0, "inpaint": 0, "external": 0, "keep": 0, "skipped": 0}
     per_page: list[dict[str, Any]] = []
     for page in doc["pages"]:
@@ -217,12 +287,17 @@ def clean_document(
             continue
         if not page.get("regions"):
             continue
-        counts = clean_page(doc_path, page, policy=policy, external=external_dir)
+        counts = clean_page(doc_path, page, policy=policy,
+                            external=external_dir, provider=edit_provider,
+                            report=provider_report)
         for key, value in counts.items():
             totals[key] += value
         per_page.append({"page": page["id"], **counts})
 
-    ir.stamp_stage(doc, "clean", {"totals": totals})
+    stamp = {"totals": totals}
+    if provider_report:
+        stamp["provider"] = provider
+    ir.stamp_stage(doc, "clean", stamp)
     ir.save_doc(doc, doc_path)
 
     heavy = [entry["page"] for entry in per_page if entry["inpaint"] > entry["flat"]]
@@ -230,6 +305,8 @@ def clean_document(
         "document": str(doc_path),
         "totals": totals,
         "pages": per_page,
+        "provider": provider,
+        "provider_calls": provider_report,
         "inpaint_heavy_pages": heavy,
         "note": (
             "On these pages most regions needed inpainting rather than a flat "
@@ -247,6 +324,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--doc", required=True)
     parser.add_argument("--pages", default="")
+    parser.add_argument("--provider", default=None,
+                        help="name of an image-edit provider to redraw pages "
+                             "with; its output is composited under the same "
+                             "mask as everything else, and any failure falls "
+                             "back to the classical cleaners")
     parser.add_argument("--external", default=None,
                         help="folder of externally cleaned pages named "
                              "<page id>.png; only their masked pixels are used")
