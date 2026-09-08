@@ -7,6 +7,7 @@ import pytest
 
 from PIL import Image
 
+import lettering
 import masks
 import pageir as ir
 import typeset
@@ -316,141 +317,231 @@ def test_the_fallback_path_produces_a_page_too(translated):
     assert "Windows and macOS" in report["warning"]
 
 
-# --- stylised sound effects --------------------------------------------------
-# A sound effect is drawn on a slant more often than not. The lettering is gone
-# by the time the typesetter runs, so the slant is read off the region's mask —
-# the shape of what `clean` erased — and the Persian is set to match.
+# --- lettering that was drawn, not typed ------------------------------------
+# A sound effect leans, arcs and recedes. Every number comes out of the region's
+# mask, which is the shape of what `clean` erased, and every transform is gated
+# on a measurement that says the number means something.
+#
+# The contract that matters most here is the COORDINATE FRAME. A stored region
+# mask is a *local* array covering `region["mask_box"]`; the first version of
+# this feature measured in that frame and pasted onto the full page, putting
+# every rotated effect near the origin. The integration tests below use a real
+# local mask at a deliberately non-zero page position for exactly that reason.
 
-def _slanted_mask(angle: float, size: int = 400):
-    """A long thin bar rotated by `angle`, standing in for erased lettering."""
-    from PIL import Image
+def _bar(angle: float, shape=(120, 300), thickness=20):
+    """A local region mask: a long bar, rotated, sized like a real mask_box."""
+    height, width = shape
+    canvas = np.zeros((height, width), np.uint8)
+    top = (height - thickness) // 2
+    canvas[top:top + thickness, 20:width - 20] = 255
+    if angle:
+        canvas = np.asarray(Image.fromarray(canvas).rotate(
+            angle, resample=Image.BILINEAR))
+    return canvas
 
-    canvas = np.zeros((size, size), np.uint8)
-    canvas[190:210, 60:340] = 255
-    return np.asarray(Image.fromarray(canvas).rotate(angle,
-                                                     resample=Image.BILINEAR))
+
+def _arc(sagitta: int, shape=(160, 320)):
+    """A local mask whose ink follows a parabola — lettering along a curve."""
+    height, width = shape
+    canvas = np.zeros((height, width), np.uint8)
+    for x in range(20, width - 20):
+        t = (x - width / 2) / (width / 2)
+        y = int(height / 2 + (t * t - 1) * sagitta)
+        canvas[max(0, y - 9):y + 9, x] = 255
+    return canvas
+
+
+def _deep_arc(sagitta: int):
+    """An arc bent past being lettering. Measured band: about 100-130 trips the
+    curvature ceiling, and past ~150 the bounding box is no longer elongated at
+    all and the elongation gate takes it first."""
+    canvas = np.zeros((420, 320), np.uint8)
+    for x in range(30, 290):
+        t = (x - 160) / 130
+        y = int(200 + (t * t - 1) * sagitta)
+        canvas[max(0, y - 8):y + 8, x] = 255
+    return canvas
+
+
+def _wedge(shape=(140, 320)):
+    """A local mask that is thick at one end and thin at the other."""
+    height, width = shape
+    canvas = np.zeros((height, width), np.uint8)
+    for x in range(20, width - 20):
+        half = int(8 + 20 * (1 - (x - 20) / (width - 40)))
+        canvas[height // 2 - half:height // 2 + half, x] = 255
+    return canvas
 
 
 @pytest.mark.parametrize("drawn", [-35, -20, 20, 35, 60])
 def test_a_measured_slant_round_trips_through_the_renderer(drawn):
-    """`sfx_style` reports the negative of the rotation that made the shape, so
-    `_draw_stylised` turns by `-angle` to put it back. The sign was measured,
-    not read out of OpenCV's documentation, and it is pinned here because a
-    mirrored angle looks deliberate on the page and is wrong on every one."""
-    style = typeset.sfx_style(_slanted_mask(drawn), np)
-    assert style is not None
-    assert style["angle"] == pytest.approx(-drawn, abs=1.0)
-    # And the box is the space the lettering filled upright, not its bounds.
-    assert style["width"] == pytest.approx(281, abs=3)
-    assert style["height"] == pytest.approx(21, abs=3)
+    """`measure` reports the negative of the rotation that made the shape, so
+    the renderer turns by `-angle` to put it back. Measured, not read out of
+    OpenCV's documentation: a mirrored angle looks deliberate on a page and is
+    wrong on every one of them."""
+    style = lettering.measure(_bar(drawn), np)
+    assert style is not None and style["verdict"] == "rotated"
+    assert style["angle"] == pytest.approx(-drawn, abs=1.5)
 
 
-def test_lettering_set_straight_reports_no_slant():
-    """The common case, and the one that must stay on the flat path."""
-    assert typeset.sfx_style(_slanted_mask(0), np) is None
+def test_the_measured_centre_is_in_page_coordinates():
+    """THE REGRESSION. A region mask is local to `mask_box`, so a centre
+    measured in it is meaningless on the page until the box origin is added.
+    Shipped once without this and put every rotated effect near (0, 0)."""
+    mask = _bar(-20)
+    local = lettering.measure(mask, np)
+    placed = lettering.measure(mask, np, origin=(800, 1200))
+    assert placed["cx"] == pytest.approx(local["cx"] + 800)
+    assert placed["cy"] == pytest.approx(local["cy"] + 1200)
 
 
-def test_a_blob_of_glyphs_is_refused_however_it_is_turned():
+def test_lettering_set_straight_is_flat_not_a_failure():
+    style = lettering.measure(_bar(0), np)
+    assert style is not None and style["verdict"] == "flat"
+
+
+def test_a_blob_of_glyphs_is_unreliable_rather_than_guessed_at():
     """minAreaRect always returns an angle. On a shape with no long axis that
-    angle is whichever way the fit happened to land, so the elongation gate is
-    what makes the measurement mean anything."""
+    angle is wherever the fit landed, so the verdict is `unreliable` and the
+    lettering stays drawn — not a wilder guess, and not a silent flat replace."""
     blob = np.zeros((200, 200), np.uint8)
-    blob[70:130, 60:140] = 255           # 80 x 60, nowhere near elongated
-    assert typeset.sfx_style(blob, np) is None
+    blob[70:130, 60:140] = 255
+    style = lettering.measure(blob, np)
+    assert style["verdict"] == "unreliable" and style["reason"]
 
 
-def test_a_slanted_sound_effect_is_set_on_its_slant(translated, tmp_path):
-    doc = ir.load_doc(translated)
-    root = ir.doc_dir(translated)
-    page = doc["pages"][0]
-    doc["meta"]["sfx_policy"] = "translate"
-    region = page["regions"][0]
-    region.update(kind="sfx", target_text="\u0628\u0648\u0645", balloon=None)
-    region["bbox"] = [60, 60, 280, 280]
-    mask_path = f"masks/{page['id']}/{region['id']}.png"
-    ir.write_bytes(root / mask_path, masks._encode_png(
-        Image.fromarray(_slanted_mask(-25, 400)[:page["height"], :page["width"]],
-                        mode="L")))
-    region["mask"] = mask_path
-    ir.save_doc(doc, translated)
-
-    typeset.typeset_document(translated)
-    after = ir.load_doc(translated)["pages"][0]["regions"][0]
-    assert after["typeset"]["style"] == "rotated"
-    assert after["typeset"]["angle"] == pytest.approx(25, abs=2)
+def test_an_arc_is_measured_as_curved():
+    style = lettering.measure(_arc(34), np)
+    assert style["verdict"] == "curved"
+    assert style["curvature"] >= lettering.MIN_CURVE
 
 
-def test_flat_sfx_turns_the_slant_off(translated):
-    """The escape hatch, and the proof that the rotated path is the one being
-    taken above rather than the flat one wearing a different label."""
-    doc = ir.load_doc(translated)
-    root = ir.doc_dir(translated)
-    page = doc["pages"][0]
-    doc["meta"]["sfx_policy"] = "translate"
-    region = page["regions"][0]
-    region.update(kind="sfx", target_text="\u0628\u0648\u0645", balloon=None)
-    region["bbox"] = [60, 60, 280, 280]
-    mask_path = f"masks/{page['id']}/{region['id']}.png"
-    ir.write_bytes(root / mask_path, masks._encode_png(
-        Image.fromarray(_slanted_mask(-25, 400)[:page["height"], :page["width"]],
-                        mode="L")))
-    region["mask"] = mask_path
-    ir.save_doc(doc, translated)
-
-    typeset.typeset_document(translated, stylise=False)
-    after = ir.load_doc(translated)["pages"][0]["regions"][0]
-    assert after["typeset"]["style"] == "flat"
+def test_a_gentle_wobble_is_not_an_arc():
+    """A quadratic fits any scatter. Without the curvature floor every ragged
+    straight effect reads as curved."""
+    assert lettering.measure(_arc(3), np)["verdict"] != "curved"
 
 
-def test_the_slanted_renderer_refuses_a_box_the_words_cannot_fill():
-    """The unit under the fallback: no font sets 13-point type in eight pixels,
-    so `_draw_stylised` reports that it could not and paints nothing."""
+def test_lettering_that_tapers_is_measured_as_receding():
+    style = lettering.measure(_wedge(), np)
+    assert style["verdict"] == "warped"
+    assert abs(style["taper"] - 1.0) >= lettering.MIN_TAPER
+
+
+def test_a_baseline_that_folds_back_is_refused():
+    """Curvature past `MAX_CURVE` is not an arc, it is usually two effects
+    caught in one mask. The safe answer is to leave the artwork alone."""
+    style = lettering.measure(_deep_arc(108), np)
+    assert style["curvature"] > lettering.MAX_CURVE
+    assert style["verdict"] == "unreliable"
+
+
+def test_a_fold_so_deep_it_has_no_long_axis_is_also_refused():
+    """The second road to the same answer, and the reason both gates exist. Bend
+    a line far enough and its bounding box stops being long at all: the axis
+    flips to vertical and every measurement taken along it is meaningless. The
+    elongation gate catches that before the curvature gate ever sees it."""
+    style = lettering.measure(_deep_arc(200), np)
+    assert style["elongation"] < lettering.MIN_ELONGATION
+    assert style["verdict"] == "unreliable"
+
+
+def test_the_renderer_refuses_a_box_the_words_cannot_fill():
+    """No font sets 13-point type in eight pixels, so the renderer reports that
+    it could not and paints nothing."""
     canvas = Image.new("RGB", (200, 200), "white")
     style = {"cx": 100.0, "cy": 100.0, "width": 8.0, "height": 6.0,
-             "angle": 20.0}
-    assert typeset._draw_stylised(
+             "angle": 20.0, "curvature": 0.0, "taper": 1.0,
+             "verdict": "rotated"}
+    assert lettering.render(
         canvas, "\u06cc\u06a9 \u062c\u0645\u0644\u0647\u0654 \u0628\u0644\u0646\u062f", style, typeset.Shaper(),
-        typeset.find_font(), (0, 0, 0), None, np,
-        max_size=64, min_size=13) is None
-    # Nothing was pasted: the page is still blank.
+        typeset.find_font(), (0, 0, 0), None, np, typeset.fit_region,
+        typeset._pil(), max_size=64, min_size=13) is None
     assert np.asarray(canvas).min() == 255
 
 
-def test_a_slant_that_cannot_hold_the_words_falls_back_to_flat(
-        translated, monkeypatch):
-    """The other half of the feature, and the half that decides what a bad page
-    looks like. When the Persian will not fit the space the original lettering
-    filled, the region takes the ordinary path \u2014 a less faithful effect that
-    still says what the panel said.
-
-    It does NOT fall back to leaving the effect untranslated. Whether to replace
-    an effect at all is the reader's call and it is spelled `keep: yes`; code
-    that silently skipped lettering somebody asked it to translate would be the
-    exact hole the five terminal states exist to make visible.
-
-    The refusal is forced, not provoked. The first version of this test used a
-    long sentence in a narrow box and asserted the result: it overflowed under
-    Tahoma on Windows and *fitted* under Noto with RAQM on Linux, so it passed
-    locally and failed on four CI runners. The branch is what is under test, so
-    the branch is what gets triggered \u2014 the font is not part of the claim.
-    """
-    monkeypatch.setattr(typeset, "_draw_stylised", lambda *a, **k: None)
-
-    doc = ir.load_doc(translated)
-    root = ir.doc_dir(translated)
+def _sfx_page(doc_path, *, mask, box, text="\u0628\u0648\u0645"):
+    """Put one sound effect on the page with a REAL local mask at `box`."""
+    doc = ir.load_doc(doc_path)
+    root = ir.doc_dir(doc_path)
     page = doc["pages"][0]
     doc["meta"]["sfx_policy"] = "translate"
+    # Only the effect under test. These assertions measure what changed on the
+    # page, and the fixture's other regions get typeset too — they landed inside
+    # the window and read as the effect having been drawn in the wrong place.
     region = page["regions"][0]
-    region.update(kind="sfx", target_text="\u0628\u0648\u0645", balloon=None)
-    region["bbox"] = [60, 60, 280, 280]
-    mask_path = f"masks/{page['id']}/{region['id']}.png"
-    ir.write_bytes(root / mask_path, masks._encode_png(
-        Image.fromarray(_slanted_mask(-25, 400)[:page["height"], :page["width"]],
-                        mode="L")))
-    region["mask"] = mask_path
-    ir.save_doc(doc, translated)
+    page["regions"] = [region]
+    region.update(kind="sfx", target_text=text, balloon=None,
+                  bbox=[box[0], box[1], box[2], box[3]])
+    relative = f"masks/{page['id']}/{region['id']}.png"
+    ir.write_bytes(root / relative,
+                   masks._encode_png(Image.fromarray(mask, mode="L")))
+    region["mask"] = relative
+    region["mask_box"] = list(box)
+    ir.save_doc(doc, doc_path)
+    return page, region
+
+
+def test_a_rotated_effect_lands_where_the_lettering_was(translated):
+    """The regression, end to end and on the pixels. The mask is a normal local
+    array and its box sits well away from the origin; the ink the typesetter
+    adds has to appear there and not at the top-left of the page."""
+    doc = ir.load_doc(translated)
+    page_w = doc["pages"][0]["width"]
+    page_h = doc["pages"][0]["height"]
+    box = (page_w // 2, page_h // 2, 300, 120)
+    if box[0] + 300 > page_w or box[1] + 120 > page_h:
+        pytest.skip("fixture page is too small to place the effect off-origin")
+    page, region = _sfx_page(translated, mask=_bar(-20), box=box)
+    root = ir.doc_dir(translated)
+    before = np.asarray(ir.load_image(root / (page.get("clean") or page["image"])))
 
     typeset.typeset_document(translated)
+    after_doc = ir.load_doc(translated)
+    after_region = after_doc["pages"][0]["regions"][0]
+    assert after_region["typeset"]["style"] == "rotated"
+
+    final = np.asarray(ir.load_image(root / after_doc["pages"][0]["final"]))
+    changed = np.abs(final.astype(int) - before.astype(int)).max(axis=2) > 12
+    assert changed.any(), "nothing was drawn at all"
+    ys, xs = np.nonzero(changed)
+    # Every changed pixel sits around the region, not at the page origin.
+    assert xs.min() >= box[0] - 160 and xs.max() <= box[0] + box[2] + 160
+    assert ys.min() >= box[1] - 160 and ys.max() <= box[1] + box[3] + 160
+
+
+def test_an_unreadable_effect_is_left_drawn_and_sent_to_review(translated):
+    """`unreliable` must not quietly become ordinary flat Persian. The artwork
+    stays as the letterer drew it, the region says why, and the census reports
+    `needs_review` rather than claiming a translation that is not on the page."""
+    blob = np.zeros((150, 150), np.uint8)
+    blob[40:110, 35:115] = 255
+    page, region = _sfx_page(translated, mask=blob, box=(120, 140, 150, 150))
+    root = ir.doc_dir(translated)
+    before = np.asarray(ir.load_image(root / (page.get("clean") or page["image"])))
+
+    report = typeset.typeset_document(translated)
+    assert report["unreliable_count"] >= 1
+
+    after_doc = ir.load_doc(translated)
+    after_region = after_doc["pages"][0]["regions"][0]
+    assert after_region["typeset"]["status"] == "unreliable"
+    assert after_region["review"], "the reader was never told why"
+    assert ir.region_state(after_region, "translate") == "needs_review"
+
+    final = np.asarray(ir.load_image(root / after_doc["pages"][0]["final"]))
+    x, y, w, h = after_region["mask_box"]
+    delta = np.abs(final.astype(int) - before.astype(int)).max(axis=2)
+    assert delta[y:y + h, x:x + w].max() == 0, "the artwork was written on"
+
+
+def test_flat_sfx_turns_every_transform_off(translated):
+    """The escape hatch, and the control that proves the rotated path above is
+    real rather than the flat one wearing a different label."""
+    page_w = ir.load_doc(translated)["pages"][0]["width"]
+    page_h = ir.load_doc(translated)["pages"][0]["height"]
+    box = (min(40, page_w - 300), min(40, page_h - 120), 300, 120)
+    _sfx_page(translated, mask=_bar(-20), box=box)
+    typeset.typeset_document(translated, stylise=False)
     after = ir.load_doc(translated)["pages"][0]["regions"][0]
     assert after["typeset"]["style"] == "flat"
-    assert after["typeset"]["status"] == "ok"
