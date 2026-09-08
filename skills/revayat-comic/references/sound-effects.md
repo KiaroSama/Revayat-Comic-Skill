@@ -195,9 +195,16 @@ through four points for perspective. Every letter keeps the form its neighbours
 gave it.
 
 A shadow is drawn under everything at `SHADOW_OFFSET` of the type size, and the
-outline is heavier here than in a balloon (`size // 8` against `size // 12`),
-because a sound effect sits on artwork rather than on paper and the stroke is
-the only thing keeping it legible.
+outline **matches the weight the original was drawn at**. The distance transform
+of the mask gives every ink pixel its distance to the nearest edge, so the ridge
+of that field is the half-width of the stroke it sits in; a high percentile of it
+rather than the maximum keeps a junction of three strokes from speaking for the
+whole hand. A delicate effect stays delicate and a heavy one stays heavy.
+
+Clamped at both ends by `MIN_STROKE` and `MAX_STROKE`: too thick closes the
+counters of the Persian and turns a word into a blob, too thin stops doing the
+job an outline is there for, which on artwork is the only thing keeping the word
+legible. With nothing to measure it falls back to `size // 8`.
 
 `--flat-sfx` turns every transform off. `typeset.style` on the region records
 which path ran, and `typeset.angle`, `curvature` and `taper` record what was
@@ -217,8 +224,10 @@ separately, and nothing here ever contradicts one.
 
 ## Still not implemented
 
-Matching the original's **hand** — its actual typeface, its stroke modulation,
-its per-glyph flourishes — is out, and so is anything that needs a mesh warp
-finer than the four-point one. Those need a lettering artist or a font drawn to
+Matching the original's **typeface** and its per-glyph flourishes is out, and so
+is anything needing a mesh warp finer than the four-point one. Overall stroke
+weight *is* matched now (above); what is not is modulation *within* a stroke —
+a brush that thickens on the downstroke — which needs a variable font axis and a
+letterer's judgement about where the pressure went. Those need a lettering artist or a font drawn to
 match, and a half-hearted version looks worse than leaving the source in place.
 
