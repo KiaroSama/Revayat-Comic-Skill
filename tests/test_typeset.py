@@ -650,3 +650,70 @@ def test_a_stylised_effect_that_will_not_fit_is_restored_not_flattened(
     delta = np.abs(final.astype(int) - original.astype(int)).max(axis=2)
     assert delta[y:y + h, x:x + w].max() == 0
 
+
+# --- matching the hand -------------------------------------------------------
+
+def _bar_of_weight(thickness: int, angle: float = -20.0):
+    canvas = np.zeros((160, 400), np.uint8)
+    top = 80 - thickness // 2
+    canvas[top:top + thickness, 40:360] = 255
+    return np.asarray(Image.fromarray(canvas).rotate(
+        angle, resample=Image.BILINEAR))
+
+
+def test_the_stroke_weight_of_the_original_is_measured():
+    """A delicate effect and a heavy one are drawn with the same letters and
+    different weight, and replacing both with one fixed outline throws away
+    half of what made them different.
+
+    The distance transform's ridge is the half-width of the stroke it sits in;
+    a high percentile rather than the maximum keeps a junction of three strokes
+    from speaking for the whole hand.
+    """
+    light = lettering.measure(_bar_of_weight(4), np)["stroke"]
+    medium = lettering.measure(_bar_of_weight(10), np)["stroke"]
+    heavy = lettering.measure(_bar_of_weight(22), np)["stroke"]
+    assert light < medium < heavy
+    assert light < 0.07 and heavy > 0.12
+
+
+def test_a_heavier_original_gets_a_heavier_outline(monkeypatch):
+    """The measurement has to reach the ink.
+
+    Isolated on purpose: two full pipeline runs fit different type sizes, so
+    their absolute stroke widths are not comparable — the first version of this
+    test compared them anyway and reported the heavy effect as lighter. Here the
+    box, the text and the fitted size are identical and only `stroke` differs,
+    which is the one thing under test.
+    """
+    from PIL import ImageDraw
+
+    widths = []
+    original = ImageDraw.ImageDraw.text
+
+    def _spy(self, xy, txt, **kw):
+        if kw.get("stroke_width"):
+            widths.append(kw["stroke_width"])
+        return original(self, xy, txt, **kw)
+
+    monkeypatch.setattr(ImageDraw.ImageDraw, "text", _spy)
+
+    def _draw(stroke_fraction):
+        widths.clear()
+        canvas = Image.new("RGB", (600, 400), "white")
+        style = {"cx": 300.0, "cy": 200.0, "width": 320.0, "height": 120.0,
+                 "angle": -20.0, "curvature": 0.0, "taper": 1.0,
+                 "stroke": stroke_fraction, "verdict": "rotated"}
+        done = lettering.render(
+            canvas, "بوم", style, typeset.Shaper(), typeset.find_font(),
+            (18, 18, 18), (250, 250, 250), np, typeset.fit_region,
+            typeset._pil(), max_size=64, min_size=13)
+        assert done is not None
+        return max(widths)
+
+    light = _draw(0.05)
+    heavy = _draw(0.40)
+    assert heavy > light, f"light {light}, heavy {heavy} - weight was not matched"
+
+    # And it is clamped at both ends rather than tracking the mask blindly.
+    assert _draw(0.9) == _draw(0.44), "MAX_STROKE is not holding"

@@ -64,6 +64,15 @@ MAX_CURVE = 0.35
 #: The shadow a drawn effect usually carries, as a fraction of type size.
 SHADOW_OFFSET = 0.11
 
+#: How heavy an outline may get, as a fraction of the type size. A drawn effect
+#: with a very thick stroke would otherwise close up the counters of the Persian
+#: and turn a word into a blob.
+MAX_STROKE = 0.22
+
+#: And how light. Below this the outline stops doing its job, which on artwork
+#: is the only thing keeping the word readable.
+MIN_STROKE = 0.06
+
 #: How far a rendered effect may spill outside the area the original occupied,
 #: as a fraction of that area's size. Rotation and warping both grow a bitmap;
 #: this bounds the growth so a replacement cannot wander across the panel.
@@ -91,6 +100,33 @@ def _numpy():
 # --------------------------------------------------------------------------- #
 # Measurement
 # --------------------------------------------------------------------------- #
+
+def _stroke_weight(mask, np, cv2) -> float:
+    """How thick the erased lettering was drawn, relative to its own height.
+
+    The distance transform gives every ink pixel its distance to the nearest
+    edge, so the *ridge* of that field is the half-width of the stroke it sits
+    in. Taking a high percentile rather than the maximum keeps a junction where
+    three strokes meet from speaking for the whole hand.
+
+    Returned as a fraction of the lettering's height, because that is the number
+    the renderer needs: type is set at a size, and the outline has to be a
+    fraction of that size to look like the same weight.
+    """
+    ink = (mask > 0).astype(np.uint8)
+    if not ink.any():
+        return 0.0
+    rows = np.flatnonzero(ink.any(axis=1))
+    height = float(rows[-1] - rows[0] + 1)
+    if height < 4.0:
+        return 0.0
+    distance = cv2.distanceTransform(ink, cv2.DIST_L2, 3)
+    inside = distance[distance > 0]
+    if inside.size == 0:
+        return 0.0
+    half = float(np.percentile(inside, 92))
+    return round(min(1.0, (2.0 * half) / height), 4)
+
 
 def _upright(mask, angle: float, np, cv2):
     """The mask turned so its long axis is horizontal.
@@ -204,6 +240,7 @@ def measure(mask, np, origin: Sequence[float] = (0.0, 0.0)) -> dict[str, Any] | 
         "elongation": float(elongation),
         "curvature": 0.0,
         "taper": 1.0,
+        "stroke": _stroke_weight(mask, np, cv2),
         "verdict": "flat",
     }
 
@@ -274,9 +311,20 @@ def _strip(text: str, style: dict[str, Any], shaper, font_path, fill, stroke,
                                **shaper.draw_kwargs()}
     if stroke:
         # A sound effect sits on artwork rather than on paper, so the outline is
-        # not decoration — it is the only thing keeping the word legible over
-        # whatever it was drawn across.
-        options["stroke_width"] = max(2, fitted["size"] // 8)
+        # not decoration here — it is the only thing keeping the word legible
+        # over whatever it was drawn across.
+        #
+        # Its weight is taken from the lettering that was erased, measured off
+        # the mask, so a delicate effect stays delicate and a heavy one stays
+        # heavy. Clamped at both ends: too thick closes the counters of the
+        # Persian and turns the word into a blob, too thin stops working over
+        # artwork. Falls back to `size // 8` when there is nothing to measure.
+        measured = float(style.get("stroke") or 0.0)
+        if measured > 0.0:
+            fraction = min(MAX_STROKE, max(MIN_STROKE, measured / 2.0))
+            options["stroke_width"] = max(2, int(round(fitted["size"] * fraction)))
+        else:
+            options["stroke_width"] = max(2, fitted["size"] // 8)
         options["stroke_fill"] = stroke
 
     offset = max(1, int(round(fitted["size"] * SHADOW_OFFSET)))
@@ -402,6 +450,7 @@ def render(canvas, text: str, style: dict[str, Any], shaper, font_path, fill,
         "angle": round(style["angle"], 1),
         "curvature": style["curvature"],
         "taper": style["taper"],
+        "stroke": style.get("stroke", 0.0),
         "size": fitted["size"],
         "lines": fitted["line_count"],
         "font": fitted["font"],
