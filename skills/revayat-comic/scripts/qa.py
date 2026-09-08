@@ -304,7 +304,12 @@ def check_document(doc_path: str | Path, *, strict: bool = False) -> dict[str, A
                 if expected:
                     findings.add("untranslated-region", region["id"],
                                  f"{region['kind']} region has no Persian")
-                elif region["kind"] == "sfx":
+                elif region["kind"] == "sfx" and not region.get("keep"):
+                    # An explicit `keep: yes` is a decision the reader made
+                    # about this one region, not the global policy leaking
+                    # through. Warning on it reports a choice as an omission,
+                    # and under a `translate` policy that is every kept sign
+                    # and logo on the page.
                     findings.add("sfx-untranslated", region["id"],
                                  f"sound effect left in the artwork "
                                  f"(policy: {policy})")

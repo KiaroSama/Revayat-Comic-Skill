@@ -135,6 +135,43 @@ def test_an_external_page_only_contributes_its_masked_pixels(translated, tmp_pat
         assert delta.max() == 0
 
 
+def test_a_kept_region_takes_nothing_from_an_external_page(translated, tmp_path):
+    """The two safety rules meet here. A generative cleaner may rewrite every
+    pixel it is given, and a region the reader marked `keep` is lettering that
+    must stay drawn \u2014 so the external image must not reach it even inside its
+    own mask, which is the one place the compositor is otherwise allowed to
+    write. Proved on the pixels, not on the `fill` label.
+    """
+    from PIL import Image
+
+    doc = ir.load_doc(translated)
+    root = ir.doc_dir(translated)
+    page = doc["pages"][0]
+    region = page["regions"][0]
+    region["keep"] = True
+    ir.save_doc(doc, translated)
+
+    external = tmp_path / "external"
+    external.mkdir()
+    for other in doc["pages"]:
+        Image.new("RGB", (other["width"], other["height"]), (255, 0, 0)).save(
+            external / f"{other['id']}.png")
+
+    clean.clean_document(translated, external=external)
+    after_doc = ir.load_doc(translated)
+    kept = after_doc["pages"][0]["regions"][0]
+    assert kept["fill"] == "keep"
+
+    original = np.asarray(ir.load_image(root / page["image"]))
+    after = np.asarray(ir.load_image(root / after_doc["pages"][0]["clean"]))
+    # A region's mask is stored cropped to its own `mask_box`, the way `clean`
+    # reads it back.
+    x, y, w, h = kept["mask_box"]
+    own = masks.load_mask(root / kept["mask"]) > 0
+    delta = np.abs(original.astype(int) - after.astype(int)).max(axis=2)
+    assert delta[y:y + h, x:x + w][own].max() == 0
+
+
 def test_an_external_page_of_the_wrong_size_is_refused(translated, tmp_path):
     from PIL import Image
 
@@ -439,3 +476,45 @@ def test_two_regions_sharing_a_reading_order_is_still_caught(finished):
 
     report = qa.check_document(finished)
     assert report["by_code"].get("reading-order-broken") == 1
+
+
+def _codes_for(report, region_id: str) -> set[str]:
+    """Every QA code filed against one region.
+
+    A helper rather than an inline comprehension because the first version of
+    these two tests read a key the findings do not have. The negative test
+    passed anyway \u2014 an empty result never evaluates the key \u2014 and only its
+    positive mirror raised. A `not in` assertion over a set built from a wrong
+    field is green whatever the code does.
+    """
+    return {item["code"] for item in report["findings"]
+            if item["where"] == region_id}
+
+
+def test_strict_qa_does_not_warn_about_a_region_the_reader_kept(finished):
+    """An explicit keep is a review. Reporting `low-confidence-region` on it
+    says "never looked at" about the one region somebody definitely looked at,
+    and `sfx-untranslated` reports the decision itself as an omission."""
+    doc = ir.load_doc(finished)
+    doc["meta"]["sfx_policy"] = "translate"
+    _, region = next(iter(ir.iter_regions(doc)))
+    region.update(kind="sfx", keep=True, locked=True, confidence=0.05,
+                  target_text="", fill="none", typeset={})
+    ir.save_doc(doc, finished)
+
+    codes = _codes_for(qa.check_document(finished, strict=True), region["id"])
+    assert "low-confidence-region" not in codes
+    assert "sfx-untranslated" not in codes
+    assert "untranslated-region" not in codes
+
+
+def test_an_unreviewed_low_confidence_region_still_warns(finished):
+    """The mirror of the test above: without the keep, the warning must fire.
+    A guard that silences everything proves nothing."""
+    doc = ir.load_doc(finished)
+    _, region = next(iter(ir.iter_regions(doc)))
+    region.update(confidence=0.05, locked=False)
+    ir.save_doc(doc, finished)
+
+    assert "low-confidence-region" in _codes_for(
+        qa.check_document(finished, strict=True), region["id"])

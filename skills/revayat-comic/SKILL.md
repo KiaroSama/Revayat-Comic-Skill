@@ -168,7 +168,9 @@ it does not, do them one at a time — the result is the same, only slower.
 >   - `keep: yes` when there **is** text and it should stay in the artwork — a
 >     background shop sign, a logo, an effect you do not want replaced. Do not
 >     reach for `drop` here: it means "no text", and using it makes the terminal
->     census count real lettering as a false detection.
+>     census count real lettering as a false detection. `kind:`, `speaker:` and
+>     `note:` still apply beside it, and a `keep` counts as a review: it locks
+>     the region, so a later `detect` run leaves the decision alone.
 >   - `kind: sfx` / `sign` / `narration` / `thought` when it is misclassified
 >   - `speaker: <short stable name>` — the same name every time, on every page
 > - **Check every crop for two balloons in one box.** This is the commonest way

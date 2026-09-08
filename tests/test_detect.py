@@ -214,3 +214,21 @@ def test_the_lettering_fill_is_the_same_answer_and_not_page_squared():
     assert np.array_equal(fast, reference)
     # What the fill must not do to a balloon is
     # `test_white_balloons_survive_the_lettering_fill`, on a fixture built for it.
+
+
+def test_a_region_the_reader_kept_survives_re_detection(detected):
+    """A `keep: yes` is a review, so it locks the page the same way a
+    translation does. Before it locked, re-running detection renumbered the
+    region and the decision to leave that lettering alone simply vanished."""
+    import worksheet
+
+    doc = ir.load_doc(detected)
+    region = doc["pages"][0]["regions"][0]
+    worksheet._apply(region, {"keep": "yes", "src": "BUMP"},
+                     {"dropped": [], "kept": [], "reclassified": [],
+                      "bad_kind": []})
+    ir.save_doc(doc, detected)
+
+    detect.detect_document(detected)
+    after = ir.load_doc(detected)["pages"][0]["regions"][0]
+    assert after["id"] == region["id"] and after.get("keep") is True
