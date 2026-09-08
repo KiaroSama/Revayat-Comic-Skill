@@ -13,6 +13,27 @@ again the moment a Latin word or a number appears in it.
 
 `revayat-comic` never stores reversed text. `tests/test_typeset.py` asserts it.
 
+## The font is Vazir
+
+Persian in this project is set in **Vazir**. Vazirmatn is the current release of
+that family and the one to install; the older `Vazir-*` files are the same design
+under its first name. Any weight works, including the variable build.
+
+    https://github.com/rastikerdar/vazirmatn/releases
+
+No font ships with this repository — a font file is a separately licensed binary
+and does not belong in a GPL source tree.
+
+**A fallback face announces itself.** Tahoma, Noto Naskh Arabic and Geeza Pro all
+draw correct Persian, so a run on one of them produces pages that look fine and
+are not in the house face. `doctor` reports `"vazir": true|false` and `typeset`
+puts the same flag plus a note in its report, because "readable" is exactly what
+stops anyone from checking. Pass `--font` to name one explicitly.
+
+This was not hypothetical: the preference list once held three Vazirmatn
+filenames, this machine had it installed as `Vazirmatn-VariableFont_wght.ttf`,
+and every page silently set in Tahoma. The list now matches the family.
+
 ## The two shaping paths
 
 Arabic-script text needs two things done to it before it can be drawn:
