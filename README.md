@@ -156,6 +156,25 @@ original's SHA-256 is re-checked at the end.
 | `typeset.py` | shaping, balloon-shaped fitting, rendering |
 | `qa.py` | the gate, including the pixel-preservation proof |
 | `export.py` | CBZ, PDF, folder |
+| `lettering.py` | matching a drawn sound effect's slant, arc and recession |
+| `providers.py` | the optional second-opinion boundary, and its fakes |
+| `context.py` | the bounded chapter context a translator gets |
+| `ocr.py` | the optional OCR stage — off by default |
+
+**Two stages are optional and off by default**, because the model running the
+skill already reads and already sees:
+
+```
+ocr         a second opinion on the source text, when a specialist beats the
+            host (vertical Japanese) or the host has no vision at all
+qa visual   a model's opinions about things a deterministic check cannot judge,
+            advisory only — it can never pass or fail a run
+```
+
+Neither is in the diagram above and neither runs unless you name a provider.
+`providers.py` explains when one is worth the second inference bill and when it
+is not; every role ships a deterministic fake, so the suite tests the boundary
+offline with no credential anywhere.
 
 The preservation guarantee is one line, and it is why an external cleaner is
 safe to plug in:
