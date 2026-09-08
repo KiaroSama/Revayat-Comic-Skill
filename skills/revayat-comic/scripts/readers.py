@@ -271,6 +271,11 @@ def _from_rar(path: Path, pages_dir: Path) -> list[Path]:
 def _from_pdf(path: Path, pages_dir: Path, dpi: int) -> list[Path]:
     pymupdf = ir.require("pymupdf", "pymupdf", "reading comic PDFs")
     written: list[Path] = []
+    # A PDF has no member table to check up front the way an archive does, so
+    # its total is counted as it is written. Without this the page count and the
+    # per-page pixel cap still allow 2000 legitimate-looking pages of 400 MB
+    # scans, which is a terabyte nothing refuses.
+    total = 0
     with pymupdf.open(str(path)) as document:
         _check_page_count(path.name, document.page_count)
         for index, page in enumerate(document):
@@ -295,7 +300,15 @@ def _from_pdf(path: Path, pages_dir: Path, dpi: int) -> list[Path]:
                         f"Re-export it at a real page size, or lower --dpi."
                     )
                 pixmap = page.get_pixmap(dpi=dpi)
-                ir.write_bytes(target, pixmap.tobytes("png"))
+                payload = pixmap.tobytes("png")
+                ir.write_bytes(target, payload)
+            total += len(payload)
+            if total > MAX_TOTAL_BYTES:
+                raise ValueError(
+                    f"{path.name} expands to more than "
+                    f"{MAX_TOTAL_BYTES // 1024 ** 3} GB by page {index + 1}. "
+                    "Split it and import one volume at a time."
+                )
             written.append(target)
     return written
 
@@ -306,6 +319,14 @@ def _single_embedded_image(document, page) -> bytes | None:
     if len(images) != 1:
         return None
     xref = images[0][0]
+    # `get_images(full=True)` reports each image's declared size, and that is
+    # the only chance to see how big one is before `extract_image` decompresses
+    # it into memory. A page that embeds a gigapixel scan renders instead: the
+    # render is bounded by the page rectangle below, so the huge image is simply
+    # downsampled to the page it was drawn on, which is what it looked like
+    # anyway. No new failure, one fewer allocation nothing was guarding.
+    if int(images[0][2]) * int(images[0][3]) > MAX_PAGE_PIXELS:
+        return None
     try:
         rects = page.get_image_rects(xref)
     except Exception:  # pragma: no cover - malformed PDF
