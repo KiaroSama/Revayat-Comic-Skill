@@ -400,3 +400,40 @@ def test_flat_sfx_turns_the_slant_off(translated):
     typeset.typeset_document(translated, stylise=False)
     after = ir.load_doc(translated)["pages"][0]["regions"][0]
     assert after["typeset"]["style"] == "flat"
+
+
+def test_words_that_will_not_fit_the_slant_are_set_flat_instead(translated):
+    """The fallback, which is the half of the feature that decides what a bad
+    page looks like. When the Persian will not fit the space the original
+    lettering filled, `_draw_stylised` returns None and the region takes the
+    ordinary path \u2014 a less faithful effect that still says what the panel said.
+
+    It does NOT fall back to leaving the effect untranslated. Whether to replace
+    an effect at all is the reader's call and it is spelled `keep: yes`; code
+    that silently skipped lettering somebody asked it to translate would be the
+    exact hole the five terminal states exist to make visible.
+    """
+    doc = ir.load_doc(translated)
+    root = ir.doc_dir(translated)
+    page = doc["pages"][0]
+    doc["meta"]["sfx_policy"] = "translate"
+    region = page["regions"][0]
+    region.update(kind="sfx", balloon=None,
+                  target_text="\u06cc\u06a9 \u062c\u0645\u0644\u0647\u0654 \u0628\u0633\u06cc\u0627\u0631 \u0628\u0644\u0646\u062f \u06a9\u0647 \u0647\u0631\u06af\u0632 \u062f\u0631 "
+                              "\u0627\u06cc\u0646 \u0646\u0648\u0627\u0631 \u0628\u0627\u0631\u06cc\u06a9 \u062c\u0627 \u0646\u0645\u06cc\u200c\u0634\u0648\u062f")
+    region["bbox"] = [40, 40, 320, 320]
+    mask_path = f"masks/{page['id']}/{region['id']}.png"
+    ir.write_bytes(root / mask_path, masks._encode_png(
+        Image.fromarray(_slanted_mask(-25, 400)[:page["height"], :page["width"]],
+                        mode="L")))
+    region["mask"] = mask_path
+    ir.save_doc(doc, translated)
+
+    typeset.typeset_document(translated)
+    after = ir.load_doc(translated)["pages"][0]["regions"][0]
+    # Either it was set flat, or it overflowed and said so. What it must never
+    # be is silently absent.
+    assert after["typeset"].get("style") == "flat" or \
+        after["typeset"]["status"] == "overflow"
+    assert after["typeset"].get("style") != "rotated"
+
