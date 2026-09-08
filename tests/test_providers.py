@@ -131,9 +131,22 @@ def test_a_failed_call_still_leaves_a_trace():
 
 
 # --- the guarantee -----------------------------------------------------------
+# These exercise what happens *when the provider runs*, so they force the branch
+# that reaches it. The fixture's balloons are flat paper and a flat balloon is
+# repaired exactly by reading its own colour — so on the unmodified fixture the
+# provider is correctly never called at all, which is its own test above.
+
+def _needs_the_provider(monkeypatch):
+    """Make every region escalate, deterministically."""
+    import clean
+
+    monkeypatch.setattr(clean, "choose_strategy",
+                        lambda *a, **k: ("inpaint", None))
+
+
 
 def test_a_provider_that_rewrites_every_pixel_changes_none_outside_the_mask(
-        translated):
+        translated, monkeypatch):
     """THE test. A generative cleaner is only safe to plug in if a provider
     doing the worst possible thing still cannot reach a pixel the mask does not
     authorise — and the fake here is deliberately hostile: it discards the page
@@ -144,6 +157,7 @@ def test_a_provider_that_rewrites_every_pixel_changes_none_outside_the_mask(
     with `alpha <= mask`, so every pixel outside the mask is the original byte
     by arithmetic the provider does not participate in.
     """
+    _needs_the_provider(monkeypatch)
     doc = ir.load_doc(translated)
     root = ir.doc_dir(translated)
 
@@ -176,6 +190,7 @@ def test_a_failing_image_provider_falls_back_to_the_classical_cleaners(
         translated, mode, monkeypatch):
     """A generative cleaner having a bad day must not be able to stall a
     chapter, and must not leave a half-written page behind."""
+    _needs_the_provider(monkeypatch)
     monkeypatch.setitem(providers._REGISTRY["image_edit"], "broken",
                         lambda: providers.FakeImageEdit(fail=mode))
     report = clean.clean_document(translated, provider="broken")
@@ -184,6 +199,7 @@ def test_a_failing_image_provider_falls_back_to_the_classical_cleaners(
     assert outcomes and "composited" not in outcomes
     # The page was still cleaned, by the path that runs with no provider at all.
     assert report["totals"]["flat"] + report["totals"]["inpaint"] > 0
+    assert report["totals"]["external"] == 0
 
     doc = ir.load_doc(translated)
     root = ir.doc_dir(translated)
@@ -191,7 +207,8 @@ def test_a_failing_image_provider_falls_back_to_the_classical_cleaners(
         assert (root / page["clean"]).exists()
 
 
-def test_the_provider_used_is_recorded_in_the_document(translated):
+def test_the_provider_used_is_recorded_in_the_document(translated, monkeypatch):
+    _needs_the_provider(monkeypatch)
     clean.clean_document(translated, provider="fake-image-edit")
     assert ir.load_doc(translated)["stages"]["clean"]["provider"] ==         "fake-image-edit"
 
@@ -602,6 +619,7 @@ def test_the_clean_cli_actually_invokes_the_provider(translated, monkeypatch):
             seen.append(len(page_png))
             return super().repair(page_png, mask_png, instructions)
 
+    _needs_the_provider(monkeypatch)
     monkeypatch.setitem(providers._REGISTRY["image_edit"], "watched",
                         lambda: Watched())
     assert clean.main(["--doc", str(translated), "--provider", "watched"]) == 0
@@ -643,11 +661,12 @@ def test_a_solid_free_lettering_mask_accepts_a_native_provider(translated):
     assert report["provider"] == "fake-image-edit"
 
 
-def test_what_the_provider_did_survives_in_the_document(translated):
+def test_what_the_provider_did_survives_in_the_document(translated, monkeypatch):
     """The CLI report is gone the moment the terminal scrolls. Reconstructing
     what happened later has to be possible from `comic.json` alone."""
     import clean
 
+    _needs_the_provider(monkeypatch)
     clean.clean_document(translated, provider="fake-image-edit")
     stage = ir.load_doc(translated)["stages"]["clean"]
     assert stage["provider"] == "fake-image-edit"
@@ -759,3 +778,193 @@ def test_the_context_carries_no_invented_state(translated):
     assert filled["context"]["scene"] == "روی پشت‌بام، شب"
     assert all(s.get("register") == "محاوره‌ای"
                for s in filled["context"]["speakers"])
+
+
+# --- laziness, and the two kinds of replacement pixels -----------------------
+
+def _counting_edit(monkeypatch, name="counted"):
+    """A provider that records every call, so "it was not called" is provable."""
+    calls = []
+
+    class Counting(providers.FakeImageEdit):
+        def repair(self, page_png, mask_png, instructions):
+            calls.append(len(page_png))
+            return super().repair(page_png, mask_png, instructions)
+
+    monkeypatch.setitem(providers._REGISTRY["image_edit"], name,
+                        lambda: Counting())
+    return calls
+
+
+def test_an_all_flat_page_never_calls_the_provider(translated, monkeypatch):
+    """The fixture's balloons are flat paper, so every region is repaired
+    exactly by reading its own colour. Asking a hosted image model to redraw the
+    page anyway is money and minutes for pixels that get thrown away."""
+    import clean
+
+    calls = _counting_edit(monkeypatch)
+    report = clean.clean_document(translated, provider="counted")
+
+    assert report["totals"]["inpaint"] == 0, "fixture is not all-flat any more"
+    assert calls == [], f"the provider was called {len(calls)} times"
+    assert report["totals"]["flat"] > 0
+    # And nothing is recorded that did not happen.
+    assert report["provider_calls"] == []
+
+
+def test_the_provider_is_asked_once_per_page_not_once_per_region(
+        translated, monkeypatch):
+    """Lazy, but not repeatedly lazy: the first region that needs
+    reconstruction fetches the page and the rest of that page reuses it.
+
+    The escalation is forced rather than provoked. Trying to make a generated
+    fixture choose `inpaint` by texturing it is a test of the strategy chooser,
+    not of the caching — and it skipped when the texture was not enough.
+    """
+    import clean
+
+    monkeypatch.setattr(clean, "choose_strategy",
+                        lambda *a, **k: ("inpaint", None))
+    calls = _counting_edit(monkeypatch)
+    report = clean.clean_document(translated, provider="counted")
+
+    pages = len(ir.load_doc(translated)["pages"])
+    assert report["totals"]["external"] > pages, "not enough regions to prove it"
+    assert len(calls) == pages,         f"{len(calls)} calls for {pages} pages — the page is not being reused"
+
+
+def test_an_external_page_still_supplies_every_authorised_region(
+        translated, tmp_path):
+    """`--external` is a page a person handed over, having already decided the
+    whole page should be replaced. An escalation gate applied to it silently
+    ignored most of what they supplied — which is what this asserts against, by
+    checking a flat region actually took the external pixels."""
+    import clean
+    from PIL import Image
+
+    doc = ir.load_doc(translated)
+    root = ir.doc_dir(translated)
+    external = tmp_path / "external"
+    external.mkdir()
+    for page in doc["pages"]:
+        Image.new("RGB", (page["width"], page["height"]), (255, 0, 255)).save(
+            external / f"{page['id']}.png")
+
+    clean.clean_document(translated, external=external)
+    after = ir.load_doc(translated)
+
+    flat_or_all = [r for _, r in ir.iter_regions(after)
+                   if r.get("fill") == "external"]
+    assert flat_or_all, "no region took the external pixels"
+
+    page = after["pages"][0]
+    original = np.asarray(ir.load_image(root / page["image"]))
+    cleaned = np.asarray(ir.load_image(root / page["clean"]))
+    allowed = masks.load_mask(root / page["mask"]) > 0
+
+    # The magenta reached the masked pixels ...
+    inside = cleaned[allowed]
+    assert (inside == np.array([255, 0, 255])).all(axis=-1).any()
+    # ... and not one pixel outside them.
+    delta = np.abs(original.astype(int) - cleaned.astype(int)).max(axis=2)
+    delta[allowed] = 0
+    assert delta.max() == 0
+
+
+# --- the wave lifecycle -------------------------------------------------------
+# `context` reads `comic.json`, so it only knows what has been MERGED. Launching
+# every page at once against an unchanged document hands each sub-agent an empty
+# context and gets exactly the drift the context exists to prevent. This is the
+# deterministic proof that translating in waves fixes it — and that translating
+# all at once does not.
+
+def _translate_page(doc_path, page_id, lines):
+    """Stand in for a page sub-agent: write the reply, then merge it."""
+    import worksheet
+
+    root = ir.doc_dir(doc_path)
+    source = root / "worksheets" / f"{page_id}.txt"
+    out, current = [], None
+    for line in source.read_text(encoding="utf-8").splitlines():
+        header = worksheet.HEADER.match(line)
+        if header:
+            current = header.group("id")
+        if line.startswith("src:") and current:
+            out.append("src: やめろ！")
+            continue
+        if line.startswith("fa:") and current:
+            out.append(f"fa: {lines.get(current, 'بس کن!')}")
+            continue
+        out.append(line)
+    (root / "worksheets" / f"{page_id}.done.txt").write_text(
+        "\n".join(out) + "\n", encoding="utf-8")
+    # `merge_document` merges whatever replies exist, so a wave is simply
+    # the replies written so far. `missing_outputs` for the untranslated
+    # pages is expected mid-chapter and is not a failure.
+    worksheet.merge_document(doc_path)
+
+
+def test_page_two_sees_page_one_only_after_it_is_merged(detected):
+    """The lifecycle bug, and the fix, in one test.
+
+    Before the merge, page 2's context is empty of translation memory no matter
+    how correct `context.build` is — the Persian exists only in a `.done.txt`
+    file. After it, page 1's exact source and target are there.
+    """
+    import context
+    import glossary
+    import worksheet
+
+    worksheet.build_document(detected)
+    doc = ir.load_doc(detected)
+    if len(doc["pages"]) < 2:
+        pytest.skip("needs at least two pages")
+    first, second = doc["pages"][0]["id"], doc["pages"][1]["id"]
+
+    # A name settled before any translation starts — chapter 3's decision has to
+    # constrain page 1 of chapter 12, not be rediscovered.
+    doc = ir.load_doc(detected)
+    doc.setdefault("glossary", {}).setdefault("entries", {})["セキレイ"] = {
+        "target": "سکیره‌ای", "locked": True}
+    ir.save_doc(doc, detected)
+
+    before = context.build(ir.load_doc(detected), second)
+    assert before["context"]["translation_memory"] == []
+    # ... but the locked name is already a constraint on the very first page.
+    assert before["constraints"]["glossary"]["セキレイ"] == "سکیره‌ای"
+
+    _translate_page(detected, first, {})
+
+    after = context.build(ir.load_doc(detected), second)
+    memory = after["context"]["translation_memory"]
+    assert memory, "page 1 was merged and page 2 still cannot see it"
+    assert memory[-1]["page"] == first
+    assert memory[-1]["fa"] == "بس کن!"
+    assert memory[-1]["src"] == "やめろ！"
+    assert after["constraints"]["glossary"]["セキレイ"] == "سکیره‌ای"
+
+
+def test_the_wave_context_is_stable_across_a_resume(detected):
+    """Re-running a wave must produce the same context and must not duplicate
+    the work already committed."""
+    import context
+    import worksheet
+
+    worksheet.build_document(detected)
+    doc = ir.load_doc(detected)
+    if len(doc["pages"]) < 2:
+        pytest.skip("needs at least two pages")
+    first, second = doc["pages"][0]["id"], doc["pages"][1]["id"]
+
+    _translate_page(detected, first, {})
+    once = context.build(ir.load_doc(detected), second)
+
+    _translate_page(detected, first, {})          # the same wave, run again
+    twice = context.build(ir.load_doc(detected), second)
+
+    import json
+    assert json.dumps(once, sort_keys=True, ensure_ascii=False) == \
+        json.dumps(twice, sort_keys=True, ensure_ascii=False)
+    assert len(twice["context"]["translation_memory"]) == \
+        len(once["context"]["translation_memory"])
+

@@ -205,8 +205,12 @@ def clean_page(
                     "cleaned page has to be the same size as the original."
                 )
 
-    if supplied is None and provider is not None:
-        supplied = _from_provider(provider, base, page, root, np, report)
+    # The provider is NOT called here. A page whose every region is a flat
+    # balloon needs no reconstruction at all, and paying a hosted image model to
+    # redraw it is money and minutes for pixels that get thrown away. It is
+    # fetched below, once, the first time a region actually needs it.
+    provider_page = None
+    provider_tried = False
 
     counts = {"flat": 0, "inpaint": 0, "external": 0, "keep": 0, "skipped": 0}
     for region in page.get("regions", []):
@@ -260,17 +264,32 @@ def clean_page(
             allowed = interior[y:y + h, x:x + w]
         strategy, colour = choose_strategy(window, mask, np, allowed)
 
-        # Escalation, not replacement. A flat balloon is repaired by reading its
-        # own colour and painting it back — exact, instant, and better than any
-        # model. Handing every region to a provider because one region needs one
-        # would resample artwork that was already perfect, and cost a call per
-        # page to do it. The provider takes over exactly where the deterministic
-        # tiers stop being enough: a region that needs inpainting, or a solid
-        # free-lettering patch, which is what a generative cleaner is for.
-        needs_reconstruction = strategy == "inpaint" or (
-            solid_free and not region.get("balloon"))
-        if supplied is not None and needs_reconstruction:
+        # Two different things that both produce replacement pixels, and they
+        # are deliberately NOT treated the same.
+        #
+        # `--external` is a page a person handed over, having already decided
+        # this whole page should be replaced. Second-guessing that per region
+        # would silently ignore most of what they supplied — which is what an
+        # earlier version of this code did.
+        #
+        # A native provider is the pipeline choosing to spend a model call, so
+        # it escalates: a flat balloon is repaired exactly by reading its own
+        # colour and painting it back, better than any model and instant, and
+        # the provider takes over only where the deterministic tiers stop being
+        # enough — a region needing inpainting, or a solid free-lettering patch.
+        if supplied is not None:
             repaired, strategy, colour = supplied[y:y + h, x:x + w], "external", None
+        elif provider is not None and (strategy == "inpaint" or (
+                solid_free and not region.get("balloon"))):
+            if not provider_tried:
+                provider_tried = True
+                provider_page = _from_provider(provider, base, page, root, np,
+                                               report)
+            if provider_page is None:
+                repaired = _repair(window, mask, strategy, colour, np)
+            else:
+                repaired = provider_page[y:y + h, x:x + w]
+                strategy, colour = "external", None
         else:
             repaired = _repair(window, mask, strategy, colour, np)
 
