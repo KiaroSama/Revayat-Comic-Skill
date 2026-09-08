@@ -29,6 +29,7 @@ from typing import Any
 import falint
 import masks as mask_tools
 import pageir as ir
+import providers
 
 #: Every finding this module can produce. Keeping the list here rather than
 #: scattered through the checks is what lets the skill document each one with an
@@ -52,7 +53,27 @@ CODES = {
     "glossary-drift": "warning",
     "typography": "warning",
     "sfx-untranslated": "warning",
+    # Everything a model said. `advice` is its own severity and always will be:
+    # a model's opinion must not be able to fail a run, and must not be able to
+    # clear one either. See `visual_review` below.
+    "visual-note": "advice",
 }
+
+#: Findings a visual pass may file. Anything else it invents is dropped with a
+#: count, because an open vocabulary would let a model define its own codes and
+#: a reader could never learn what they mean.
+VISUAL_CODES = (
+    "speaker-mismatch",      # the balloon tail points at somebody else
+    "missed-text",           # visible lettering with no region on it
+    "reconstruction-poor",   # the repair inside a mask looks wrong
+    "placement-poor",        # it fits geometrically and reads badly
+    "sfx-style-poor",        # the effect does not match what was drawn
+)
+
+#: How many times a malformed answer is asked for again. Small on purpose: a
+#: model that has returned nonsense twice is not one round away from sense, and
+#: an open-ended retry loop is how an advisory pass becomes the slowest stage.
+VISUAL_RETRIES = 2
 
 #: How much of a region's original ink may still be sitting outside the mask
 #: after cleaning. A stroke that leaned out of the detector's box leaves a rim
@@ -166,6 +187,91 @@ def surviving_ink(original, cleaned, region: dict[str, Any],
 # --------------------------------------------------------------------------- #
 # Document checks
 # --------------------------------------------------------------------------- #
+
+def _normalise(payload: Any, page_id: str) -> tuple[list[dict[str, Any]], int]:
+    """Keep the findings that are shaped like findings; count the rest.
+
+    A provider returns whatever it returns. Everything that reaches the report
+    has a code from `VISUAL_CODES`, a region or a page, and a note — so the
+    output is stable enough for a reader to skim and for a later run to diff.
+    """
+    if not isinstance(payload, list):
+        return [], 1
+    kept: list[dict[str, Any]] = []
+    dropped = 0
+    for item in payload:
+        if not isinstance(item, dict) or item.get("code") not in VISUAL_CODES:
+            dropped += 1
+            continue
+        kept.append({
+            "code": item["code"],
+            "page": page_id,
+            "region": str(item.get("region") or ""),
+            "note": str(item.get("note") or "")[:400],
+        })
+    return kept, dropped
+
+
+def visual_review(doc_path: str | Path, *, provider: str,
+                  timeout: float = providers.DEFAULT_TIMEOUT) -> dict[str, Any]:
+    """An optional second look at what deterministic checks cannot judge.
+
+    **It is advisory and it stays advisory.** Nothing here can fail a run and,
+    more importantly, nothing here can pass one: `check_document` is the gate,
+    this is a reading list. A model that says the page looks fine does not clear
+    an `artwork-modified` error, and a model that says it looks wrong does not
+    create one — it creates a note against a region, which a person reads.
+
+    That asymmetry is the whole design. Deterministic checks answer questions
+    with right answers (did a pixel change outside the mask); this answers
+    questions that do not have them (does this balloon belong to that speaker),
+    and a question without a right answer must not gate a pipeline.
+    """
+    doc_path = Path(doc_path)
+    doc = ir.load_doc(doc_path)
+    root = ir.doc_dir(doc_path)
+    model = providers.get("visual_qa", provider)
+
+    notes: list[dict[str, Any]] = []
+    calls: list[dict[str, Any]] = []
+    malformed = 0
+
+    for page in doc["pages"]:
+        image = root / (page.get("final") or page.get("clean") or page["image"])
+        regions = [
+            {"id": r["id"], "kind": r["kind"], "bbox": r["bbox"],
+             "speaker": r.get("speaker", ""), "fa": r.get("target_text", "")}
+            for r in page.get("regions", []) if not r.get("dropped")
+        ]
+        for attempt in range(VISUAL_RETRIES + 1):
+            result = providers.call(model, "visual_qa", str(image), regions,
+                                    timeout=timeout, name=provider)
+            calls.append({"page": page["id"], **result.as_provenance()})
+            if not result.ok:
+                break
+            kept, bad = _normalise(result.data, page["id"])
+            malformed += bad
+            if kept or not bad:
+                notes.extend(kept)
+                break
+            if attempt == VISUAL_RETRIES:
+                break
+
+    return {
+        "document": str(doc_path),
+        "provider": provider,
+        "advisory": True,
+        "notes": notes,
+        "note_count": len(notes),
+        "malformed": malformed,
+        "calls": calls,
+        "note": (
+            "Advisory only. These are a model's opinions about things a "
+            "deterministic check cannot judge; they never pass or fail a run. "
+            "Run `qa` for the gate."
+        ),
+    }
+
 
 def check_document(doc_path: str | Path, *, strict: bool = False) -> dict[str, Any]:
     doc_path = Path(doc_path)
@@ -453,13 +559,22 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="revayat-comic qa", description="Gate the work before it ships."
     )
-    parser.add_argument("action", choices=["check", "package"])
+    parser.add_argument("action", choices=["check", "package", "visual"])
     parser.add_argument("--doc", required=True)
     parser.add_argument("--file", default=None, help="the exported package")
     parser.add_argument("--strict", action="store_true",
                         help="treat warnings as blocking")
+    parser.add_argument("--provider", default=None,
+                        help="visual-QA provider name, for `visual`")
     args = parser.parse_args(argv)
 
+    if args.action == "visual":
+        if not args.provider:
+            parser.error("visual needs --provider")
+        ir.emit(visual_review(args.doc, provider=args.provider))
+        # Advisory by definition: it reports, it never gates. `check` is the
+        # gate, and a model's opinion must not be able to fail a build.
+        return 0
     if args.action == "check":
         report = check_document(args.doc, strict=args.strict)
     else:

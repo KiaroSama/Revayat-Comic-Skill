@@ -304,3 +304,168 @@ def test_the_ocr_stage_records_which_engine_ran(detected, monkeypatch):
     ocr.read_document(detected, provider=name)
     assert ir.load_doc(detected)["stages"]["ocr"]["provider"] == name
 
+
+# --- the bounded chapter context ---------------------------------------------
+# Consistency across pages is what this exists for. The three properties that
+# make it usable are boundedness, determinism and locked-decisions-win, and all
+# three are cheap to break by accident.
+
+def test_the_context_package_is_bounded(translated):
+    import context
+
+    doc = ir.load_doc(translated)
+    package = context.build(doc, doc["pages"][-1]["id"], budget=120)
+    used = package["budget"]["characters_used"]
+    assert used <= 120
+    assert len(package["context"]["previous_lines"]) <= context.MAX_PREVIOUS
+    assert package["budget"]["truncated"] is True
+
+
+def test_the_context_package_is_deterministic(translated):
+    """A resumed run must continue, not restart. Two builds of the same page
+    from the same document have to be byte-identical, which rules out anything
+    ordered by frequency, time or dict iteration over mutable state."""
+    import json
+
+    import context
+
+    doc = ir.load_doc(translated)
+    page = doc["pages"][-1]["id"]
+    first = json.dumps(context.build(doc, page), sort_keys=True,
+                       ensure_ascii=False)
+    second = json.dumps(context.build(ir.load_doc(translated), page),
+                        sort_keys=True, ensure_ascii=False)
+    assert first == second
+
+
+def test_constraints_and_context_are_kept_apart(translated):
+    """A locked glossary term is a fact; a previous line is information.
+    Flattening the two is how a locked term gets quietly improved."""
+    import context
+
+    doc = ir.load_doc(translated)
+    doc["meta"]["glossary"] = {"セキレイ": {"fa": "سکیره‌ای", "locked": True},
+                               "loose": {"fa": "آزاد"}}
+    package = context.build(doc, doc["pages"][0]["id"])
+    assert "セキレイ" in package["constraints"]["glossary"]
+    assert "loose" not in package["constraints"]["glossary"]
+    assert "one source region becomes exactly one translated region" in \
+        package["constraints"]["rules"]
+    assert "glossary" not in package["context"]
+
+
+def test_the_context_carries_lines_not_summaries(translated):
+    """It never condenses dialogue. Fewer lines, never shorter ones."""
+    import context
+
+    doc = ir.load_doc(translated)
+    package = context.build(doc, doc["pages"][-1]["id"])
+    originals = {(r.get("target_text") or "").strip()
+                 for _, r in ir.iter_regions(doc)}
+    for row in package["context"]["previous_lines"]:
+        assert row["fa"] in originals
+
+
+def test_the_next_page_is_mentioned_but_not_translated(translated):
+    import context
+
+    doc = ir.load_doc(translated)
+    package = context.build(doc, doc["pages"][0]["id"])
+    for row in package["context"]["next_page"]:
+        assert set(row) == {"region", "kind", "speaker"}
+        assert "fa" not in row and "src" not in row
+
+
+def test_the_last_page_has_no_next(translated):
+    import context
+
+    doc = ir.load_doc(translated)
+    assert context.build(doc, doc["pages"][-1]["id"])["context"]["next_page"] == []
+
+
+# --- the optional visual QA pass ---------------------------------------------
+# Advisory, and the tests are about the ways it must NOT behave: it cannot fail
+# a run, it cannot clear one, and it cannot invent its own vocabulary.
+
+def _fake_vqa(monkeypatch, **kwargs):
+    monkeypatch.setitem(providers._REGISTRY["visual_qa"], "eye",
+                        lambda: providers.FakeVisualQA(**kwargs))
+    return "eye"
+
+
+def test_visual_findings_are_structured_and_advisory(finished, monkeypatch):
+    import qa
+
+    name = _fake_vqa(monkeypatch, findings=[
+        {"code": "speaker-mismatch", "region": "p0001r001", "note": "tail points left"},
+    ])
+    report = qa.visual_review(finished, provider=name)
+    assert report["advisory"] is True
+    assert report["note_count"] >= 1
+    finding = report["notes"][0]
+    assert set(finding) == {"code", "page", "region", "note"}
+    assert finding["code"] in qa.VISUAL_CODES
+
+
+def test_a_model_cannot_invent_its_own_codes(finished, monkeypatch):
+    """An open vocabulary would let a model define findings a reader has no way
+    to learn. Anything outside `VISUAL_CODES` is dropped and counted."""
+    import qa
+
+    name = _fake_vqa(monkeypatch, findings=[
+        {"code": "vibes-off", "region": "p0001r001", "note": "hmm"},
+        {"code": "missed-text", "region": "p0001r002", "note": "sign, top left"},
+    ])
+    report = qa.visual_review(finished, provider=name)
+    assert all(n["code"] in qa.VISUAL_CODES for n in report["notes"])
+    assert report["malformed"] >= 1
+
+
+def test_a_malformed_answer_is_retried_a_bounded_number_of_times(finished,
+                                                                monkeypatch):
+    import qa
+
+    name = _fake_vqa(monkeypatch, fail="malformed")
+    report = qa.visual_review(finished, provider=name)
+    per_page = len(ir.load_doc(finished)["pages"])
+    assert len(report["calls"]) <= per_page * (qa.VISUAL_RETRIES + 1)
+    assert report["note_count"] == 0
+
+
+def test_a_visual_pass_cannot_clear_a_deterministic_failure(finished, monkeypatch):
+    """The asymmetry that makes an advisory pass safe. A model saying the page
+    is fine must not clear a real error, so `check` is run separately and its
+    verdict is untouched by anything here."""
+    import numpy as np
+    from PIL import Image
+
+    import qa
+
+    doc = ir.load_doc(finished)
+    root = ir.doc_dir(finished)
+    page = doc["pages"][0]
+    # Sabotage a pixel outside every mask.
+    final = np.asarray(ir.load_image(root / page["final"])).copy()
+    final[2, 2] = (255, 0, 255)
+    Image.fromarray(final).save(root / page["final"])
+
+    gate = qa.check_document(finished)
+    assert gate["ok"] is False
+
+    name = _fake_vqa(monkeypatch, findings=[])
+    advisory = qa.visual_review(finished, provider=name)
+    assert advisory["note_count"] == 0
+    # And the gate still fails: the advisory pass has no verdict at all.
+    assert "ok" not in advisory
+    assert qa.check_document(finished)["ok"] is False
+
+
+def test_a_visual_provider_that_fails_does_not_break_the_pass(finished,
+                                                              monkeypatch):
+    import qa
+
+    name = _fake_vqa(monkeypatch, fail="raise")
+    report = qa.visual_review(finished, provider=name)
+    assert report["note_count"] == 0
+    assert all(call["status"] == "error" for call in report["calls"])
+
