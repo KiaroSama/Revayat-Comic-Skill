@@ -160,6 +160,7 @@ original's SHA-256 is re-checked at the end.
 | `providers.py` | the optional second-opinion boundary, and its fakes |
 | `context.py` | the bounded chapter context a translator gets |
 | `ocr.py` | the optional OCR stage — off by default |
+| `translate.py` | the optional machine translator — off by default |
 
 **Two stages are optional and off by default**, because the model running the
 skill already reads and already sees:
@@ -169,6 +170,11 @@ ocr         a second opinion on the source text, when a specialist beats the
             host (vertical Japanese) or the host has no vision at all
 qa visual   a model's opinions about things a deterministic check cannot judge,
             advisory only — it can never pass or fail a run
+context     the bounded chapter package a translator is given: locked glossary,
+            the previous pages' dialogue, who has spoken. Cheap and offline —
+            paste its JSON into the translating sub-agent's prompt
+translate   machine translation for a run with nobody reading the page. It
+            fills empty regions only and never touches a locked one
 ```
 
 Neither is in the diagram above and neither runs unless you name a provider.

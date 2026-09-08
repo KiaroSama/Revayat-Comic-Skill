@@ -49,6 +49,7 @@ tests/              pytest; fixtures are generated, never committed
 | `providers.py` | the optional second-opinion boundary, and its fakes |
 | `context.py` | the bounded chapter context handed to a translator |
 | `ocr.py` | the optional OCR stage, off by default |
+| `translate.py` | the optional machine translator, off by default |
 
 The last three are **optional and unused by default**. Read the module docstring
 in `providers.py` before adding a provider: the default is none, because the
