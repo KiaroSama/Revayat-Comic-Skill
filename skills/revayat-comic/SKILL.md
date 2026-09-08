@@ -131,8 +131,32 @@ regions did not really move.
 script's.** For each `$WORK/worksheets/pNNNN.txt`, write
 `$WORK/worksheets/pNNNN.done.txt`.
 
-Use a separate sub-agent per page when your runtime has them, 6 at a time. If
-it does not, do them one at a time — the result is the same, only slower.
+**Translate in waves, and merge after each one.** Not all pages at once.
+
+A page's context is the pages before it — the dialogue they settled, the register
+each character was given, the names that were locked. On a fresh chapter none of
+that exists in `comic.json` until a merge puts it there, so launching every page
+at once against an unchanged document hands each sub-agent an *empty* context and
+gets you exactly the drift the context was added to prevent.
+
+```
+wave 1: pages 1-4   →  merge  →  glossary scan  →  lock any new names
+wave 2: pages 5-8   →  merge  →  glossary scan  →  ...
+```
+
+Four pages a wave is a reasonable default: inside a wave the pages cannot see
+each other, and four consecutive pages rarely settle a term the next one needs.
+**Use one page per wave for a chapter that introduces a lot of names**, and note
+that a wave of one is simply sequential translation, which is always correct.
+
+Run `worksheet merge` (Step 6) and `glossary scan` (Step 7) after each wave, not
+once at the end. Both are safe to re-run and both are cheap.
+
+**Lock what you already know before wave 1.** If this is chapter 12 of a series
+you have already translated, copy the locked `glossary.entries` from the previous
+chapter's `comic.json` into this one and run `glossary scan` *before* translating
+anything. Names decided in chapter 3 should constrain page 1 of chapter 12, not
+be rediscovered.
 
 **First, build the page's chapter context.** A sub-agent that sees only its own
 page translates it correctly and inconsistently: a character who was `شما` on
@@ -149,6 +173,11 @@ has spoken, what the next page holds, and any scene or style notes a person
 wrote). Paste that JSON into the sub-agent's prompt. Fields nobody has filled in
 come back empty, and empty is correct — never invent a scene description or a
 character's register to fill the gap.
+
+It reads `comic.json`, so it only knows what has been **merged**. Build it for
+each page at the start of that page's wave, after the previous wave's merge —
+building it earlier gets you a snapshot that is missing exactly the pages it was
+supposed to carry.
 
 **Give the sub-agent exactly this:**
 
@@ -236,14 +265,16 @@ $PY $SKILL_DIR/scripts/revayat-comic.py worksheet merge --doc $WORK/comic.json
 | Field | Meaning | Action |
 | --- | --- | --- |
 | `"ok": true` | everything landed | continue |
-| `missing_outputs` | those pages were never translated | translate them |
+| `missing_outputs` | those pages were never translated | translate them — **expected between waves** for pages whose turn has not come |
 | `missing_regions` | ids were dropped from a worksheet | re-do those pages |
 | `unknown_regions` | ids were invented | re-do those pages |
 | `duplicate_regions` | an id appears twice | re-do that page |
 | `empty_translation` | a region has `src:` but no `fa:` | fill it in, or `drop: yes` |
 | `stale_worksheets` | regions changed after translation | re-do those pages |
 
-Re-running merge after a fix is always safe.
+Re-running merge after a fix is always safe, and it is meant to be run **after
+each translation wave** rather than once at the end — that is what puts a page's
+Persian into `comic.json` where the next wave's `context` can see it.
 
 ## Step 7 — Names and typography
 
@@ -255,6 +286,11 @@ Open `$WORK/comic.json` and, for each entry under `glossary.entries` that has an
 empty `target`, fill in the Persian and set `"locked": true`. This is the one
 hand-edit that *is* expected. Names decided once here stay consistent for the
 rest of the chapter, and every later worksheet prints the table.
+
+Run this **after each wave**, not only at the end. A name locked after wave 1
+constrains waves 2 onward through both the worksheet table and the `context`
+package; a name locked only at the end constrains nothing that has already been
+translated. Carry the locked entries into the next chapter's document too.
 
 Then the mechanical Persian pass — safe to run twice:
 
@@ -291,7 +327,15 @@ $PY $SKILL_DIR/scripts/revayat-comic.py mask  --doc $WORK/comic.json --free-lett
 $PY $SKILL_DIR/scripts/revayat-comic.py clean --doc $WORK/comic.json --external reconstructed/
 ```
 
-Balloons ignore the flag. `clean` **refuses** solid masks without `--external`,
+Balloons ignore the flag. A solid mask has exactly two valid consumers, and
+`clean` **refuses** it without one of them:
+
+```bash
+# an image-edit provider, called for you, only where it is actually needed
+$PY $SKILL_DIR/scripts/revayat-comic.py clean --doc $WORK/comic.json --provider <name>
+```
+
+`clean` refuses solid masks with neither `--provider` nor `--external`,
 because painting one flat or inpainting it blanks a rectangle out of the drawing.
 See `references/artwork-preservation.md`.
 
