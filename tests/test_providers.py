@@ -968,3 +968,37 @@ def test_the_wave_context_is_stable_across_a_resume(detected):
     assert len(twice["context"]["translation_memory"]) == \
         len(once["context"]["translation_memory"])
 
+
+def test_the_documented_default_is_the_order_the_tests_prove():
+    """The workflow the skill *recommends* has to be the one the lifecycle test
+    above actually verifies.
+
+    `test_page_two_sees_page_one_only_after_it_is_merged` proves continuity for
+    a page translated after its predecessor was merged — and only for that. A
+    four-page batch was documented as the default anyway, which meant pages 2, 3
+    and 4 read the same pre-merge snapshot and the guarantee the instructions
+    claimed was true of one page in four.
+
+    Prose is not covered by any other test in this suite, so it drifts from the
+    code silently. This is the cheapest possible guard against that: the default
+    path is sequential, and any batching is marked as the trade it is.
+    """
+    from pathlib import Path
+
+    skill = Path(__file__).resolve().parents[1] / "skills" / "revayat-comic" / "SKILL.md"
+    text = skill.read_text(encoding="utf-8")
+    step5 = text[text.index("## Step 5"):text.index("## Step 6")]
+
+    # The default is stated, and stated first.
+    assert "One page at a time, merged before the next one starts" in step5
+    assert "page 1  \u2192  merge" in step5
+
+    # Nothing recommends translating several pages against one snapshot without
+    # naming the cost.
+    batching = step5.lower()
+    if "four" in batching or "6 at a time" in batching or "in parallel" in batching:
+        assert "speed-for-consistency" in step5 or "cannot see each other" in step5, (
+            "SKILL.md suggests batching pages without saying what it costs")
+        assert "<details>" in step5, (
+            "batching is presented at the same level as the correct path")
+
