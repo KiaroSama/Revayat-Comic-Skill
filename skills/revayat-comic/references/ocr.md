@@ -69,11 +69,61 @@ mocr = MangaOcr()
 text = mocr(Image.open("work/crops/p0001/r001.png"))
 ```
 
-`doctor` reports whether it is installed. Nothing in the pipeline calls it
-automatically; use it to *check* a transcription, not to replace reading the
-page. Where the two disagree, look at the crop and decide — a high-confidence
-OCR result is not automatically right about a stylised balloon, and a reader who
-skimmed is not automatically right either.
+`doctor` reports whether it is installed. Use it to *check* a transcription, not
+to replace reading the page. Where the two disagree, look at the crop and decide
+— a high-confidence OCR result is not automatically right about a stylised
+balloon, and a reader who skimmed is not automatically right either.
+
+## The `ocr` stage
+
+There **is** now an executable path, and it is off by default:
+
+```bash
+revayat-comic.py ocr --doc work/comic.json --provider <name>
+```
+
+It exists for the narrow cases at the top of this file — a host with no vision,
+a script the host reads poorly, or a page worth a second pair of eyes. It is not
+part of the twelve-stage pipeline and nothing runs it for you.
+
+What it will not do is the point of it:
+
+| Situation | What happens |
+| --- | --- |
+| region is empty, engine is confident | the reading is written, with provenance |
+| region is **locked** | the committed value is kept; the engine's reading is recorded as a disagreement and the region goes to review |
+| confidence below `--min-confidence` (0.65) | **nothing is written**; a review note says how unsure it was |
+| engine errors, times out or declines | recorded as a failed call; nothing is written; the run continues |
+
+Every outcome lands in `region["provenance"]` with the provider name, the
+status, the confidence and a timestamp, so a later run can tell a machine's
+guess from a person's decision. That record is what makes the `locked` rule
+enforceable rather than aspirational.
+
+**Resumable.** A locked or already-filled region is compared rather than
+re-read, so interrupting the stage and running it again costs only the calls it
+did not finish.
+
+Writing an adapter is about twenty lines — anything with a
+`read(crop_path, language) -> (text, confidence)` method qualifies:
+
+```python
+import providers
+from manga_ocr import MangaOcr
+
+class MangaOcrProvider:
+    name = "manga-ocr"
+    def __init__(self):
+        self._mocr = MangaOcr()
+    def read(self, crop_path, language):
+        from PIL import Image
+        return self._mocr(Image.open(crop_path)), 0.9
+
+providers.register("ocr", "manga-ocr", MangaOcrProvider)
+```
+
+Register a *factory*, not an instance: nothing should download 400 MB of model
+because a module was imported.
 
 ## Other engines
 
@@ -83,10 +133,11 @@ skimmed is not automatically right either.
 | PaddleOCR | Chinese, Korean, English | general; needs a text detector in front of it |
 | Tesseract | Latin scripts | poor on vertical CJK and on artwork |
 
-None of them are wired in. The region boxes and crops this pipeline produces are
-exactly what such an engine needs as input, so wiring one in is a short script
-against `comic.json` rather than a change to the pipeline — every region carries
-its `bbox`, its `orientation` and its page image path.
+None of them ship with an adapter. The boundary above is what they plug into,
+and the crops this pipeline already renders are exactly what they take as input,
+so an adapter is the twenty lines shown above rather than a change to the
+pipeline — every region carries its `bbox`, its `orientation` and its page image
+path.
 
 ## What never to do
 
