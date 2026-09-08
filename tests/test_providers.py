@@ -96,8 +96,11 @@ def test_a_locked_region_is_never_overwritten():
     result = providers.call(providers.FakeOCR(text="やめる"), "ocr", "x.png", "ja")
     assert providers.apply(region, "source_text", result) == "needs_review"
     assert region["source_text"] == "やめろ！"
-    assert any("fake-ocr read this as" in note for note in region["review"])
-    assert region["provenance"][-1]["outcome"] == "locked"
+    assert any("read this as" in note for note in region["review"])
+    # `disagreed` rather than `locked`: the distinction is whether the provider
+    # said something different, not whether the field happened to be locked.
+    assert region["provenance"][-1]["outcome"] == "disagreed"
+    assert region["provenance"][-1]["read"] == "やめる"
 
 
 def test_a_locked_region_that_agrees_needs_no_review():
@@ -278,25 +281,6 @@ def test_ocr_survives_an_engine_that_hangs(detected, monkeypatch):
         assert region["provenance"][-1]["status"] == "timeout"
 
 
-def test_ocr_is_resumable_and_does_not_re_apply(detected, monkeypatch):
-    """Running it twice must not double-write or lose the first run's work."""
-    import ocr
-
-    name = _fake_ocr(monkeypatch, text="やめろ", confidence=0.9)
-    first = ocr.read_document(detected, provider=name)
-    doc = ir.load_doc(detected)
-    for _, region in ir.iter_regions(doc):
-        region["locked"] = True
-    ir.save_doc(doc, detected)
-
-    second = ocr.read_document(detected, provider=name)
-    assert second["totals"]["locked"] == first["totals"]["applied"]
-    assert second["totals"]["applied"] == 0
-    after = ir.load_doc(detected)
-    for _, region in ir.iter_regions(after):
-        assert region["source_text"] == "やめろ"
-
-
 def test_the_ocr_stage_records_which_engine_ran(detected, monkeypatch):
     import ocr
 
@@ -317,7 +301,7 @@ def test_the_context_package_is_bounded(translated):
     package = context.build(doc, doc["pages"][-1]["id"], budget=120)
     used = package["budget"]["characters_used"]
     assert used <= 120
-    assert len(package["context"]["previous_lines"]) <= context.MAX_PREVIOUS
+    assert len(package["context"]["translation_memory"]) <= context.MAX_PREVIOUS
     assert package["budget"]["truncated"] is True
 
 
@@ -344,11 +328,20 @@ def test_constraints_and_context_are_kept_apart(translated):
     import context
 
     doc = ir.load_doc(translated)
-    doc["meta"]["glossary"] = {"セキレイ": {"fa": "سکیره‌ای", "locked": True},
-                               "loose": {"fa": "آزاد"}}
+    # The REAL schema: `glossary.entries`, with `target`. The first version of
+    # this test invented `meta.glossary` and `context.build` read the same wrong
+    # key, so the two agreed with each other and neither agreed with the
+    # glossary stage. A test that builds its own fixture can validate a schema
+    # that does not exist anywhere else.
+    doc["glossary"] = {"entries": {
+        "セキレイ": {"target": "سکیره‌ای", "locked": True},
+        "loose": {"target": "آزاد"},
+        "empty": {"target": "", "locked": True},
+    }}
     package = context.build(doc, doc["pages"][0]["id"])
-    assert "セキレイ" in package["constraints"]["glossary"]
+    assert package["constraints"]["glossary"]["セキレイ"] == "سکیره‌ای"
     assert "loose" not in package["constraints"]["glossary"]
+    assert "empty" not in package["constraints"]["glossary"]
     assert "one source region becomes exactly one translated region" in \
         package["constraints"]["rules"]
     assert "glossary" not in package["context"]
@@ -362,7 +355,7 @@ def test_the_context_carries_lines_not_summaries(translated):
     package = context.build(doc, doc["pages"][-1]["id"])
     originals = {(r.get("target_text") or "").strip()
                  for _, r in ir.iter_regions(doc)}
-    for row in package["context"]["previous_lines"]:
+    for row in package["context"]["translation_memory"]:
         assert row["fa"] in originals
 
 
@@ -469,3 +462,300 @@ def test_a_visual_provider_that_fails_does_not_break_the_pass(finished,
     assert report["note_count"] == 0
     assert all(call["status"] == "error" for call in report["calls"])
 
+
+# --- resume, disagreement, and the rule underneath both ----------------------
+# A provider fills a hole; it never replaces content. That one rule is what
+# makes the stage resumable, what protects a reader's decision, and what turns a
+# second reading into a disagreement instead of a silent overwrite.
+
+def test_running_ocr_twice_does_not_call_the_engine_again(detected, monkeypatch):
+    """Real resume, with nothing locked by hand. The previous version of this
+    test locked every region between runs, which skipped the path it claimed to
+    cover: the engine was re-called and a differing answer overwrote a good
+    one."""
+    import ocr
+
+    calls = []
+
+    class Counting(providers.FakeOCR):
+        def read(self, crop_path, language):
+            calls.append(crop_path)
+            return super().read(crop_path, language)
+
+    monkeypatch.setitem(providers._REGISTRY["ocr"], "counted",
+                        lambda: Counting(text="やめろ", confidence=0.9))
+
+    first = ocr.read_document(detected, provider="counted")
+    assert first["totals"]["applied"] > 0
+    after_first = len(calls)
+
+    second = ocr.read_document(detected, provider="counted")
+    assert second["totals"]["resumed"] == first["totals"]["applied"]
+    assert second["totals"]["applied"] == 0
+    assert len(calls) == after_first, "the engine was asked again"
+
+
+def test_a_second_run_with_a_different_answer_never_overwrites(detected,
+                                                               monkeypatch):
+    """Nothing is locked here. The first run's own output still has to survive
+    a second run that reads the crop differently."""
+    import ocr
+
+    monkeypatch.setitem(providers._REGISTRY["ocr"], "first",
+                        lambda: providers.FakeOCR(text="やめろ", confidence=0.9))
+    ocr.read_document(detected, provider="first")
+
+    # Force a re-read by clearing what marks the work complete, then answer
+    # differently — the shape of a better model being pointed at the same page.
+    doc = ir.load_doc(detected)
+    for _, region in ir.iter_regions(doc):
+        region["provenance"] = []
+    ir.save_doc(doc, detected)
+
+    monkeypatch.setitem(providers._REGISTRY["ocr"], "second",
+                        lambda: providers.FakeOCR(text="やめる", confidence=0.99))
+    report = ocr.read_document(detected, provider="second")
+
+    assert report["totals"]["applied"] == 0
+    assert report["disagreement_count"] > 0
+    after = ir.load_doc(detected)
+    for _, region in ir.iter_regions(after):
+        assert region["source_text"] == "やめろ", "the earlier reading was replaced"
+        assert region["provenance"][-1]["outcome"] == "disagreed"
+
+
+def test_a_person_can_still_override_what_ocr_wrote(detected, monkeypatch):
+    """Resume must not fossilise a bad reading. Editing the text breaks the
+    match that marked the region complete, so it is looked at again."""
+    import ocr
+
+    monkeypatch.setitem(providers._REGISTRY["ocr"], "engine",
+                        lambda: providers.FakeOCR(text="やめろ", confidence=0.9))
+    ocr.read_document(detected, provider="engine")
+
+    doc = ir.load_doc(detected)
+    _, region = next(iter(ir.iter_regions(doc)))
+    region["source_text"] = "やめろ！"          # a person fixed it
+    region["locked"] = True
+    ir.save_doc(doc, detected)
+
+    assert not providers.completed(
+        ir.load_doc(detected)["pages"][0]["regions"][0], "ocr", "source_text")
+    report = ocr.read_document(detected, provider="engine")
+    after = ir.load_doc(detected)["pages"][0]["regions"][0]
+    assert after["source_text"] == "やめろ！"
+    assert report["totals"]["applied"] == 0
+
+
+def test_a_timed_out_region_is_read_on_the_next_run(detected, monkeypatch):
+    """A failure leaves nothing behind to mark the work done, so resume picks
+    it up rather than skipping it forever."""
+    import ocr
+
+    monkeypatch.setitem(providers._REGISTRY["ocr"], "flaky",
+                        lambda: providers.FakeOCR(fail="hang"))
+    first = ocr.read_document(detected, provider="flaky", timeout=0.2)
+    assert first["totals"]["failed"] > 0
+
+    monkeypatch.setitem(providers._REGISTRY["ocr"], "flaky",
+                        lambda: providers.FakeOCR(text="やめろ", confidence=0.9))
+    second = ocr.read_document(detected, provider="flaky")
+    assert second["totals"]["applied"] == first["totals"]["failed"]
+
+
+def test_a_vision_provider_may_comment_on_a_disagreement_only(detected,
+                                                              monkeypatch):
+    """Optional, advisory, and it never writes. Everything works with it absent
+    — which the rest of this file already proves by not passing one."""
+    import ocr
+
+    doc = ir.load_doc(detected)
+    for _, region in ir.iter_regions(doc):
+        region["source_text"] = "やめろ"
+        region["locked"] = True
+    ir.save_doc(doc, detected)
+
+    monkeypatch.setitem(providers._REGISTRY["ocr"], "engine",
+                        lambda: providers.FakeOCR(text="やめる", confidence=0.99))
+    monkeypatch.setitem(providers._REGISTRY["vision"], "eyes",
+                        lambda: providers.FakeVision(payload="the first is right"))
+    report = ocr.read_document(detected, provider="engine", vision="eyes")
+
+    assert report["disagreement_count"] > 0
+    assert "vision" in report["disagreements"][0]
+    after = ir.load_doc(detected)["pages"][0]["regions"][0]
+    assert after["source_text"] == "やめろ", "vision wrote to the document"
+
+
+# --- the image-edit provider, wired for real ---------------------------------
+
+def test_the_clean_cli_actually_invokes_the_provider(translated, monkeypatch):
+    """`--provider` was parsed and never passed to `clean_document`. Every
+    provider test called the Python function directly, so nothing noticed. A
+    flag is not wired until something runs the *command*."""
+    import clean
+
+    seen = []
+
+    class Watched(providers.FakeImageEdit):
+        def repair(self, page_png, mask_png, instructions):
+            seen.append(len(page_png))
+            return super().repair(page_png, mask_png, instructions)
+
+    monkeypatch.setitem(providers._REGISTRY["image_edit"], "watched",
+                        lambda: Watched())
+    assert clean.main(["--doc", str(translated), "--provider", "watched"]) == 0
+    assert seen, "the CLI never reached the provider"
+
+
+def test_a_provider_does_not_replace_a_flat_fill(translated):
+    """Escalation, not replacement. Reading a flat balloon's own colour and
+    painting it back is exact; handing it to a model resamples artwork that was
+    already right and costs a call to do it."""
+    import clean
+
+    baseline = clean.clean_document(translated)
+    flat_without = baseline["totals"]["flat"]
+    assert flat_without > 0, "the fixture has no flat balloons to protect"
+
+    with_provider = clean.clean_document(translated,
+                                         provider="fake-image-edit")
+    assert with_provider["totals"]["flat"] == flat_without
+    doc = ir.load_doc(translated)
+    fills = {r["fill"] for _, r in ir.iter_regions(doc)}
+    assert "flat" in fills, "every region went to the provider"
+
+
+def test_a_solid_free_lettering_mask_accepts_a_native_provider(translated):
+    """A solid mask is built *for* a generative cleaner. Refusing it unless the
+    pages arrive in a folder rejected the other valid consumer of the same
+    thing."""
+    import clean
+
+    doc = ir.load_doc(translated)
+    doc["meta"]["free_lettering_mask"] = "solid"
+    ir.save_doc(doc, translated)
+
+    with pytest.raises(ValueError, match="--provider"):
+        clean.clean_document(translated)
+
+    report = clean.clean_document(translated, provider="fake-image-edit")
+    assert report["provider"] == "fake-image-edit"
+
+
+def test_what_the_provider_did_survives_in_the_document(translated):
+    """The CLI report is gone the moment the terminal scrolls. Reconstructing
+    what happened later has to be possible from `comic.json` alone."""
+    import clean
+
+    clean.clean_document(translated, provider="fake-image-edit")
+    stage = ir.load_doc(translated)["stages"]["clean"]
+    assert stage["provider"] == "fake-image-edit"
+    assert stage["provider_calls"], "no per-page record was persisted"
+    assert {"page", "outcome"} <= set(stage["provider_calls"][0])
+
+
+
+# --- the optional machine translator -----------------------------------------
+
+def test_translation_fills_only_empty_regions(detected, monkeypatch):
+    """The default is that a person translates. This exists for a run with no
+    reader at all, and it obeys the same rule every provider does: fill a hole,
+    never replace content."""
+    import translate
+
+    doc = ir.load_doc(detected)
+    for _, region in ir.iter_regions(doc):
+        region["source_text"] = "やめろ"
+    _, first = next(iter(ir.iter_regions(doc)))
+    first["target_text"] = "بس کن!"          # already translated by hand
+    first["locked"] = True
+    ir.save_doc(doc, detected)
+
+    monkeypatch.setitem(providers._REGISTRY["translation"], "mt",
+                        lambda: providers.FakeTranslation(prefix="ترجمهٔ "))
+    report = translate.translate_document(detected, provider="mt")
+
+    after = ir.load_doc(detected)
+    _, kept = next(iter(ir.iter_regions(after)))
+    assert kept["target_text"] == "بس کن!", "a human translation was replaced"
+    assert report["totals"]["applied"] > 0
+
+
+def test_translation_receives_the_bounded_context(translated, monkeypatch):
+    """The package is the point: without it a machine translator drifts on
+    names and register exactly the way a page-at-a-time human would."""
+    import translate
+
+    doc = ir.load_doc(translated)
+    doc["glossary"] = {"entries": {"セキレイ": {"target": "سکیره‌ای",
+                                              "locked": True}}}
+    for _, region in ir.iter_regions(doc):
+        region["target_text"] = ""
+        region["locked"] = False
+    ir.save_doc(doc, translated)
+
+    seen = []
+
+    class Recording(providers.FakeTranslation):
+        def translate(self, source, context):
+            seen.append(context)
+            return super().translate(source, context)
+
+    monkeypatch.setitem(providers._REGISTRY["translation"], "mt",
+                        lambda: Recording())
+    translate.translate_document(translated, provider="mt")
+
+    assert seen, "the provider was never called"
+    package = seen[0]
+    assert package["constraints"]["glossary"]["セキレイ"] == "سکیره‌ای"
+    assert "translation_memory" in package["context"]
+    assert package["budget"]["characters"] > 0
+    assert "region" in package and "speaker" in package
+
+
+def test_translation_resumes_without_re_calling(detected, monkeypatch):
+    import translate
+
+    doc = ir.load_doc(detected)
+    for _, region in ir.iter_regions(doc):
+        region["source_text"] = "やめろ"
+    ir.save_doc(doc, detected)
+
+    calls = []
+
+    class Counting(providers.FakeTranslation):
+        def translate(self, source, context):
+            calls.append(source)
+            return super().translate(source, context)
+
+    monkeypatch.setitem(providers._REGISTRY["translation"], "mt",
+                        lambda: Counting())
+    first = translate.translate_document(detected, provider="mt")
+    before = len(calls)
+    second = translate.translate_document(detected, provider="mt")
+
+    assert second["totals"]["resumed"] == first["totals"]["applied"]
+    assert len(calls) == before
+
+
+def test_the_context_carries_no_invented_state(translated):
+    """`scene`, `register` and the rest are absent unless a person wrote them.
+    A guess about how a character talks, handed over as context, reads like
+    knowledge and is worse than silence."""
+    import context
+
+    doc = ir.load_doc(translated)
+    package = context.build(doc, doc["pages"][0]["id"])
+    assert package["context"]["scene"] == ""
+    assert package["context"]["series_notes"] == []
+    for speaker in package["context"]["speakers"]:
+        assert "register" not in speaker and "voice" not in speaker
+
+    doc["meta"]["scene"] = "روی پشت‌بام، شب"
+    doc["meta"]["cast"] = {speaker["speaker"]: {"register": "محاوره‌ای"}
+                           for speaker in package["context"]["speakers"]}
+    filled = context.build(doc, doc["pages"][0]["id"])
+    assert filled["context"]["scene"] == "روی پشت‌بام، شب"
+    assert all(s.get("register") == "محاوره‌ای"
+               for s in filled["context"]["speakers"])

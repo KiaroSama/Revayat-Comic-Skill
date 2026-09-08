@@ -53,12 +53,19 @@ MAX_NEXT = 8
 
 
 def _speakers(doc: dict[str, Any], upto: str) -> list[dict[str, Any]]:
-    """Who has spoken so far, and how often, in first-appearance order.
+    """Who has spoken so far, in first-appearance order, with what is known.
 
     Order is by first appearance rather than by frequency because it is stable:
     a frequency sort reshuffles as a chapter progresses and the same page would
     build two different packages on two runs.
+
+    `register`, `relationships` and `voice` come from `meta.cast` when somebody
+    has written them and are **absent otherwise**. Nothing here infers a
+    character's speech register from their line count: a guess about how a
+    person talks, handed to a translator as context, is worse than silence
+    because it reads like knowledge.
     """
+    cast = (doc.get("meta", {}).get("cast") or {})
     seen: dict[str, dict[str, Any]] = {}
     for page in doc["pages"]:
         for region in page.get("regions", []):
@@ -70,6 +77,15 @@ def _speakers(doc: dict[str, Any], upto: str) -> list[dict[str, Any]]:
             entry["lines"] += 1
         if page["id"] == upto:
             break
+
+    for name, entry in seen.items():
+        known = cast.get(name)
+        if not isinstance(known, dict):
+            continue
+        for field_name in ("register", "voice", "relationships", "pronouns"):
+            value = known.get(field_name)
+            if value:
+                entry[field_name] = value
     return list(seen.values())
 
 
@@ -142,10 +158,18 @@ def build(doc: dict[str, Any], page_id: str, *,
     choice. Flattening the two is how a locked term gets "improved".
     """
     meta = doc.get("meta", {})
+    # The canonical location, which is `glossary.entries` — not `meta.glossary`.
+    # The first version read the wrong key and its test synthesised the wrong
+    # key to match, so both agreed with each other and neither agreed with the
+    # glossary stage. A test that builds its own fixture can validate a schema
+    # that does not exist.
+    entries = (doc.get("glossary") or {}).get("entries") or {}
     glossary = {
-        term: entry for term, entry in (meta.get("glossary") or {}).items()
+        term: entry.get("target", "")
+        for term, entry in entries.items()
         if isinstance(entry, dict) and entry.get("locked")
-    } or (meta.get("glossary") or {})
+        and (entry.get("target") or "").strip()
+    }
 
     previous, truncated = _previous(doc, page_id, budget)
     spent = sum(len(row["fa"]) + len(row["src"]) for row in previous)
@@ -168,20 +192,28 @@ def build(doc: dict[str, Any], page_id: str, *,
         },
         "context": {
             "speakers": _speakers(doc, page_id),
-            "previous_lines": previous,
+            # The chapter's own recent dialogue *is* the translation memory —
+            # source beside target, nearest first. Not a summary of it.
+            "translation_memory": previous,
             "next_page": _next(doc, page_id),
+            # Written by a person, absent when nobody wrote one. An invented
+            # scene description is a confident guess about the story, handed to
+            # a translator as if it were established.
+            "scene": meta.get("scene") or "",
             "style_notes": meta.get("style_notes") or [],
+            "series_notes": meta.get("series_notes") or [],
         },
         "budget": {
             "characters": budget,
             "characters_used": spent,
-            "previous_lines": len(previous),
+            "lines": len(previous),
             "truncated": truncated,
         },
     }
 
 
 def main(argv: list[str] | None = None) -> int:
+    ir.use_utf8_stdio()
     parser = argparse.ArgumentParser(
         description="The bounded chapter context for one page.")
     parser.add_argument("--doc", required=True)

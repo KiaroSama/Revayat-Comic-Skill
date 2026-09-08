@@ -134,6 +134,22 @@ script's.** For each `$WORK/worksheets/pNNNN.txt`, write
 Use a separate sub-agent per page when your runtime has them, 6 at a time. If
 it does not, do them one at a time — the result is the same, only slower.
 
+**First, build the page's chapter context.** A sub-agent that sees only its own
+page translates it correctly and inconsistently: a character who was `شما` on
+page 4 becomes `تو` on page 5, and a settled term drifts. This is bounded,
+deterministic and cheap:
+
+```bash
+$PY $SKILL_DIR/scripts/revayat-comic.py context --doc $WORK/comic.json --page pNNNN
+```
+
+It returns `constraints` (the locked glossary and the rules — not open to
+interpretation) and `context` (the previous pages' dialogue nearest-first, who
+has spoken, what the next page holds, and any scene or style notes a person
+wrote). Paste that JSON into the sub-agent's prompt. Fields nobody has filled in
+come back empty, and empty is correct — never invent a scene description or a
+character's register to fill the gap.
+
 **Give the sub-agent exactly this:**
 
 > Read `$WORK/worksheets/pNNNN.txt` and write `$WORK/worksheets/pNNNN.done.txt`.
@@ -147,6 +163,16 @@ it does not, do them one at a time — the result is the same, only slower.
 >   the region ids.
 >
 > Read `$SKILL_DIR/references/translation-policy.md` first and follow it.
+>
+> The chapter context below is bounded and already filtered. Everything under
+> `constraints` is settled — use the locked glossary terms exactly as written.
+> Everything under `context` is there to keep you consistent with the pages
+> before this one: match the register the same characters were given, and keep
+> a sentence that continues from the previous page reading as one sentence.
+>
+> ```json
+> <paste the context package here>
+> ```
 >
 > Output format — this is mechanical, get it exactly right:
 > - Copy each `@@ <id> …` line **unchanged**, in the same order.
