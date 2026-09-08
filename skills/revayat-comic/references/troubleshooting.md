@@ -116,6 +116,7 @@ instead of after it.
 | `overflow` lists regions | Persian too long for the balloon | shorten the translation |
 | text sits high or low in a balloon | the interior was measured on artwork | check the balloon was detected, not just the text |
 | text over the balloon border | should be impossible; report it | check `qa` for `artwork-modified` |
+| a sound effect set at an angle you did not want | its mask showed the original lettering on a slant, so the Persian matched it | `--flat-sfx` sets every effect horizontally; `typeset.style` in the region says which path ran |
 
 Overflow is not a bug to work around. Lowering `--min-size` until it fits
 produces type nobody can read. See `persian-typesetting.md`.

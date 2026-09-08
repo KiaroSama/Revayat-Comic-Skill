@@ -123,14 +123,26 @@ a *sound*, not a description: `ドドド` is `دادادا` or `غرش`, not
 and leave `fa:` empty rather than inventing one — a wrong SFX replaces artwork
 with a mistake.
 
+An effect drawn **on a slant** is set on the same slant; the angle comes from
+the mask, not from you, and nothing is asked of the worksheet. If a particular
+one should stay drawn anyway, that is `keep: yes` on the region — the decision
+is yours, and it is the only thing that stops the replacement.
+See `sound-effects.md`.
+
 ## Correcting the detector
 
 The detector measured geometry. It did not understand the page, and you do.
-Three fields fix what it got wrong:
+Four fields fix what it got wrong:
 
 - `drop: yes` — there is no text in this region. Screentone, a hand, a panel
   border that happened to look like lettering. Common for low-confidence
   regions; use it freely.
+- `keep: yes` — there **is** text and it stays in the artwork: a shop sign, a
+  logo, an effect you do not want replaced. Not the same claim as `drop`, and
+  reaching for `drop` here makes the terminal census file real lettering as a
+  false detection. `kind:`, `speaker:` and `note:` all still apply beside it,
+  and a `keep` counts as a review — the region locks, so a later `detect` run
+  leaves your decision alone.
 - `kind:` — it called a narration box `speech`, or a shop sign `sfx`.
 - `speaker:` — who is talking. Use a short, stable name and use the *same* one
   on every page. This is what makes a character sound like one person.
