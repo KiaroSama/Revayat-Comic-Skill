@@ -73,11 +73,15 @@ output is *correct* rather than merely present:
   [Vazirmatn](https://github.com/rastikerdar/vazirmatn/releases). No font ships
   with this repository: a font file is a separately licensed binary and does not
   belong in a GPL source tree.
-- **`"raqm"`** — whether Pillow shapes Arabic script itself. `false` on Windows
-  and macOS is **expected**, not a broken install: Pillow's bundled libraqm
-  loads libfribidi at runtime and neither platform ships one, so only the Linux
-  x64 wheel has it. The `arabic-reshaper` + `python-bidi` fallback then runs and
-  the pages are correct to read.
+- **`"raqm"`** — whether Pillow shapes Arabic script itself. **This is not a
+  platform limit.** Pillow ships libraqm in the wheel on every platform; what
+  libraqm loads at run time is **FriBiDi**, and Linux images usually have one
+  while Windows and macOS usually do not. Put a `fribidi.dll` — `fribidi-0.dll`
+  or `libfribidi-0.dll` also work — in a directory on `PATH` (a directory in the
+  DLL search order; beside `python.exe` is not enough) and `raqm` turns true on
+  Windows. On Linux and macOS, install `libfribidi`. Without it the
+  `arabic-reshaper` + `python-bidi` fallback runs and the pages are still
+  correct to read.
 
 ## Use
 
