@@ -380,3 +380,63 @@ def test_dropping_a_region_forgets_what_an_earlier_run_did_to_it(detected):
     assert after["dropped"] is True
     assert after["fill"] == "none"
     assert after["typeset"] == {}
+
+
+# --- keep --------------------------------------------------------------------
+# `keep: yes` says "there IS text here and it stays in the artwork" — a shop
+# sign, a logo, an effect. It is not `drop`, which says there is no text, and
+# the difference is the whole point: `drop` made the terminal census file real
+# lettering as a false detection.
+
+def _apply(block, **region):
+    """Run one worksheet block against one region and hand both back."""
+    target = ir.new_region("p0001r001", [10, 10, 40, 20], kind="sfx")
+    target.update(region)
+    report = {"dropped": [], "kept": [], "reclassified": [], "bad_kind": []}
+    worksheet._apply(target, block, report)
+    return target, report
+
+
+def test_keep_reaches_kept_by_policy_not_dropped():
+    region, report = _apply({"keep": "yes", "src": "BUMP"})
+    assert region["keep"] is True and region["dropped"] is False
+    assert report["kept"] == ["p0001r001"]
+    # Under every policy, including the one that would otherwise translate it.
+    assert ir.region_state(region, "keep") == "kept_by_policy"
+    assert ir.region_state(region, "translate") == "kept_by_policy"
+
+
+def test_keep_is_a_review_so_it_locks_the_region():
+    """A reader who writes `keep: yes` has looked at the region and decided.
+    Without `locked` that decision reads as "never reviewed": `qa` warns
+    `low-confidence-region` on it and the next `detect` run is free to
+    renumber it away."""
+    region, _ = _apply({"keep": "yes", "src": "BUMP"}, confidence=0.2)
+    assert region["locked"] is True
+
+
+def test_keep_still_takes_kind_speaker_and_note():
+    """Found by audit: the keep branch returned before the shared metadata, so
+    a reclassification, a speaker and a note written beside `keep: yes` were
+    all silently discarded."""
+    region, report = _apply(
+        {"keep": "yes", "src": "STOP", "kind": "sign",
+         "speaker": "\u0647\u0627\u0631\u0648\u06a9\u0627", "note": "shop front, left as drawn"},
+    )
+    assert region["kind"] == "sign"
+    assert region["speaker"] == "\u0647\u0627\u0631\u0648\u06a9\u0627"
+    assert region["review"] == ["shop front, left as drawn"]
+    assert report["reclassified"] == ["p0001r001 -> sign"]
+    assert region["keep"] is True
+
+
+def test_keep_clears_a_previous_run_s_fill_and_typeset():
+    region, _ = _apply({"keep": "yes", "src": "BUMP"},
+                       fill="inpaint", typeset={"status": "ok", "size": 20})
+    assert region["fill"] == "none" and region["typeset"] == {}
+
+
+def test_dropping_a_region_that_was_kept_takes_the_keep_off():
+    region, _ = _apply({"fa": "\u062a\u0631\u0633"}, keep=True)
+    assert "keep" not in region
+    assert ir.region_state(region, "translate") == "translated"

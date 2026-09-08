@@ -257,20 +257,18 @@ def _apply(region: dict[str, Any], block: dict[str, str],
         report["dropped"].append(region["id"])
         return True
 
-    if block.get("keep", "").strip().lower() in {"yes", "true", "1"}:
-        # Real lettering the reader wants left in the artwork — a shop sign, a
-        # logo, an effect the policy would otherwise translate. `drop` would
-        # have said "there is no text here", which is a different claim and
-        # made `stats.states` count real text as a false detection.
+    # Real lettering the reader wants left in the artwork — a shop sign, a
+    # logo, an effect the policy would otherwise translate. `drop` would have
+    # said "there is no text here", which is a different claim and made
+    # `stats.states` count real text as a false detection. It still runs
+    # through the shared metadata below: a kept region can be reclassified,
+    # given a speaker and annotated like any other, and returning early here
+    # silently threw all three away.
+    kept = block.get("keep", "").strip().lower() in {"yes", "true", "1"}
+    if kept:
         region["keep"] = True
-        region["dropped"] = False
-        region["source_text"] = block.get("src", "").strip()
-        region["target_text"] = ""
-        region["fill"] = "none"
-        region["typeset"] = {}
-        report["kept"].append(region["id"])
-        return True
-    region.pop("keep", None)
+    else:
+        region.pop("keep", None)
 
     source = block.get("src", "").strip()
     target = block.get("fa", "").strip()
@@ -290,8 +288,21 @@ def _apply(region: dict[str, Any], block: dict[str, str],
         region.setdefault("review", []).append(note)
 
     region["source_text"] = source
-    region["target_text"] = target
     region["dropped"] = False
+
+    if kept:
+        region["target_text"] = ""
+        region["fill"] = "none"
+        region["typeset"] = {}
+        # A keep IS a review — the reader looked at the region and decided.
+        # Without this the decision reads as "never reviewed": `qa` warns
+        # `low-confidence-region` on it and a later `detect` run is free to
+        # renumber it away.
+        region["locked"] = True
+        report["kept"].append(region["id"])
+        return True
+
+    region["target_text"] = target
     # Locking stops a later `detect` run from renumbering a region a human or a
     # reading model has already committed a translation to.
     region["locked"] = bool(source or target)
