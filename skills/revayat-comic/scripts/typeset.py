@@ -45,8 +45,23 @@ ZWNJ = "\u200c"
 #: Note what is *not* here: DejaVu Sans. It is the fallback every Linux box has
 #: and it contains no Arabic script at all, so it would be chosen and then draw
 #: nothing. `_supports_persian` catches that, but not listing it is cheaper.
-PERSIAN_FONTS = (
-    "Vazirmatn-Medium.ttf", "Vazirmatn-Regular.ttf", "Vazirmatn.ttf",
+#: The house face. **Persian in this project is set in Vazir** \u2014 Vazirmatn is
+#: the current release of that family and the one to install; the older `Vazir-*`
+#: files are the same design under its first name. Everything after this tuple is
+#: a fallback that keeps a page readable on a machine that has no Vazir, and
+#: `doctor` says so out loud rather than letting one pass unnoticed.
+VAZIR_FONTS = (
+    "Vazirmatn-Medium.ttf", "Vazirmatn-Regular.ttf", "Vazirmatn-SemiBold.ttf",
+    "Vazirmatn-Bold.ttf", "Vazirmatn-Light.ttf", "Vazirmatn-ExtraBold.ttf",
+    "Vazirmatn-Black.ttf", "Vazirmatn-ExtraLight.ttf", "Vazirmatn-Thin.ttf",
+    "Vazirmatn.ttf", "Vazirmatn[wght].ttf",
+    "Vazirmatn-VariableFont_wght.ttf",
+    "Vazir-Medium.ttf", "Vazir-Regular.ttf", "Vazir-Bold.ttf",
+    "Vazir-Light.ttf", "Vazir-Thin.ttf", "Vazir.ttf",
+    "Vazir-Medium-FD.ttf", "Vazir-FD.ttf",
+)
+
+PERSIAN_FONTS = VAZIR_FONTS + (
     "Sahel.ttf", "Shabnam.ttf", "IRANSansWeb.ttf", "IRANSans.ttf",
     "NotoNaskhArabic-Regular.ttf", "NotoSansArabic-Regular.ttf",
     "NotoNaskhArabic.ttf", "NotoSansArabic.ttf",
@@ -58,6 +73,16 @@ PERSIAN_FONTS = (
     "Arial.ttf", "arial.ttf", "ArialUni.ttf",
     "Nazli.ttf", "Titr.ttf", "Mitra.ttf",
 )
+
+
+def is_vazir(font_path: Path | str) -> bool:
+    """Whether this is the house face rather than a fallback.
+
+    Matched on the family name, not the exact filename: Vazirmatn ships a dozen
+    weights and a variable build, and a user who installed `Vazirmatn-Bold` has
+    the right font.
+    """
+    return Path(font_path).name.lower().startswith("vazir")
 
 FONT_DIRS = {
     "Windows": (r"C:\Windows\Fonts",),
@@ -674,12 +699,25 @@ def typeset_document(
 
     ir.stamp_stage(doc, "typeset", {
         "placed": placed, "font": font_path.name, "shaping": shaper.mode,
+        "vazir": is_vazir(font_path),
     })
     ir.save_doc(doc, doc_path)
+
+    note = None
+    if not is_vazir(font_path):
+        note = (
+            f"Persian in this project is set in Vazir; this run used "
+            f"{font_path.name}. The pages are readable and the type is not the "
+            f"house face. Install Vazirmatn "
+            f"(https://github.com/rastikerdar/vazirmatn/releases) or pass "
+            f"--font /path/to/Vazirmatn-Medium.ttf."
+        )
 
     return {
         "document": str(doc_path),
         "font": str(font_path),
+        "vazir": is_vazir(font_path),
+        "font_note": note,
         "shaping": shaper.mode,
         "placed": placed,
         "overflow": overflow[:30],

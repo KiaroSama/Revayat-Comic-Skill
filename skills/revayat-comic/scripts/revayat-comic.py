@@ -120,6 +120,19 @@ def doctor() -> dict[str, object]:
             font = typeset.find_font()
             persian["font"] = str(font)
             persian["font_draws_persian"] = typeset._supports_persian(font)
+            # Persian in this project is set in Vazir. A fallback face still
+            # produces readable pages, which is exactly why it has to be said
+            # out loud — otherwise a whole volume ships in Tahoma and nobody
+            # notices until it is printed.
+            persian["vazir"] = typeset.is_vazir(font)
+            if not persian["vazir"]:
+                persian["font_note"] = (
+                    f"Persian here is set in Vazir; this machine only has "
+                    f"{font.name}. Pages will be readable but not in the house "
+                    f"face. Install Vazirmatn from "
+                    f"https://github.com/rastikerdar/vazirmatn/releases, or "
+                    f"pass --font to name it explicitly."
+                )
         except ir.MissingDependency as error:
             persian["font"] = None
             persian["font_error"] = str(error)
