@@ -95,6 +95,7 @@ Escalate; do not reach for the expensive tool first.
 | `flat` | the background inside the balloon is uniform | reads the balloon's own colour and paints it back — exact, no model |
 | `inpaint` | there is line art or texture under the lettering | OpenCV Telea propagates the surrounding structure inwards |
 | `external` | you have something better | your image, composited through the mask |
+| `external` via `--provider` | an image model, called for you | its page, composited through the same mask |
 | `keep` | a sound effect under the `keep` or `annotate` policy | nothing; the artwork is the sound effect |
 
 "Uniform" is measured on the pixels *inside the balloon* that are not being
@@ -122,6 +123,27 @@ The images must be the same size as the originals; a different size is refused
 rather than resampled. Only their masked pixels are used, so the preservation
 guarantee still holds — which is the point. A generative cleaner is exactly the
 tool you most want a hard boundary around.
+
+### Or let `clean` make the call for you
+
+```bash
+revayat-comic clean --doc work/comic.json --provider <name>
+```
+
+Same seam, one fewer step: the model's page is returned into exactly the
+variable an `--external` folder fills, so it takes the identical per-region
+composite and participates in none of the arithmetic that bounds it.
+
+**Proved against a hostile provider, not a polite one.** The test fake discards
+the page entirely and returns flat red — every pixel changed — and the assertion
+is that **zero** pixels outside the mask differ from the original, on every page.
+The same test then checks that pixels *inside* the mask did change, because a
+guarantee that passes because nothing happened proves nothing.
+
+Any failure at all — a timeout, an exception, a refusal, a page that came back
+the wrong size — falls back to the classical tiers above and records why. A
+generative cleaner having a bad day cannot stall a chapter or leave a page
+half-written.
 
 ### Give it the whole patch, not the letter shapes
 

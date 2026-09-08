@@ -44,6 +44,16 @@ so. See `persian-typesetting.md` for what differs between the two paths.
 | PDF import is slow | pages are being rendered, not extracted | expected when a page is not one embedded image |
 | an error naming a page count, a GB total, an MB entry or megapixels | the import guards — 2000 pages, 2 GB, 512 MB an entry, 80 MP a page | split a series into volumes, or lower `--dpi` for a PDF whose page rectangle is huge |
 
+## Providers (optional, off by default)
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `no <role> provider named 'x'` | the name is not registered | the error lists what is; a provider is registered by importing the module that calls `providers.register` |
+| `clean` ran but `provider_calls` says `fell_back` | the model errored, timed out, refused or returned the wrong size | the reason is in the same record; the classical cleaners ran instead and the page is complete |
+| `ocr` wrote nothing | every reading was below `--min-confidence` (0.65) | look at the crops; a low-confidence reading is deliberately never written |
+| `ocr` reports disagreements | the engine read a **locked** region differently | not an error: the committed value was kept and the reading recorded beside it |
+| `qa visual` findings look wrong | they are a model's opinions | they are advisory and never gate; `qa check` is the gate |
+
 ## Detection
 
 | Symptom | Fix |

@@ -45,6 +45,17 @@ tests/              pytest; fixtures are generated, never committed
 | `typeset.py` | shaping, balloon-shaped fitting, rendering |
 | `qa.py` | the gate, including the pixel-preservation proof |
 | `export.py` | CBZ, PDF, folder |
+| `lettering.py` | matching a drawn effect's slant, arc and recession |
+| `providers.py` | the optional second-opinion boundary, and its fakes |
+| `context.py` | the bounded chapter context handed to a translator |
+| `ocr.py` | the optional OCR stage, off by default |
+
+The last three are **optional and unused by default**. Read the module docstring
+in `providers.py` before adding a provider: the default is none, because the
+model running this skill already reads and already sees, and the boundary exists
+mainly to hold the invariants — a provider's output never becomes the page, a
+locked region is never overwritten, and failure is a status rather than an
+exception.
 | `revayat-comic.py` | CLI dispatcher and `doctor` |
 
 ## Rules that are load-bearing
