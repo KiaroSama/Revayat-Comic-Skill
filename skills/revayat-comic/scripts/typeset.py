@@ -33,6 +33,7 @@ import sys
 from pathlib import Path
 from typing import Any, Sequence
 
+import lettering
 import masks as mask_tools
 import pageir as ir
 
@@ -90,13 +91,6 @@ def _numpy():
 # --------------------------------------------------------------------------- #
 # Shaping
 # --------------------------------------------------------------------------- #
-
-def _cv2():
-    ir.require("cv2", "opencv-python-headless", "measuring stylised lettering")
-    import cv2
-
-    return cv2
-
 
 def raqm_available() -> bool:
     """Whether Pillow can shape and reorder Persian itself."""
@@ -282,52 +276,6 @@ def interior_mask(clean_rgb, region: dict[str, Any], page_size: tuple[int, int])
         clean_rgb, balloon, region.get("polarity", "light"), (width, height),
         inset=BALLOON_PADDING,
     )
-
-
-#: Below this the ink has no clear long axis and an angle read off it is noise.
-#: Measured as the aspect ratio of the smallest rotated box around the ink: a
-#: word set on a diagonal is long and thin, a compact cluster of overlapping
-#: glyphs is not, and the fit then returns whatever angle it happened to land on.
-SFX_MIN_ELONGATION = 1.7
-
-#: Rotations smaller than this are not worth a resample pass: it costs a blur
-#: and buys nothing anyone can see.
-SFX_MIN_ANGLE = 5.0
-
-
-def sfx_style(mask, np) -> dict[str, float] | None:
-    """How the erased lettering sat on the page, or ``None`` when it sat straight.
-
-    The lettering is gone by the time the typesetter runs — that is what `clean`
-    did — so the slant cannot be measured from the pixels. It comes from the
-    region's own mask, which is the *shape of what was erased*, and
-    `minAreaRect` fits the tightest rotated box around it. That one box carries
-    all three things a stylised redraw needs: the angle is the lettering's
-    baseline, the width and height are the space it filled upright, and the
-    aspect ratio is how far the angle can be trusted.
-
-    ``None`` is the common and correct answer. Most sound effects are set
-    straight, and a straight one belongs on the ordinary flat path.
-    """
-    cv2 = _cv2()
-    points = cv2.findNonZero(mask)
-    if points is None or len(points) < 5:
-        return None
-    (cx, cy), (width, height), angle = cv2.minAreaRect(points)
-    if width < 1.0 or height < 1.0:
-        return None
-    # minAreaRect names the sides in the order it found them, so its "width" is
-    # not reliably the long one and its angle is measured against that side.
-    # Reading along the long axis is what makes the number a baseline instead of
-    # a quarter turn away from one.
-    if width < height:
-        width, height = height, width
-        angle += 90.0
-    angle = (angle + 90.0) % 180.0 - 90.0
-    if width / height < SFX_MIN_ELONGATION or abs(angle) < SFX_MIN_ANGLE:
-        return None
-    return {"cx": float(cx), "cy": float(cy), "width": float(width),
-            "height": float(height), "angle": float(angle)}
 
 
 def _row_widths(mask, np) -> tuple[list[int], list[int]]:
@@ -540,60 +488,6 @@ def _text_colour(region: dict[str, Any]) -> tuple[tuple[int, int, int], tuple[in
     return (18, 18, 18), None
 
 
-def _draw_stylised(canvas, text: str, style: dict[str, float], shaper: Shaper,
-                   font_path: Path, fill, stroke, np,
-                   *, max_size: int, min_size: int) -> list[int] | None:
-    """Set the Persian at the slant the original lettering had.
-
-    Rendered upright on its own transparent layer and only then rotated, so the
-    glyphs are shaped, hinted and stroked exactly as they are everywhere else on
-    the page and nothing but the finished bitmap is turned. Pillow cannot rotate
-    a text call, and rotating the page is not an option.
-
-    The sign is measured rather than assumed: `sfx_style` returns the negative
-    of the rotation that produced the shape, so ``-angle`` puts it back. A test
-    pins that round trip, because a silently mirrored angle looks deliberate and
-    is wrong on every page.
-
-    Returns the box it painted, or ``None`` when the words will not fit the
-    space the original lettering filled. The caller then sets them flat: a less
-    faithful effect that still says what the panel said, which is the trade this
-    project makes everywhere else too.
-    """
-    Image, ImageDraw, ImageFont = _pil()
-    width = max(1, int(round(style["width"])))
-    height = max(1, int(round(style["height"])))
-
-    layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    layer_draw = ImageDraw.Draw(layer)
-    fitted = fit_region(
-        layer_draw, text, np.full((height, width), 255, np.uint8), np, shaper,
-        font_path, max_size=max_size, min_size=min_size,
-    )
-    if fitted is None:
-        return None
-
-    font = ImageFont.truetype(str(font_path), fitted["size"],
-                              layout_engine=shaper.layout)
-    options: dict[str, Any] = {"font": font, "fill": fill, "anchor": "mm",
-                               **shaper.draw_kwargs()}
-    if stroke:
-        # A sound effect sits on artwork rather than inside a balloon, so the
-        # outline is not decoration here — it is the only thing keeping the
-        # word legible over whatever it was drawn across.
-        options["stroke_width"] = max(2, fitted["size"] // 8)
-        options["stroke_fill"] = stroke
-    for line in fitted["lines"]:
-        layer_draw.text((line["x"], line["y"]),
-                        shaper.prepare(line["text"]), **options)
-
-    turned = layer.rotate(-style["angle"], resample=Image.BICUBIC, expand=True)
-    left = int(round(style["cx"] - turned.width / 2.0))
-    top = int(round(style["cy"] - turned.height / 2.0))
-    canvas.paste(turned, (left, top), turned)
-    return [left, top, left + turned.width, top + turned.height]
-
-
 def typeset_page(
     doc_path: Path,
     page: dict[str, Any],
@@ -622,6 +516,7 @@ def typeset_page(
 
     placed = 0
     overflow: list[str] = []
+    unreliable: list[str] = []
     skipped = 0
     for region in page.get("regions", []):
         text = (region.get("target_text") or "").strip()
@@ -635,30 +530,46 @@ def typeset_page(
 
         fill, stroke = _text_colour(region)
         painted: list[list[int]] = []
-        record: dict[str, Any]
+        record: dict[str, Any] | None = None
 
-        # A sound effect drawn on a slant, set on the same slant. Only ever
-        # attempted where the mask says there was a slant to match; a straight
-        # effect, a balloon, or a region with no mask of its own all take the
-        # flat path below, which is the one that has always run.
-        style = None
+        # Lettering that was drawn rather than typed: slant, arc and recession
+        # measured from the mask `clean` erased, and matched only where the
+        # measurement holds up. A balloon, a straight effect, or a region with
+        # no mask of its own all take the flat path below.
+        drawn = None
         if stylise and region["kind"] == "sfx" and region.get("mask"):
-            style = sfx_style(mask_tools.load_mask(root / region["mask"]), np)
-        if style is not None:
-            box = _draw_stylised(canvas, text, style, shaper, font_path, fill,
-                                 stroke, np, max_size=max_size,
-                                 min_size=min_size)
-            if box is None:
-                style = None
-            else:
-                painted.append(box)
-                record = {
-                    "status": "ok", "style": "rotated",
-                    "angle": round(style["angle"], 1),
-                    "font": font_path.name, "shaping": shaper.mode,
-                }
+            drawn = lettering.measure(
+                mask_tools.load_mask(root / region["mask"]), np,
+                origin=region.get("mask_box", (0, 0))[:2],
+            )
 
-        if style is None:
+        if drawn is not None and drawn["verdict"] == "unreliable":
+            # The geometry could not be read, so the effect stays drawn and a
+            # person is asked to look. Stamping type that is confidently wrong
+            # about its own angle over hand lettering is worse than leaving the
+            # original — the judgement `sound-effects.md` has always made.
+            #
+            # This is the code declining to replace, never overriding a reader:
+            # an explicit `keep: yes` was already honoured further up the loop.
+            region["fill"] = "none"
+            region["typeset"] = {"status": "unreliable",
+                                 "style": "unreliable",
+                                 "reason": drawn["reason"]}
+            region.setdefault("review", []).append(
+                f"sound effect left as drawn: {drawn['reason']}")
+            unreliable.append(region["id"])
+            skipped += 1
+            continue
+
+        if drawn is not None and drawn["verdict"] != "flat":
+            done = lettering.render(
+                canvas, text, drawn, shaper, font_path, fill, stroke, np,
+                fit_region, _pil(), max_size=max_size, min_size=min_size)
+            if done is not None:
+                painted.append(done.pop("box"))
+                record = {"status": "ok", **done}
+
+        if record is None:
             area = interior_mask(clean_rgb, region, size)
             fitted = fit_region(
                 draw, text, area, np, shaper, font_path,
@@ -715,7 +626,8 @@ def typeset_page(
                    mask_tools._encode_png(Image.fromarray(writable, mode="L")))
     page["writable"] = writable_path
 
-    return {"placed": placed, "overflow": overflow, "skipped": skipped}
+    return {"placed": placed, "overflow": overflow, "skipped": skipped,
+            "unreliable": unreliable}
 
 
 def typeset_document(
@@ -743,6 +655,7 @@ def typeset_document(
 
     placed = 0
     overflow: list[str] = []
+    unreliable: list[str] = []
     per_page: list[dict[str, Any]] = []
     for page in doc["pages"]:
         if pages and page["id"] not in pages:
@@ -756,6 +669,7 @@ def typeset_document(
         )
         placed += result["placed"]
         overflow += result["overflow"]
+        unreliable += result["unreliable"]
         per_page.append({"page": page["id"], **result})
 
     ir.stamp_stage(doc, "typeset", {
@@ -770,6 +684,8 @@ def typeset_document(
         "placed": placed,
         "overflow": overflow[:30],
         "overflow_count": len(overflow),
+        "unreliable": unreliable[:30],
+        "unreliable_count": len(unreliable),
         "pages": per_page,
         "warning": None if shaper.raqm else (
             "Pillow has no RAQM here, so Persian was shaped and reordered by "

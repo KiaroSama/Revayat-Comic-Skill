@@ -313,7 +313,13 @@ def region_state(region: dict[str, Any], sfx_policy: str = "keep") -> str:
         return "dropped_false_detection"
 
     typeset = region.get("typeset") or {}
-    if typeset.get("status") == "overflow":
+    if typeset.get("status") in {"overflow", "unreliable"}:
+        # Two different ways of not being placed, and both need a person.
+        # `overflow` is "the words do not fit"; `unreliable` is the typesetter
+        # declining to match lettering whose geometry it could not read, which
+        # leaves the artwork drawn and the region carrying its target text.
+        # Without this the region would report as `translated` on the strength
+        # of text that was never put on the page.
         return "needs_review"
 
     if (region.get("target_text") or "").strip():
