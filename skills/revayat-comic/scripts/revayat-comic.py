@@ -40,6 +40,8 @@ STAGES = {
     # Optional and off by default: the reading model is the transcriber. See
     # references/ocr.md before turning it on.
     "ocr": "ocr",
+    "context": "context",
+    "translate": "translate",
     "glossary": "glossary",
     "falint": "falint",
     "clean": "clean",
