@@ -241,12 +241,32 @@ def call(provider, role: str, *args, timeout: float = DEFAULT_TIMEOUT,
 # Writing a result back into the IR
 # --------------------------------------------------------------------------- #
 
+def completed(region: dict[str, Any], role: str, field_name: str) -> bool:
+    """Whether a provider already finished this region's `role` work.
+
+    Resume rests on this. A region whose current value is exactly what a
+    successful provider call wrote is *done* — re-reading it costs an API call
+    to be told the same thing, and risks a different answer overwriting a good
+    one. A value a person changed afterwards no longer matches, so the region
+    correctly stops looking complete and gets looked at again.
+    """
+    existing = (region.get(field_name) or "").strip()
+    if not existing:
+        return False
+    for record in reversed(region.get("provenance", []) or []):
+        if record.get("role") != role:
+            continue
+        if record.get("outcome") == "applied" and record.get("wrote") == existing:
+            return True
+    return False
+
+
 def apply(region: dict[str, Any], field_name: str, result: Result, *,
           min_confidence: float = 0.0) -> str:
     """Put a provider's answer into one region, or explain why it was not.
 
-    Returns what happened, one of ``applied``, ``locked``, ``failed`` or
-    ``needs_review``. The two rules that matter:
+    Returns what happened: ``applied``, ``unchanged``, ``locked``, ``failed`` or
+    ``needs_review``. The rules that matter:
 
     **A locked region is never overwritten.** `locked` means a person or the
     reading model committed to that value. A provider is a second opinion, and a
@@ -267,16 +287,30 @@ def apply(region: dict[str, Any], field_name: str, result: Result, *,
     if text is not None:
         text = text.strip()
 
-    if region.get("locked"):
-        provenance.append({**result.as_provenance(), "outcome": "locked"})
-        existing = (region.get(field_name) or "").strip()
+    existing = (region.get(field_name) or "").strip()
+
+    # **A provider fills a hole; it never replaces content.** That single rule
+    # covers locking, resume and disagreement at once. A value already in the
+    # field came from somewhere — a person, the reading model, or an earlier
+    # provider run — and a second opinion does not get to overwrite any of
+    # those. It gets recorded so somebody can compare.
+    #
+    # Without this, rerunning the stage silently replaced its own previous
+    # answer, which is the opposite of resumable: two runs of the same command
+    # could leave two different documents.
+    if existing:
+        outcome = "locked" if region.get("locked") else "unchanged"
         if text and text != existing:
-            region.setdefault("review", []).append(
-                f"{result.provider} read this as {text!r}; the locked value "
-                f"{existing!r} was kept"
-            )
+            provenance.append({**result.as_provenance(),
+                               "outcome": "disagreed", "read": text})
+            held = "locked" if region.get("locked") else "existing"
+            note = (f"{result.provider} read this as {text!r}; the {held} "
+                    f"value {existing!r} was kept")
+            if note not in region.get("review", []):
+                region.setdefault("review", []).append(note)
             return "needs_review"
-        return "locked"
+        provenance.append({**result.as_provenance(), "outcome": outcome})
+        return outcome
 
     if result.confidence is not None and result.confidence < min_confidence:
         provenance.append({**result.as_provenance(), "outcome": "low_confidence"})
@@ -291,7 +325,10 @@ def apply(region: dict[str, Any], field_name: str, result: Result, *,
         return "failed"
 
     region[field_name] = text
-    provenance.append({**result.as_provenance(), "outcome": "applied"})
+    # The text is recorded beside the outcome so a later run can tell its own
+    # earlier work from a human's, which is what makes resume meaningful.
+    provenance.append({**result.as_provenance(), "outcome": "applied",
+                       "wrote": text})
     return "applied"
 
 
@@ -381,10 +418,15 @@ class FakeVisualQA:
 @dataclass
 class FakeVision:
     name: str = "fake-vision"
-    payload: dict[str, Any] = field(default_factory=dict)
+    payload: Any = None
+    fail: str = ""
 
     def describe(self, image_path: str, regions: list[dict[str, Any]]):
-        return dict(self.payload)
+        if self.fail == "raise":
+            raise RuntimeError("the fake was told to fail")
+        # Whatever it returns, unchanged. A vision answer is as often a sentence
+        # as a structure, and coercing it to a dict broke on the common case.
+        return self.payload
 
 
 register("ocr", "fake-ocr", FakeOCR)

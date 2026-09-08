@@ -64,6 +64,7 @@ def read_document(
     pages: Sequence[str] | None = None,
     min_confidence: float = MIN_CONFIDENCE,
     timeout: float = providers.DEFAULT_TIMEOUT,
+    vision: str | None = None,
 ) -> dict[str, Any]:
     """Read every region that does not already have a committed transcription.
 
@@ -77,7 +78,9 @@ def read_document(
     engine = providers.get("ocr", provider)
     language = doc["meta"].get("source_language", "ja")
 
-    counts = {"applied": 0, "locked": 0, "needs_review": 0, "failed": 0}
+    eyes = providers.get("vision", vision)
+    counts = {"applied": 0, "unchanged": 0, "locked": 0, "needs_review": 0,
+              "failed": 0, "resumed": 0}
     disagreements: list[dict[str, str]] = []
     per_page: list[dict[str, Any]] = []
 
@@ -91,6 +94,15 @@ def read_document(
         page_counts = dict.fromkeys(counts, 0)
 
         for region in regions:
+            # Real resume: work this provider already finished is not re-read.
+            # The previous version called the engine again and let a differing
+            # answer overwrite a good one, which made two runs of the same
+            # command produce two different documents.
+            if providers.completed(region, "ocr", "source_text"):
+                counts["resumed"] += 1
+                page_counts["resumed"] += 1
+                continue
+
             crop = _crop_path(root, page, region, page_image)
             result = providers.call(engine, "ocr", str(crop), language,
                                     timeout=timeout, name=provider)
@@ -100,11 +112,27 @@ def read_document(
             counts[outcome] += 1
             page_counts[outcome] += 1
             if outcome == "needs_review" and result.ok and before:
-                disagreements.append({
+                row = {
                     "region": region["id"],
                     "kept": before,
                     "read": str(result.data).strip(),
-                })
+                }
+                # Optional third opinion. A vision model looking at the crop can
+                # sometimes settle which reading is right — but it is advisory,
+                # it never writes, and everything above works with `eyes` None.
+                if eyes is not None:
+                    verdict = providers.call(
+                        eyes, "vision", str(crop),
+                        [{"id": region["id"], "kept": before,
+                          "read": row["read"]}],
+                        timeout=timeout, name=vision)
+                    if verdict.ok:
+                        row["vision"] = str(verdict.data)[:300]
+                        region.setdefault("review", []).append(
+                            f"{vision} on the disagreement: {row['vision']}")
+                    region.setdefault("provenance", []).append(
+                        verdict.as_provenance())
+                disagreements.append(row)
 
         per_page.append({"page": page["id"], **page_counts})
 
@@ -127,6 +155,7 @@ def read_document(
 
 
 def main(argv: list[str] | None = None) -> int:
+    ir.use_utf8_stdio()
     parser = argparse.ArgumentParser(
         description="Optional OCR second opinion. Off by default; the reading "
                     "model is the primary transcriber.")
@@ -136,6 +165,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pages", default="")
     parser.add_argument("--min-confidence", type=float, default=MIN_CONFIDENCE)
     parser.add_argument("--timeout", type=float, default=providers.DEFAULT_TIMEOUT)
+    parser.add_argument("--vision", default=None,
+                        help="optional vision provider, asked only to comment "
+                             "on a disagreement; it never writes")
     args = parser.parse_args(argv)
 
     ir.emit(read_document(
@@ -144,6 +176,7 @@ def main(argv: list[str] | None = None) -> int:
         pages=[p for p in args.pages.split(",") if p] or None,
         min_confidence=args.min_confidence,
         timeout=args.timeout,
+        vision=args.vision,
     ))
     return 0
 
