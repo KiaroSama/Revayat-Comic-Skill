@@ -5,6 +5,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from PIL import Image
+
+import masks
 import pageir as ir
 import typeset
 
@@ -311,3 +314,89 @@ def test_the_fallback_path_produces_a_page_too(translated):
     assert report["shaping"] == "reshaper"
     assert report["placed"] > 0
     assert "Windows and macOS" in report["warning"]
+
+
+# --- stylised sound effects --------------------------------------------------
+# A sound effect is drawn on a slant more often than not. The lettering is gone
+# by the time the typesetter runs, so the slant is read off the region's mask —
+# the shape of what `clean` erased — and the Persian is set to match.
+
+def _slanted_mask(angle: float, size: int = 400):
+    """A long thin bar rotated by `angle`, standing in for erased lettering."""
+    from PIL import Image
+
+    canvas = np.zeros((size, size), np.uint8)
+    canvas[190:210, 60:340] = 255
+    return np.asarray(Image.fromarray(canvas).rotate(angle,
+                                                     resample=Image.BILINEAR))
+
+
+@pytest.mark.parametrize("drawn", [-35, -20, 20, 35, 60])
+def test_a_measured_slant_round_trips_through_the_renderer(drawn):
+    """`sfx_style` reports the negative of the rotation that made the shape, so
+    `_draw_stylised` turns by `-angle` to put it back. The sign was measured,
+    not read out of OpenCV's documentation, and it is pinned here because a
+    mirrored angle looks deliberate on the page and is wrong on every one."""
+    style = typeset.sfx_style(_slanted_mask(drawn), np)
+    assert style is not None
+    assert style["angle"] == pytest.approx(-drawn, abs=1.0)
+    # And the box is the space the lettering filled upright, not its bounds.
+    assert style["width"] == pytest.approx(281, abs=3)
+    assert style["height"] == pytest.approx(21, abs=3)
+
+
+def test_lettering_set_straight_reports_no_slant():
+    """The common case, and the one that must stay on the flat path."""
+    assert typeset.sfx_style(_slanted_mask(0), np) is None
+
+
+def test_a_blob_of_glyphs_is_refused_however_it_is_turned():
+    """minAreaRect always returns an angle. On a shape with no long axis that
+    angle is whichever way the fit happened to land, so the elongation gate is
+    what makes the measurement mean anything."""
+    blob = np.zeros((200, 200), np.uint8)
+    blob[70:130, 60:140] = 255           # 80 x 60, nowhere near elongated
+    assert typeset.sfx_style(blob, np) is None
+
+
+def test_a_slanted_sound_effect_is_set_on_its_slant(translated, tmp_path):
+    doc = ir.load_doc(translated)
+    root = ir.doc_dir(translated)
+    page = doc["pages"][0]
+    doc["meta"]["sfx_policy"] = "translate"
+    region = page["regions"][0]
+    region.update(kind="sfx", target_text="\u0628\u0648\u0645", balloon=None)
+    region["bbox"] = [60, 60, 280, 280]
+    mask_path = f"masks/{page['id']}/{region['id']}.png"
+    ir.write_bytes(root / mask_path, masks._encode_png(
+        Image.fromarray(_slanted_mask(-25, 400)[:page["height"], :page["width"]],
+                        mode="L")))
+    region["mask"] = mask_path
+    ir.save_doc(doc, translated)
+
+    typeset.typeset_document(translated)
+    after = ir.load_doc(translated)["pages"][0]["regions"][0]
+    assert after["typeset"]["style"] == "rotated"
+    assert after["typeset"]["angle"] == pytest.approx(25, abs=2)
+
+
+def test_flat_sfx_turns_the_slant_off(translated):
+    """The escape hatch, and the proof that the rotated path is the one being
+    taken above rather than the flat one wearing a different label."""
+    doc = ir.load_doc(translated)
+    root = ir.doc_dir(translated)
+    page = doc["pages"][0]
+    doc["meta"]["sfx_policy"] = "translate"
+    region = page["regions"][0]
+    region.update(kind="sfx", target_text="\u0628\u0648\u0645", balloon=None)
+    region["bbox"] = [60, 60, 280, 280]
+    mask_path = f"masks/{page['id']}/{region['id']}.png"
+    ir.write_bytes(root / mask_path, masks._encode_png(
+        Image.fromarray(_slanted_mask(-25, 400)[:page["height"], :page["width"]],
+                        mode="L")))
+    region["mask"] = mask_path
+    ir.save_doc(doc, translated)
+
+    typeset.typeset_document(translated, stylise=False)
+    after = ir.load_doc(translated)["pages"][0]["regions"][0]
+    assert after["typeset"]["style"] == "flat"
