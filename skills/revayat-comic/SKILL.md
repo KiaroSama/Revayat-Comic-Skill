@@ -198,6 +198,11 @@ immediately before translating that page, after the previous page's merge —
 building it earlier gets you a snapshot missing exactly the pages it was supposed
 to carry.
 
+**This is enforced, not just advised.** If an earlier page has a `.done.txt`
+that has not been merged, `context` refuses and tells you to merge first.
+`--allow-unmerged` overrides it for the deliberate case and records which pages
+are missing from the package.
+
 **Give the sub-agent exactly this:**
 
 > Read `$WORK/worksheets/pNNNN.txt` and write `$WORK/worksheets/pNNNN.done.txt`.

@@ -148,6 +148,34 @@ def _next(doc: dict[str, Any], page_id: str) -> list[dict[str, str]]:
     return out
 
 
+def unmerged_before(doc_path: Path, doc: dict[str, Any],
+                    page_id: str) -> list[str]:
+    """Earlier pages whose reply is written but not merged into the document.
+
+    This is the whole failure mode of the workflow, made checkable. A page's
+    context is the pages before it, and `build` reads `comic.json` — so a reply
+    sitting in `pNNNN.done.txt` is invisible to it. Translating page 5 while
+    page 4's Persian is still only a file on disk produces a context that is
+    silently missing exactly the page it most needed.
+
+    Returns the offending page ids, nearest first. Empty is the good case.
+    """
+    folder = doc_path.parent / "worksheets"
+    if not folder.is_dir():
+        return []
+    behind: list[str] = []
+    for page in doc["pages"][:_index(doc, page_id)]:
+        if not (folder / f"{page['id']}.done.txt").is_file():
+            continue
+        translated = any(
+            (region.get("target_text") or "").strip()
+            for region in page.get("regions", []) if not region.get("dropped")
+        )
+        if not translated:
+            behind.append(page["id"])
+    return list(reversed(behind))
+
+
 def build(doc: dict[str, Any], page_id: str, *,
           budget: int = CONTEXT_BUDGET) -> dict[str, Any]:
     """The bounded package for one page.
@@ -219,10 +247,36 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--doc", required=True)
     parser.add_argument("--page", required=True)
     parser.add_argument("--budget", type=int, default=CONTEXT_BUDGET)
+    parser.add_argument("--allow-unmerged", action="store_true",
+                        help="build the context even though earlier pages are "
+                             "translated but not merged; they will be missing "
+                             "from it")
     args = parser.parse_args(argv)
 
-    doc = ir.load_doc(Path(args.doc))
-    ir.emit(build(doc, args.page, budget=args.budget))
+    doc_path = Path(args.doc)
+    doc = ir.load_doc(doc_path)
+
+    # The lock. Building a context while an earlier page's reply is unmerged is
+    # the one mistake this whole package exists to prevent, and it is silent:
+    # the JSON comes out well-formed and missing the pages that mattered. Refuse
+    # by default; `--allow-unmerged` is there for the deliberate case, and says
+    # what it costs.
+    behind = unmerged_before(doc_path, doc, args.page)
+    if behind and not args.allow_unmerged:
+        raise SystemExit(
+            f"{', '.join(behind)} have been translated but not merged, so this "
+            f"context would be missing them.\n"
+            f"Run:  revayat-comic worksheet merge --doc {args.doc}\n"
+            f"then build this context again. Translating a page before the "
+            f"pages ahead of it are merged is what makes a chapter drift.\n"
+            f"Pass --allow-unmerged if you meant to translate these together "
+            f"and accept that they cannot see each other."
+        )
+
+    package = build(doc, args.page, budget=args.budget)
+    if behind:
+        package["budget"]["unmerged_pages"] = behind
+    ir.emit(package)
     return 0
 
 
