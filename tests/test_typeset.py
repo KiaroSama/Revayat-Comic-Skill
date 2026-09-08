@@ -545,3 +545,48 @@ def test_flat_sfx_turns_every_transform_off(translated):
     typeset.typeset_document(translated, stylise=False)
     after = ir.load_doc(translated)["pages"][0]["regions"][0]
     assert after["typeset"]["style"] == "flat"
+
+
+# --- the house face ----------------------------------------------------------
+# Persian in this project is set in Vazir. Vazirmatn is the current release of
+# that family; the older `Vazir-*` files are the same design under its first
+# name. A fallback face still produces readable pages, which is precisely why a
+# fallback has to announce itself.
+
+@pytest.mark.parametrize("name", [
+    "Vazirmatn-Medium.ttf", "Vazirmatn-Regular.ttf", "Vazirmatn-Bold.ttf",
+    "Vazirmatn-VariableFont_wght.ttf", "Vazirmatn[wght].ttf",
+    "Vazir.ttf", "Vazir-Medium-FD.ttf",
+])
+def test_every_shape_of_vazir_is_recognised(name):
+    """The list used to hold three filenames. This machine had Vazirmatn
+    installed as its variable build the whole time, matched none of the three,
+    and every page silently typeset in Tahoma."""
+    assert typeset.is_vazir(name)
+    assert name in typeset.PERSIAN_FONTS
+
+
+@pytest.mark.parametrize("name", ["Tahoma.ttf", "NotoNaskhArabic-Regular.ttf",
+                                  "Sahel.ttf", "arial.ttf"])
+def test_a_fallback_face_is_not_mistaken_for_vazir(name):
+    assert not typeset.is_vazir(name)
+
+
+def test_vazir_outranks_every_fallback():
+    """Order is the whole mechanism: `find_font` takes the first name that
+    loads, so anything ahead of Vazir in this tuple would quietly win."""
+    first_other = next(i for i, n in enumerate(typeset.PERSIAN_FONTS)
+                       if not typeset.is_vazir(n))
+    assert all(typeset.is_vazir(n)
+               for n in typeset.PERSIAN_FONTS[:first_other])
+    assert first_other == len(typeset.VAZIR_FONTS)
+
+
+def test_a_run_on_a_fallback_face_says_so(translated, monkeypatch):
+    """Readable is not the same as right. A volume set in the wrong face is
+    only noticed once it is printed, so the report carries the fact."""
+    monkeypatch.setattr(typeset, "is_vazir", lambda path: False)
+    report = typeset.typeset_document(translated)
+    assert report["vazir"] is False
+    assert "Vazir" in report["font_note"]
+
