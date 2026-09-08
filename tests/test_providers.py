@@ -191,3 +191,116 @@ def test_a_failing_image_provider_falls_back_to_the_classical_cleaners(
 def test_the_provider_used_is_recorded_in_the_document(translated):
     clean.clean_document(translated, provider="fake-image-edit")
     assert ir.load_doc(translated)["stages"]["clean"]["provider"] ==         "fake-image-edit"
+
+
+# --- the optional OCR stage --------------------------------------------------
+# Off by default, and the tests are mostly about what it refuses to do. The
+# reading model is the primary transcriber; this is a second opinion, and a
+# second opinion that overwrites the first is not a second opinion.
+
+def _fake_ocr(monkeypatch, **kwargs):
+    monkeypatch.setitem(providers._REGISTRY["ocr"], "probe",
+                        lambda: providers.FakeOCR(**kwargs))
+    return "probe"
+
+
+def test_ocr_fills_a_region_nobody_has_transcribed(detected, monkeypatch):
+    import ocr
+
+    name = _fake_ocr(monkeypatch, text="やめろ！", confidence=0.95)
+    report = ocr.read_document(detected, provider=name)
+    assert report["totals"]["applied"] > 0
+
+    doc = ir.load_doc(detected)
+    _, region = next(iter(ir.iter_regions(doc)))
+    assert region["source_text"] == "やめろ！"
+    # The provenance records the name the user typed, not the adapter class's
+    # own — that is what "which provider produced this" means to a reader.
+    assert region["provenance"][-1]["provider"] == name
+    assert region["provenance"][-1]["confidence"] == pytest.approx(0.95)
+
+
+def test_ocr_never_overwrites_what_the_reader_committed(translated, monkeypatch):
+    """`translated` locks every region. The engine reads something else, and the
+    reader's value survives with the disagreement recorded beside it."""
+    import ocr
+
+    doc = ir.load_doc(translated)
+    _, region = next(iter(ir.iter_regions(doc)))
+    committed = region["source_text"]
+
+    name = _fake_ocr(monkeypatch, text="まったく違う", confidence=0.99)
+    report = ocr.read_document(translated, provider=name)
+
+    after = ir.load_doc(translated)
+    _, after_region = next(iter(ir.iter_regions(after)))
+    assert after_region["source_text"] == committed
+    assert report["disagreement_count"] > 0
+    assert report["totals"]["applied"] == 0
+
+
+def test_ocr_writes_nothing_when_it_is_not_sure(detected, monkeypatch):
+    """The one failure the pipeline cannot recover from is invented source
+    text, because glossary, translation and every gate downstream trust it."""
+    import ocr
+
+    name = _fake_ocr(monkeypatch, text="???", confidence=0.2)
+    report = ocr.read_document(detected, provider=name)
+    assert report["totals"]["applied"] == 0
+    assert report["totals"]["needs_review"] > 0
+
+    doc = ir.load_doc(detected)
+    for _, region in ir.iter_regions(doc):
+        assert not (region.get("source_text") or "").strip()
+        assert region.get("review")
+
+
+def test_ocr_survives_an_engine_that_cannot_read_the_crop(detected, monkeypatch):
+    import ocr
+
+    name = _fake_ocr(monkeypatch, fail="none")
+    report = ocr.read_document(detected, provider=name)
+    assert report["totals"]["failed"] > 0
+    assert report["totals"]["applied"] == 0
+    # The document is still valid and every region still reachable.
+    assert ir.load_doc(detected)["pages"]
+
+
+def test_ocr_survives_an_engine_that_hangs(detected, monkeypatch):
+    """A stalled engine must cost its timeout and then get out of the way."""
+    import ocr
+
+    name = _fake_ocr(monkeypatch, fail="hang")
+    report = ocr.read_document(detected, provider=name, timeout=0.2)
+    assert report["totals"]["failed"] > 0
+    doc = ir.load_doc(detected)
+    for _, region in ir.iter_regions(doc):
+        assert region["provenance"][-1]["status"] == "timeout"
+
+
+def test_ocr_is_resumable_and_does_not_re_apply(detected, monkeypatch):
+    """Running it twice must not double-write or lose the first run's work."""
+    import ocr
+
+    name = _fake_ocr(monkeypatch, text="やめろ", confidence=0.9)
+    first = ocr.read_document(detected, provider=name)
+    doc = ir.load_doc(detected)
+    for _, region in ir.iter_regions(doc):
+        region["locked"] = True
+    ir.save_doc(doc, detected)
+
+    second = ocr.read_document(detected, provider=name)
+    assert second["totals"]["locked"] == first["totals"]["applied"]
+    assert second["totals"]["applied"] == 0
+    after = ir.load_doc(detected)
+    for _, region in ir.iter_regions(after):
+        assert region["source_text"] == "やめろ"
+
+
+def test_the_ocr_stage_records_which_engine_ran(detected, monkeypatch):
+    import ocr
+
+    name = _fake_ocr(monkeypatch, text="やめろ")
+    ocr.read_document(detected, provider=name)
+    assert ir.load_doc(detected)["stages"]["ocr"]["provider"] == name
+
