@@ -18,11 +18,6 @@ import qa
 import typeset
 
 
-@pytest.fixture
-def finished(translated):
-    clean.clean_document(translated)
-    typeset.typeset_document(translated)
-    return translated
 
 
 # --- Strategy ---------------------------------------------------------------

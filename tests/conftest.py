@@ -69,3 +69,20 @@ def translated(detected) -> Path:
         region["locked"] = True
     ir.save_doc(doc, detected)
     return detected
+
+
+@pytest.fixture
+def finished(translated) -> Path:
+    """A document taken all the way through `clean` and `typeset`.
+
+    Shared because three suites now need a page that has actually been rendered
+    — the QA gate, the visual-QA pass and the provider tests all assert against
+    final pixels, and a local copy in each would drift.
+    """
+    import clean
+    import typeset
+
+    clean.clean_document(translated)
+    typeset.typeset_document(translated)
+    return translated
+

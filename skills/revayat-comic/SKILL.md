@@ -312,6 +312,7 @@ $PY $SKILL_DIR/scripts/revayat-comic.py qa check --doc $WORK/comic.json
 | `glossary-drift` (warning) | a locked name was rendered differently | re-do that region |
 | `typography` (warning) | Arabic letter forms, Latin quotes, stray punctuation | run `falint fix` |
 | `sfx-untranslated` (warning) | a sound effect was left drawn | expected under the `keep` policy |
+| `visual-note` (advice) | a model's opinion from the optional `qa visual` pass | read it and decide; it never passes or fails a run |
 
 Add `--strict` to make warnings blocking, for publication work.
 
