@@ -110,7 +110,22 @@ enforceable rather than aspirational.
 re-read, so interrupting the stage and running it again costs only the calls it
 did not finish.
 
-Writing an adapter is about twenty lines — anything with a
+**A working `manga-ocr` adapter ships with the project.** It is in
+`scripts/adapters.py`, it is not imported by the pipeline, and it loads the model
+on first read rather than on construction — so registering it costs nothing:
+
+```bash
+pip install manga-ocr
+revayat-comic ocr --doc work/comic.json --provider manga-ocr
+```
+
+It declines anything that is not Japanese rather than answering anyway, and
+reports `MANGA_OCR_CONFIDENCE` (0.80) — a judgement about the model, since it
+returns no score of its own.
+
+Verified against the package's real call shape with a stub; **not** verified
+against the actual 3 GB download on this machine. Writing your own is about
+twenty lines — anything with a
 `read(crop_path, language) -> (text, confidence)` method qualifies:
 
 ```python

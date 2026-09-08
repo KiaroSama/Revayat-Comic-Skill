@@ -158,6 +158,7 @@ original's SHA-256 is re-checked at the end.
 | `export.py` | CBZ, PDF, folder |
 | `lettering.py` | matching a drawn sound effect's slant, arc and recession |
 | `providers.py` | the optional second-opinion boundary, and its fakes |
+| `adapters.py` | real providers — currently `manga-ocr`, local and keyless |
 | `context.py` | the bounded chapter context a translator gets |
 | `ocr.py` | the optional OCR stage — off by default |
 | `translate.py` | the optional machine translator — off by default |
