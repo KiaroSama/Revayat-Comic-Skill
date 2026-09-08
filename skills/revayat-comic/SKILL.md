@@ -131,28 +131,47 @@ regions did not really move.
 script's.** For each `$WORK/worksheets/pNNNN.txt`, write
 `$WORK/worksheets/pNNNN.done.txt`.
 
-**Translate in waves, and merge after each one.** Not all pages at once.
+**One page at a time, merged before the next one starts.** This is the default
+and it is the only order that keeps the guarantee below true.
 
 A page's context is the pages before it — the dialogue they settled, the register
 each character was given, the names that were locked. On a fresh chapter none of
-that exists in `comic.json` until a merge puts it there, so launching every page
-at once against an unchanged document hands each sub-agent an *empty* context and
-gets you exactly the drift the context was added to prevent.
+that exists in `comic.json` until a merge puts it there, so a page translated
+before its predecessor is merged gets an *empty* context and produces exactly the
+drift the context was added to prevent.
 
 ```
-wave 1: pages 1-4   →  merge  →  glossary scan  →  lock any new names
-wave 2: pages 5-8   →  merge  →  glossary scan  →  ...
+page 1  →  merge  →  glossary scan / lock  →  build page 2 context
+page 2  →  merge  →  glossary scan / lock  →  build page 3 context
+...
 ```
 
-Four pages a wave is a reasonable default: inside a wave the pages cannot see
-each other, and four consecutive pages rarely settle a term the next one needs.
-**Use one page per wave for a chapter that introduces a lot of names**, and note
-that a wave of one is simply sequential translation, which is always correct.
+**The invariant this protects:** when page N is translated, pages 1…N−1 are in
+`comic.json`, so page N's context carries their exact source and Persian. That is
+what `test_page_two_sees_page_one_only_after_it_is_merged` pins, and it is only
+true page by page.
 
-Run `worksheet merge` (Step 6) and `glossary scan` (Step 7) after each wave, not
-once at the end. Both are safe to re-run and both are cheap.
+`worksheet merge` (Step 6) and `glossary scan` (Step 7) run after **each** page,
+not once at the end. Both are safe to re-run, both are cheap, and `merge`
+reporting `missing_outputs` for the pages whose turn has not come is expected.
 
-**Lock what you already know before wave 1.** If this is chapter 12 of a series
+<details>
+<summary>Going faster, and what it costs</summary>
+
+Pages translated together cannot see each other — they all read the same
+pre-merge snapshot. So a batch of four is four pages of lost continuity between
+themselves, and the more a chapter introduces (a new character, a place, a term
+of address) the more that shows.
+
+It is a real option when you know the pages are independent — an action sequence
+with no dialogue, a chapter you have already read through, a re-run where the
+glossary is fully locked from the previous pass. **It is a speed-for-consistency
+trade, not the correct path**, and if you take it, run merge and glossary scan
+after each batch just the same.
+
+</details>
+
+**Lock what you already know before page 1.** If this is chapter 12 of a series
 you have already translated, copy the locked `glossary.entries` from the previous
 chapter's `comic.json` into this one and run `glossary scan` *before* translating
 anything. Names decided in chapter 3 should constrain page 1 of chapter 12, not
@@ -174,10 +193,10 @@ wrote). Paste that JSON into the sub-agent's prompt. Fields nobody has filled in
 come back empty, and empty is correct — never invent a scene description or a
 character's register to fill the gap.
 
-It reads `comic.json`, so it only knows what has been **merged**. Build it for
-each page at the start of that page's wave, after the previous wave's merge —
-building it earlier gets you a snapshot that is missing exactly the pages it was
-supposed to carry.
+It reads `comic.json`, so it only knows what has been **merged**. Build it
+immediately before translating that page, after the previous page's merge —
+building it earlier gets you a snapshot missing exactly the pages it was supposed
+to carry.
 
 **Give the sub-agent exactly this:**
 
@@ -265,7 +284,7 @@ $PY $SKILL_DIR/scripts/revayat-comic.py worksheet merge --doc $WORK/comic.json
 | Field | Meaning | Action |
 | --- | --- | --- |
 | `"ok": true` | everything landed | continue |
-| `missing_outputs` | those pages were never translated | translate them — **expected between waves** for pages whose turn has not come |
+| `missing_outputs` | those pages were never translated | translate them — **expected mid-chapter** for pages whose turn has not come |
 | `missing_regions` | ids were dropped from a worksheet | re-do those pages |
 | `unknown_regions` | ids were invented | re-do those pages |
 | `duplicate_regions` | an id appears twice | re-do that page |
@@ -273,8 +292,8 @@ $PY $SKILL_DIR/scripts/revayat-comic.py worksheet merge --doc $WORK/comic.json
 | `stale_worksheets` | regions changed after translation | re-do those pages |
 
 Re-running merge after a fix is always safe, and it is meant to be run **after
-each translation wave** rather than once at the end — that is what puts a page's
-Persian into `comic.json` where the next wave's `context` can see it.
+each page** rather than once at the end — that is what puts a page's Persian into
+`comic.json` where the next page's `context` can see it.
 
 ## Step 7 — Names and typography
 
@@ -287,10 +306,11 @@ empty `target`, fill in the Persian and set `"locked": true`. This is the one
 hand-edit that *is* expected. Names decided once here stay consistent for the
 rest of the chapter, and every later worksheet prints the table.
 
-Run this **after each wave**, not only at the end. A name locked after wave 1
-constrains waves 2 onward through both the worksheet table and the `context`
-package; a name locked only at the end constrains nothing that has already been
-translated. Carry the locked entries into the next chapter's document too.
+Run this **after each page**, not only at the end. A name locked on page 1
+constrains every page after it, through both the worksheet table and the
+`context` package; a name locked only at the end constrains nothing that has
+already been translated. Carry the locked entries into the next chapter's
+document too.
 
 Then the mechanical Persian pass — safe to run twice:
 
