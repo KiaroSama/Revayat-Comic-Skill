@@ -91,6 +91,13 @@ def _numpy():
 # Shaping
 # --------------------------------------------------------------------------- #
 
+def _cv2():
+    ir.require("cv2", "opencv-python-headless", "measuring stylised lettering")
+    import cv2
+
+    return cv2
+
+
 def raqm_available() -> bool:
     """Whether Pillow can shape and reorder Persian itself."""
     try:
@@ -275,6 +282,52 @@ def interior_mask(clean_rgb, region: dict[str, Any], page_size: tuple[int, int])
         clean_rgb, balloon, region.get("polarity", "light"), (width, height),
         inset=BALLOON_PADDING,
     )
+
+
+#: Below this the ink has no clear long axis and an angle read off it is noise.
+#: Measured as the aspect ratio of the smallest rotated box around the ink: a
+#: word set on a diagonal is long and thin, a compact cluster of overlapping
+#: glyphs is not, and the fit then returns whatever angle it happened to land on.
+SFX_MIN_ELONGATION = 1.7
+
+#: Rotations smaller than this are not worth a resample pass: it costs a blur
+#: and buys nothing anyone can see.
+SFX_MIN_ANGLE = 5.0
+
+
+def sfx_style(mask, np) -> dict[str, float] | None:
+    """How the erased lettering sat on the page, or ``None`` when it sat straight.
+
+    The lettering is gone by the time the typesetter runs — that is what `clean`
+    did — so the slant cannot be measured from the pixels. It comes from the
+    region's own mask, which is the *shape of what was erased*, and
+    `minAreaRect` fits the tightest rotated box around it. That one box carries
+    all three things a stylised redraw needs: the angle is the lettering's
+    baseline, the width and height are the space it filled upright, and the
+    aspect ratio is how far the angle can be trusted.
+
+    ``None`` is the common and correct answer. Most sound effects are set
+    straight, and a straight one belongs on the ordinary flat path.
+    """
+    cv2 = _cv2()
+    points = cv2.findNonZero(mask)
+    if points is None or len(points) < 5:
+        return None
+    (cx, cy), (width, height), angle = cv2.minAreaRect(points)
+    if width < 1.0 or height < 1.0:
+        return None
+    # minAreaRect names the sides in the order it found them, so its "width" is
+    # not reliably the long one and its angle is measured against that side.
+    # Reading along the long axis is what makes the number a baseline instead of
+    # a quarter turn away from one.
+    if width < height:
+        width, height = height, width
+        angle += 90.0
+    angle = (angle + 90.0) % 180.0 - 90.0
+    if width / height < SFX_MIN_ELONGATION or abs(angle) < SFX_MIN_ANGLE:
+        return None
+    return {"cx": float(cx), "cy": float(cy), "width": float(width),
+            "height": float(height), "angle": float(angle)}
 
 
 def _row_widths(mask, np) -> tuple[list[int], list[int]]:
@@ -487,6 +540,60 @@ def _text_colour(region: dict[str, Any]) -> tuple[tuple[int, int, int], tuple[in
     return (18, 18, 18), None
 
 
+def _draw_stylised(canvas, text: str, style: dict[str, float], shaper: Shaper,
+                   font_path: Path, fill, stroke, np,
+                   *, max_size: int, min_size: int) -> list[int] | None:
+    """Set the Persian at the slant the original lettering had.
+
+    Rendered upright on its own transparent layer and only then rotated, so the
+    glyphs are shaped, hinted and stroked exactly as they are everywhere else on
+    the page and nothing but the finished bitmap is turned. Pillow cannot rotate
+    a text call, and rotating the page is not an option.
+
+    The sign is measured rather than assumed: `sfx_style` returns the negative
+    of the rotation that produced the shape, so ``-angle`` puts it back. A test
+    pins that round trip, because a silently mirrored angle looks deliberate and
+    is wrong on every page.
+
+    Returns the box it painted, or ``None`` when the words will not fit the
+    space the original lettering filled. The caller then sets them flat: a less
+    faithful effect that still says what the panel said, which is the trade this
+    project makes everywhere else too.
+    """
+    Image, ImageDraw, ImageFont = _pil()
+    width = max(1, int(round(style["width"])))
+    height = max(1, int(round(style["height"])))
+
+    layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    layer_draw = ImageDraw.Draw(layer)
+    fitted = fit_region(
+        layer_draw, text, np.full((height, width), 255, np.uint8), np, shaper,
+        font_path, max_size=max_size, min_size=min_size,
+    )
+    if fitted is None:
+        return None
+
+    font = ImageFont.truetype(str(font_path), fitted["size"],
+                              layout_engine=shaper.layout)
+    options: dict[str, Any] = {"font": font, "fill": fill, "anchor": "mm",
+                               **shaper.draw_kwargs()}
+    if stroke:
+        # A sound effect sits on artwork rather than inside a balloon, so the
+        # outline is not decoration here — it is the only thing keeping the
+        # word legible over whatever it was drawn across.
+        options["stroke_width"] = max(2, fitted["size"] // 8)
+        options["stroke_fill"] = stroke
+    for line in fitted["lines"]:
+        layer_draw.text((line["x"], line["y"]),
+                        shaper.prepare(line["text"]), **options)
+
+    turned = layer.rotate(-style["angle"], resample=Image.BICUBIC, expand=True)
+    left = int(round(style["cx"] - turned.width / 2.0))
+    top = int(round(style["cy"] - turned.height / 2.0))
+    canvas.paste(turned, (left, top), turned)
+    return [left, top, left + turned.width, top + turned.height]
+
+
 def typeset_page(
     doc_path: Path,
     page: dict[str, Any],
@@ -496,6 +603,7 @@ def typeset_page(
     policy: str,
     max_size: int,
     min_size: int,
+    stylise: bool = True,
 ) -> dict[str, Any]:
     Image, ImageDraw, ImageFont = _pil()
     np = _numpy()
@@ -525,34 +633,68 @@ def typeset_page(
             skipped += 1
             continue
 
-        area = interior_mask(clean_rgb, region, size)
-        fitted = fit_region(
-            draw, text, area, np, shaper, font_path,
-            max_size=max_size, min_size=min_size,
-        )
-        if fitted is None:
-            overflow.append(region["id"])
-            region["typeset"] = {"status": "overflow"}
-            continue
-
-        font = ImageFont.truetype(str(font_path), fitted["size"],
-                                  layout_engine=shaper.layout)
         fill, stroke = _text_colour(region)
         painted: list[list[int]] = []
-        for line in fitted["lines"]:
-            shaped = shaper.prepare(line["text"])
-            options: dict[str, Any] = {
-                "font": font, "fill": fill, "anchor": "mm",
-                **shaper.draw_kwargs(),
+        record: dict[str, Any]
+
+        # A sound effect drawn on a slant, set on the same slant. Only ever
+        # attempted where the mask says there was a slant to match; a straight
+        # effect, a balloon, or a region with no mask of its own all take the
+        # flat path below, which is the one that has always run.
+        style = None
+        if stylise and region["kind"] == "sfx" and region.get("mask"):
+            style = sfx_style(mask_tools.load_mask(root / region["mask"]), np)
+        if style is not None:
+            box = _draw_stylised(canvas, text, style, shaper, font_path, fill,
+                                 stroke, np, max_size=max_size,
+                                 min_size=min_size)
+            if box is None:
+                style = None
+            else:
+                painted.append(box)
+                record = {
+                    "status": "ok", "style": "rotated",
+                    "angle": round(style["angle"], 1),
+                    "font": font_path.name, "shaping": shaper.mode,
+                }
+
+        if style is None:
+            area = interior_mask(clean_rgb, region, size)
+            fitted = fit_region(
+                draw, text, area, np, shaper, font_path,
+                max_size=max_size, min_size=min_size,
+            )
+            if fitted is None:
+                overflow.append(region["id"])
+                region["typeset"] = {"status": "overflow"}
+                continue
+
+            font = ImageFont.truetype(str(font_path), fitted["size"],
+                                      layout_engine=shaper.layout)
+            for line in fitted["lines"]:
+                shaped = shaper.prepare(line["text"])
+                options: dict[str, Any] = {
+                    "font": font, "fill": fill, "anchor": "mm",
+                    **shaper.draw_kwargs(),
+                }
+                if stroke:
+                    options["stroke_width"] = max(1, fitted["size"] // 12)
+                    options["stroke_fill"] = stroke
+                draw.text((line["x"], line["y"]), shaped, **options)
+                box = draw.textbbox((line["x"], line["y"]), shaped, **{
+                    k: v for k, v in options.items()
+                    if k != "fill" and k != "stroke_fill"
+                })
+                painted.append([int(box[0]), int(box[1]),
+                                int(box[2]), int(box[3])])
+            record = {
+                "status": "ok",
+                "style": "flat",
+                "size": fitted["size"],
+                "lines": fitted["line_count"],
+                "font": fitted["font"],
+                "shaping": shaper.mode,
             }
-            if stroke:
-                options["stroke_width"] = max(1, fitted["size"] // 12)
-                options["stroke_fill"] = stroke
-            draw.text((line["x"], line["y"]), shaped, **options)
-            box = draw.textbbox((line["x"], line["y"]), shaped, **{
-                k: v for k, v in options.items() if k != "fill" and k != "stroke_fill"
-            })
-            painted.append([int(box[0]), int(box[1]), int(box[2]), int(box[3])])
 
         for x0, y0, x1, y1 in painted:
             pad = 2
@@ -561,13 +703,7 @@ def typeset_page(
             y1 = min(page["height"], y1 + pad)
             writable[y0:y1, x0:x1] = 255
 
-        region["typeset"] = {
-            "status": "ok",
-            "size": fitted["size"],
-            "lines": fitted["line_count"],
-            "font": fitted["font"],
-            "shaping": shaper.mode,
-        }
+        region["typeset"] = record
         placed += 1
 
     relative = f"final/{page['id']}.png"
@@ -590,6 +726,7 @@ def typeset_document(
     min_size: int = DEFAULT_MIN_SIZE,
     force_fallback: bool = False,
     pages: Sequence[str] | None = None,
+    stylise: bool = True,
 ) -> dict[str, Any]:
     doc_path = Path(doc_path)
     doc = ir.load_doc(doc_path)
@@ -615,6 +752,7 @@ def typeset_document(
         result = typeset_page(
             doc_path, page, shaper, font_path,
             policy=policy, max_size=max_size, min_size=min_size,
+            stylise=stylise,
         )
         placed += result["placed"]
         overflow += result["overflow"]
@@ -661,6 +799,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="never set smaller than this; report overflow instead")
     parser.add_argument("--no-raqm", action="store_true",
                         help="force the reshaper fallback (for testing it)")
+    parser.add_argument("--flat-sfx", action="store_true",
+                        help="set every sound effect horizontally, even where "
+                             "the mask shows the original was on a slant")
     args = parser.parse_args(argv)
 
     report = typeset_document(
@@ -670,6 +811,7 @@ def main(argv: list[str] | None = None) -> int:
         min_size=args.min_size,
         force_fallback=args.no_raqm,
         pages=[p for p in args.pages.split(",") if p] or None,
+        stylise=not args.flat_sfx,
     )
     ir.emit(report)
     return 0

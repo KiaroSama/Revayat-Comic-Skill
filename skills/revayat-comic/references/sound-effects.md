@@ -11,8 +11,9 @@ one is a lettering job, not a translation job, and doing it badly is worse than
 not doing it: you erase artwork and put a rectangle of Persian where a drawing
 was.
 
-So `sfx` is its own region kind, the default policy leaves them alone, and
-`revayat-comic` does not pretend to redraw hand-lettering.
+So `sfx` is its own region kind, the default policy leaves them alone, and what
+`revayat-comic` will match is the slant and nothing more — see the last section
+for exactly where that line is drawn.
 
 ## The four policies
 
@@ -61,7 +62,8 @@ pixel — and for producing a translator's note track separately.
 
 | The lettering is | Use |
 | --- | --- |
-| stretched, rotated, or perspective-warped | `keep` |
+| stretched or perspective-warped | `keep` |
+| rotated, on a readable background | `translate` sets it on the same slant |
 | overlapping a face or detailed artwork | `keep` |
 | part of the composition rather than a label | `keep` |
 | upright, on flat background, in its own space | `translate` if you want |
@@ -162,12 +164,33 @@ using it for real lettering makes `stats.states` count that lettering as
 out. This project made that mistake on its first real chapter, on a Japanese
 billboard, because `keep` did not exist yet.
 
-## What is not implemented
+## Slant, and what is still not implemented
 
-Redrawing stylised lettering — matching the original's slant, stroke weight,
-outline and perspective — is not here. It needs a lettering pipeline, per-glyph
-transforms and a font matched to the original's hand, and a half-hearted version
-of it produces pages that look worse than leaving the Japanese in place.
+Under `translate`, a sound effect whose lettering was drawn **on a slant** is now
+set on that slant. The angle is not guessed: `clean` has already erased the
+lettering by the time the typesetter runs, so it is measured from the region's
+own mask — the shape of what was erased — with `minAreaRect`, which gives the
+baseline, the space the words filled upright, and an aspect ratio saying how far
+to trust the answer.
 
-`translate` sets upright Persian in the region the original occupied. That is
-honest about what it is, and `keep` remains the default for a reason.
+That last part is the gate. A word set diagonally is long and thin and gives a
+confident angle; a compact cluster of overlapping glyphs gives whatever angle the
+fit landed on, so anything below `SFX_MIN_ELONGATION` and any slant under
+`SFX_MIN_ANGLE` takes the flat path instead. Straight lettering — most lettering
+— is unaffected. `--flat-sfx` turns the whole thing off, and `typeset.style` in
+the region records which path ran, `rotated` or `flat`.
+
+The outline is heavier on this path than in a balloon (`size // 8` against
+`size // 12`), because a sound effect sits on artwork rather than on paper and
+the stroke is the only thing keeping it legible.
+
+**Still not implemented: perspective and curve.** Lettering that recedes into a
+panel or bends along an arc needs a mesh warp and a font matched to the
+original's hand, and a half-hearted version looks worse than leaving the Japanese
+in place. Stroke weight beyond the outline, and matching the original's actual
+face, are also out.
+
+**None of this decides whether to replace an effect at all.** That is the
+reader's call, and it is `keep: yes` on the region. The code will not quietly
+skip lettering somebody asked it to translate: a silent skip is exactly the hole
+the five terminal states exist to make visible.
