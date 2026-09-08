@@ -334,3 +334,43 @@ def test_a_real_chapter_clears_every_new_limit_with_room(tmp_path):
                   for page in (tmp_path / "work" / "pages").iterdir())
     assert biggest * 100 < readers.MAX_MEMBER_BYTES
     assert 1000 * 1500 * 10 < readers.MAX_PAGE_PIXELS
+
+
+def test_a_pdf_that_writes_more_than_the_ceiling_stops(tmp_path, monkeypatch):
+    """A PDF has no member table to check up front, so its total is counted as
+    it is written. The page cap and the per-page pixel cap both pass here and
+    neither one bounds the total: 2000 legitimate pages of large scans is a
+    terabyte that nothing else refuses."""
+    pymupdf = pytest.importorskip("pymupdf")
+
+    source = tmp_path / "big.pdf"
+    document = pymupdf.open()
+    for _ in range(4):
+        document.new_page(width=600, height=900)
+    document.save(str(source))
+    document.close()
+
+    # Small enough that four ordinary rendered pages cross it.
+    monkeypatch.setattr(readers, "MAX_TOTAL_BYTES", 2_000)
+    with pytest.raises(ValueError, match="expands to more than"):
+        readers.import_source(source, tmp_path / "work")
+
+
+def test_a_gigapixel_embedded_image_is_rendered_instead_of_extracted():
+    """`extract_image` decompresses before anything can measure the result, and
+    `get_images(full=True)` is the only place the declared size is visible
+    first. Over the cap the page renders instead \u2014 bounded by the page
+    rectangle, and the huge image is downsampled to the page it was drawn on,
+    which is how it looked anyway."""
+    class _Page:
+        rect = type("R", (), {"width": 600.0, "height": 900.0})()
+
+        def get_images(self, full=True):
+            #  (xref, smask, width, height, ...) \u2014 60000 x 60000
+            return [(7, 0, 60_000, 60_000, 8, "DeviceRGB", "", "Im0", "Flate")]
+
+        def get_image_rects(self, xref):  # pragma: no cover - never reached
+            raise AssertionError("the declared size should have stopped this")
+
+    assert readers._single_embedded_image(object(), _Page()) is None
+
