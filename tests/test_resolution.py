@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import pytest
 
+from PIL import Image
+
 import detect
 import pageir as ir
 from tests_support import manga_page, page_bytes
@@ -99,3 +101,62 @@ def test_a_hairline_outline_is_the_known_limit(tmp_path):
     # this pass, that is good news and this test should be rewritten to demand
     # it — but it must never pass by accident and go unnoticed.
     assert len(speech) <= 1
+
+
+# --- webtoon geometry, end to end --------------------------------------------
+
+def test_a_webtoon_strip_goes_through_the_whole_pipeline(tmp_path):
+    """A tall strip is flagged at import and had never been *run*.
+
+    What a synthetic fixture can honestly test here is the geometry — a page
+    several times taller than it is wide, read top to bottom — and geometry is
+    exactly what breaks on one: reading order, mask boxes, the interior fit, and
+    every threshold expressed as a fraction of a page that is now a ribbon.
+    It says nothing about a real webtoon's art or lettering, which still needs a
+    real sample.
+    """
+    import clean
+    import detect
+    import masks
+    import qa
+    import readers
+    import typeset
+    from tests_support import manga_page, page_bytes
+
+    strip = tmp_path / "strip"
+    strip.mkdir()
+    # Three page-heights stacked: 1000 x 4500, well past the webtoon threshold.
+    tall = Image.new("RGB", (1000, 4500), "white")
+    for index in range(3):
+        tall.paste(manga_page(1000, 1500), (0, index * 1500))
+    (strip / "0001.png").write_bytes(page_bytes(tall))
+
+    work = tmp_path / "work"
+    report = readers.import_source(strip, work, source_language="ko",
+                                   direction="ltr")
+    assert report["webtoon_strips"] == ["p0001"]
+
+    doc = work / "comic.json"
+    detect.detect_document(doc)
+    masks.build_document(doc)
+
+    loaded = ir.load_doc(doc)
+    regions = [r for _, r in ir.iter_regions(loaded)]
+    assert len(regions) >= 6, f"only {len(regions)} regions found on a 3-page strip"
+
+    # Reading order must run down the strip, not across it.
+    tops = [r["bbox"][1] for r in regions]
+    assert tops == sorted(tops), "reading order is not top-to-bottom on a strip"
+
+    for region in regions:
+        region["source_text"] = "stop!"
+        region["target_text"] = "بس کن!"
+        region["locked"] = True
+    ir.save_doc(loaded, doc)
+
+    clean.clean_document(doc)
+    typeset.typeset_document(doc)
+    result = qa.check_document(doc)
+
+    assert result["stats"]["artwork_pixels_changed"] == 0
+    assert result["stats"]["states"]["unresolved"] == 0

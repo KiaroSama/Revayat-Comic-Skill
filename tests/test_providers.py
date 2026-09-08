@@ -11,6 +11,8 @@ _outside_the_mask`. Everything else in this file supports it.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -1002,3 +1004,112 @@ def test_the_documented_default_is_the_order_the_tests_prove():
         assert "<details>" in step5, (
             "batching is presented at the same level as the correct path")
 
+
+def test_building_a_context_over_an_unmerged_page_is_refused(detected):
+    """The lock. Sequential order was a rule in a document and nothing enforced
+    it, so the one mistake the context package exists to prevent was still one
+    keystroke away — and silent, because the JSON comes out well-formed and
+    simply missing the pages that mattered."""
+    import context
+    import worksheet
+
+    worksheet.build_document(detected)
+    doc = ir.load_doc(detected)
+    if len(doc["pages"]) < 2:
+        pytest.skip("needs at least two pages")
+    first, second = doc["pages"][0]["id"], doc["pages"][1]["id"]
+    root = ir.doc_dir(detected)
+
+    # Nothing written yet: nothing to be behind on.
+    assert context.unmerged_before(detected, doc, second) == []
+
+    # A reply exists on disk and has not been merged.
+    (root / "worksheets" / f"{first}.done.txt").write_text(
+        (root / "worksheets" / f"{first}.txt").read_text(encoding="utf-8"),
+        encoding="utf-8")
+    assert context.unmerged_before(detected, ir.load_doc(detected), second) == [first]
+
+    with pytest.raises(SystemExit, match="not merged"):
+        context.main(["--doc", str(detected), "--page", second])
+
+    # The escape hatch exists and says what it costs.
+    package = context.build(ir.load_doc(detected), second)
+    assert package["context"]["translation_memory"] == []
+
+
+def test_the_lock_lifts_once_the_page_is_merged(detected):
+    import context
+    import worksheet
+
+    worksheet.build_document(detected)
+    doc = ir.load_doc(detected)
+    if len(doc["pages"]) < 2:
+        pytest.skip("needs at least two pages")
+    first, second = doc["pages"][0]["id"], doc["pages"][1]["id"]
+
+    _translate_page(detected, first, {})
+    assert context.unmerged_before(detected, ir.load_doc(detected), second) == []
+    assert context.main(["--doc", str(detected), "--page", second]) == 0
+
+
+
+# --- the one real adapter this project can ship -------------------------------
+
+def test_the_manga_ocr_adapter_registers_without_the_package():
+    """Registering must cost nothing. The point of a lazy factory is that a
+    3 GB optional dependency is not imported because a module was."""
+    import adapters
+
+    report = adapters.register_all()
+    assert "manga-ocr" in report["registered"]
+    assert "manga-ocr" in providers.available("ocr")["ocr"]
+    # This machine does not have it, and that is reported rather than hidden.
+    assert report["installed"] or report["needs_install"]
+
+
+def test_the_manga_ocr_adapter_reads_through_the_boundary(monkeypatch):
+    """Tested against the package's real call shape — `MangaOcr()` returns a
+    callable that takes a PIL image and returns a string — with a stub standing
+    in for the 3 GB download. That is the honest limit of what can be proved
+    here: the adapter and the boundary are verified, the actual model is not.
+    """
+    import sys
+    import types
+
+    import adapters
+
+    seen = []
+
+    class _Stub:
+        def __call__(self, image):
+            seen.append(image.size)
+            return "  やめろ！  "
+
+    module = types.ModuleType("manga_ocr")
+    module.MangaOcr = _Stub
+    monkeypatch.setitem(sys.modules, "manga_ocr", module)
+
+    from PIL import Image
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as folder:
+        crop = Path(folder) / "r001.png"
+        Image.new("RGB", (120, 60), "white").save(crop)
+
+        adapter = adapters.MangaOcr()
+        assert adapter._model is None, "the model was loaded before it was needed"
+
+        result = providers.call(adapter, "ocr", str(crop), "ja", name="manga-ocr")
+
+    assert result.ok and result.data == "やめろ！"
+    assert result.confidence == pytest.approx(adapters.MANGA_OCR_CONFIDENCE)
+    assert seen == [(120, 60)]
+
+
+def test_the_manga_ocr_adapter_declines_a_language_it_cannot_read(monkeypatch):
+    """A Japanese model handed a Korean page must say so, not answer anyway."""
+    import adapters
+
+    result = providers.call(adapters.MangaOcr(), "ocr", "x.png", "ko",
+                            name="manga-ocr")
+    assert result.ok is False and result.status == "refused"
