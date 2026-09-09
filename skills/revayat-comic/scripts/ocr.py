@@ -79,6 +79,7 @@ def read_document(
     language = doc["meta"].get("source_language", "ja")
 
     eyes = providers.get("vision", vision)
+    orientation_aware = providers.wants(engine, "ocr", "orientation")
     counts = {"applied": 0, "unchanged": 0, "locked": 0, "needs_review": 0,
               "failed": 0, "resumed": 0}
     disagreements: list[dict[str, str]] = []
@@ -104,8 +105,16 @@ def read_document(
                 continue
 
             crop = _crop_path(root, page, region, page_image)
+            # Vertical Japanese is the reason this stage exists, and the
+            # detector already measured it — so an engine that can use the
+            # writing direction is told it rather than left to re-derive it
+            # from a crop with the page cut away. Offered, never imposed: an
+            # engine that does not name the argument is called as before.
+            extra = {}
+            if orientation_aware:
+                extra["orientation"] = region.get("orientation", "horizontal")
             result = providers.call(engine, "ocr", str(crop), language,
-                                    timeout=timeout, name=provider)
+                                    timeout=timeout, name=provider, **extra)
             before = (region.get("source_text") or "").strip()
             outcome = providers.apply(region, "source_text", result,
                                       min_confidence=min_confidence)
@@ -116,6 +125,12 @@ def read_document(
                     "region": region["id"],
                     "kept": before,
                     "read": str(result.data).strip(),
+                    # Which way the line ran. A disagreement on a vertical
+                    # region is a different kind of disagreement — it is where
+                    # furigana gets mixed into the line — and the person
+                    # scanning this list should not have to open the crop to
+                    # find out which ones those were.
+                    "orientation": region.get("orientation", "horizontal"),
                 }
                 # Optional third opinion. A vision model looking at the crop can
                 # sometimes settle which reading is right — but it is advisory,
@@ -136,7 +151,8 @@ def read_document(
 
         per_page.append({"page": page["id"], **page_counts})
 
-    ir.stamp_stage(doc, "ocr", {"provider": provider, "totals": counts})
+    ir.stamp_stage(doc, "ocr", {"provider": provider, "totals": counts,
+                                "orientation_aware": orientation_aware})
     ir.save_doc(doc, doc_path)
 
     return {

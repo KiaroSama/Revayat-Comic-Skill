@@ -40,6 +40,7 @@ guarantee without a network, an API key or a credential of any kind.
 
 from __future__ import annotations
 
+import inspect
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as _Timeout
 from dataclasses import dataclass, field
@@ -106,7 +107,13 @@ class VisionProvider(Protocol):
 @runtime_checkable
 class OCRProvider(Protocol):
     def read(self, crop_path: str, language: str) -> Any:
-        """``(text, confidence)`` for one region crop."""
+        """``(text, confidence)`` for one region crop.
+
+        May also declare ``orientation`` — ``"vertical"`` or ``"horizontal"``,
+        as the detector measured it — and it will be passed. It is optional
+        because most engines find the writing direction themselves and an
+        adapter should not have to accept an argument it ignores; see `wants`.
+        """
 
 
 @runtime_checkable
@@ -180,6 +187,34 @@ def get(role: str, name: str | None):
             f"no {role} provider named {name!r}. Available: {known}"
         ) from None
     return factory()
+
+
+def wants(provider, role: str, keyword: str) -> bool:
+    """Whether this provider's method accepts `keyword`.
+
+    The boundary is duck-typed, so a stage cannot simply pass everything it
+    knows: an adapter written against the two-argument shape in `adapters.py`
+    would raise `TypeError` the moment a third argument appeared, and the whole
+    point of a protocol rather than a base class is that nobody has to rewrite
+    an adapter when the pipeline learns something new.
+
+    So extra knowledge is *offered*, not imposed. An engine that wants the
+    writing direction names it; every other engine is called exactly as before.
+    A `**kwargs` signature counts as wanting everything.
+    """
+    method = getattr(provider, _METHODS.get(role, ""), None)
+    if method is None:
+        return False
+    try:
+        parameters = inspect.signature(method).parameters
+    except (TypeError, ValueError):
+        # A C callable or a wrapper with no introspectable signature. Offering
+        # it an argument it may not take is the riskier guess, so decline.
+        return False
+    if keyword in parameters:
+        return True
+    return any(p.kind is inspect.Parameter.VAR_KEYWORD
+               for p in parameters.values())
 
 
 def call(provider, role: str, *args, timeout: float = DEFAULT_TIMEOUT,

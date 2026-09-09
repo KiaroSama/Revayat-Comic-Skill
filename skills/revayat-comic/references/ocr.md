@@ -146,6 +146,20 @@ providers.register("ocr", "manga-ocr", MangaOcrProvider)
 Register a *factory*, not an instance: nothing should download 400 MB of model
 because a module was imported.
 
+**Optional: `orientation`.** Name a third parameter and the stage will pass the
+writing direction the detector measured — `"vertical"` or `"horizontal"`:
+
+```python
+    def read(self, crop_path, language, orientation="horizontal"):
+        ...
+```
+
+It is the one thing an engine reading a lone crop cannot recover, because a
+vertical column with furigana beside it looks like two columns. Purely optional:
+an engine that does not name the parameter is called exactly as shown above, so
+no existing adapter has to change. `manga-ocr` finds the direction itself and
+does not ask; PaddleOCR is the case that wants it.
+
 ## Other engines
 
 | Engine | Good for | Note |
