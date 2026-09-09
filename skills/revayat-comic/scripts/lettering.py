@@ -82,6 +82,15 @@ MIN_MODULATION = 0.22
 #: reading as one word.
 MAX_MODULATION = 0.8
 
+#: How lopsided a hand's *direction* has to be before the pen is treated as
+#: broad-nibbed rather than round. Below this the two directions are within
+#: measurement noise of each other and nothing is applied.
+MIN_CONTRAST = 0.18
+
+#: The most a stroke may be widened in one direction relative to the other, as
+#: a fraction of the type size. Past this the counters of the Persian close.
+MAX_CONTRAST_GROWTH = 0.07
+
 #: How far a rendered effect may spill outside the area the original occupied,
 #: as a fraction of that area's size. Rotation and warping both grow a bitmap;
 #: this bounds the growth so a replacement cannot wander across the panel.
@@ -186,6 +195,75 @@ def _stroke_modulation(upright, np, cv2) -> float:
         if agreeing < 0.6:
             return 0.0
     return round(float(np.clip(trend, -MAX_MODULATION, MAX_MODULATION)), 4)
+
+
+def _runs(ink, np, vertical: bool):
+    """For every ink pixel, how long the unbroken run through it is.
+
+    Two sweeps rather than morphology. An opening cannot separate an upright
+    stroke from a flat one when the upright stroke is thick: a 20 px stem is
+    also a 20 px-wide horizontal run, so it survives the horizontal opening too
+    and both directions measure the same ink. Measured that way, a deliberately
+    broad-nibbed grid scored 0.001 when it should have scored about 0.5.
+
+    Run length has no such confusion: a stem is long down and short across, and
+    those are two different numbers about the same pixel.
+    """
+    block = (ink.T if vertical else ink).astype(bool)
+    forward = np.zeros(block.shape, np.int32)
+    running = np.zeros(block.shape[0], np.int32)
+    for column in range(block.shape[1]):
+        running = np.where(block[:, column], running + 1, 0)
+        forward[:, column] = running
+
+    out = np.zeros(block.shape, np.int32)
+    running = np.zeros(block.shape[0], np.int32)
+    for column in range(block.shape[1] - 1, -1, -1):
+        running = np.where(block[:, column], running + 1, 0)
+        out[:, column] = np.where(block[:, column],
+                                  forward[:, column] + running - 1, 0)
+    return out.T if vertical else out
+
+
+def _stroke_contrast(upright, np, cv2) -> float:
+    """Whether the hand drew upright strokes heavier than flat ones, or the
+    other way round.
+
+    This is the part of "pressure inside a letterform" that survives being
+    measured from an erased mask. Where the pressure went *along* one stroke is
+    a property of the typeface's own drawing and is not recoverable from ink
+    that has already been lifted off the page. But a pen with a broad nib lays
+    a wide mark in one direction and a narrow one in the other, and that
+    difference is right there.
+
+    Every ink pixel gets two numbers: how far the ink runs across it, and how
+    far it runs down. The larger says which kind of stroke the pixel belongs to;
+    the smaller is that stroke's thickness. Comparing the two populations gives
+    the nib.
+
+    Positive means upright strokes are the heavier ones. Near zero means a round
+    pen, which is the common case and has to stay cheap.
+    """
+    ink = (upright > 0)
+    if int(ink.sum()) < 200:
+        return 0.0
+    across = _runs(ink, np, vertical=False)
+    down = _runs(ink, np, vertical=True)
+
+    stems = ink & (down > across)
+    bars = ink & (across > down)
+    if int(stems.sum()) < 60 or int(bars.sum()) < 60:
+        # One kind barely present. A hand that drew only upright strokes says
+        # nothing about how it would have drawn a flat one.
+        return 0.0
+
+    stem_weight = float(np.percentile(across[stems], 60))
+    bar_weight = float(np.percentile(down[bars], 60))
+    total = stem_weight + bar_weight
+    if total <= 0.0:
+        return 0.0
+    return round(float(np.clip((stem_weight - bar_weight) / total,
+                               -1.0, 1.0)), 4)
 
 
 def _upright(mask, angle: float, np, cv2):
@@ -302,6 +380,7 @@ def measure(mask, np, origin: Sequence[float] = (0.0, 0.0)) -> dict[str, Any] | 
         "taper": 1.0,
         "stroke": _stroke_weight(mask, np, cv2),
         "modulation": 0.0,
+        "contrast": 0.0,
         "verdict": "flat",
     }
 
@@ -319,6 +398,7 @@ def measure(mask, np, origin: Sequence[float] = (0.0, 0.0)) -> dict[str, Any] | 
 
     upright = _upright(mask, style["angle"], np, cv2)
     style["modulation"] = _stroke_modulation(upright, np, cv2)
+    style["contrast"] = _stroke_contrast(upright, np, cv2)
     columns, centre, weight = _baseline(upright, np)
     curvature, residual = _curvature(columns, centre, np)
     taper = _taper(weight, np)
@@ -415,8 +495,43 @@ def _strip(text: str, style: dict[str, Any], shaper, font_path, fill, stroke,
                       swell, np, Image)
     else:
         body = _body(layer.size, fitted, options, shaper, pil)
+
+    contrast = float(style.get("contrast") or 0.0)
+    if abs(contrast) >= MIN_CONTRAST:
+        body = _nib(body, contrast, fitted["size"], np, Image)
     layer.alpha_composite(body)
     return layer, fitted
+
+
+def _nib(body, contrast: float, size: int, np, Image):
+    """Widen the lettering in one direction, the way a broad nib does.
+
+    Pillow's `stroke_width` is round: it grows a glyph the same amount on every
+    side, which is a ballpoint. A brush or a chisel nib is wider one way than
+    the other, and that is measurable from the erased ink — so it is applied
+    here, by dilating the drawn alpha with a deliberately lopsided kernel.
+
+    Alpha only. Growing the colour channels would drag the outline's colour
+    across the fill; growing the coverage and leaving the colours where they
+    are thickens the mark and keeps every edge the colour it already was.
+    """
+    cv2 = _cv2()
+    grow = int(round(size * MAX_CONTRAST_GROWTH * min(1.0, abs(contrast))))
+    if grow < 1:
+        return body
+    # Positive contrast means upright strokes are the heavy ones, so the pen was
+    # wide across — widen in x. Negative is the flat-nib case, widen in y.
+    width = 2 * grow + 1 if contrast > 0 else 1
+    height = 1 if contrast > 0 else 2 * grow + 1
+
+    array = np.array(body)
+    # RECT, not ELLIPSE. An ellipse inscribed in a 3x1 box touches only its
+    # centre pixel, so the horizontal case dilated by nothing at all while the
+    # vertical case worked — measured: identical ink for +0.5, changed for -0.5.
+    # A chisel nib is flat anyway.
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (width, height))
+    array[..., 3] = cv2.dilate(array[..., 3], kernel)
+    return Image.fromarray(array, "RGBA")
 
 
 def _body(size, fitted, options: dict[str, Any], shaper, pil):
@@ -577,6 +692,7 @@ def render(canvas, text: str, style: dict[str, Any], shaper, font_path, fill,
         "taper": style["taper"],
         "stroke": style.get("stroke", 0.0),
         "modulation": style.get("modulation", 0.0),
+        "contrast": style.get("contrast", 0.0),
         "size": fitted["size"],
         "lines": fitted["line_count"],
         "font": fitted["font"],
