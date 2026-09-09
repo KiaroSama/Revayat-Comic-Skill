@@ -321,3 +321,13 @@ PARTICULAR PURPOSE. See the licence for details.
 
 Fonts, models and the artwork this tool processes carry their own licences, and
 none of them are distributed with this repository.
+
+Nor is any dependency: they are declared in `requirements.txt` and installed
+from PyPI. One of them is worth knowing about. **PyMuPDF is dual-licensed —
+AGPL-3.0 or a commercial licence from Artifex** — which is a stronger copyleft
+than the rest of the stack (Pillow, NumPy and OpenCV are permissive). GPLv3
+§13 permits the combination, so distributing this repository is fine; what the
+AGPL adds is the network clause, which reaches anyone who runs a modified
+PyMuPDF as a service. It is only needed for PDF input and PDF export — CBZ,
+CBR, folders and image files never touch it, and the pipeline degrades to a
+message rather than an error when it is absent.
