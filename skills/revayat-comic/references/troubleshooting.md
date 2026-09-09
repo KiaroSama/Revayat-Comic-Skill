@@ -55,6 +55,9 @@ so. See `persian-typesetting.md` for what differs between the two paths.
 | `ocr` reports disagreements | the engine read a **locked** region differently | not an error: the committed value was kept and the reading recorded beside it |
 | an OCR adapter's `orientation` argument is never set | the stage passes it only to a method whose signature names it, and a C callable or an un-introspectable wrapper is declined | name `orientation` (or `**kwargs`) directly on `read`; `stages.ocr.orientation_aware` in `comic.json` says which way it went |
 | `qa visual` findings look wrong | they are a model's opinions | they are advisory and never gate; `qa check` is the gate |
+| `serve http` answers 401 | the token is missing or wrong | it is printed to stderr when the server starts; send it as `X-Revayat-Token` |
+| `serve http` refuses to start | `--host` was not loopback | it runs stages that write files, so it binds `127.0.0.1` only — put a reverse proxy in front if you need more |
+| an MCP client hangs at the handshake | it is waiting for a reply to a notification | notifications have no `id` and are never answered; check the client, this server does not reply to them |
 | `context` refused: pages are translated but not merged | an earlier page’s `.done.txt` has not reached `comic.json`, so its Persian would be missing from this package | run `worksheet merge`, then build the context again; `--allow-unmerged` overrides and lists what is missing |
 | a sound effect’s outline looks too heavy or too light | it is matched to the weight the original was drawn at, clamped by `MIN_STROKE`/`MAX_STROKE` | `typeset.stroke` on the region records what was measured; `--flat-sfx` opts out of matching entirely |
 | `translate` skipped everything | the regions already have Persian, or no `src:` yet | it fills empty regions only; a value already there is never replaced |

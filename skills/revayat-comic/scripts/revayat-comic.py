@@ -14,6 +14,9 @@
     python revayat-comic.py qa        check --doc work/comic.json
     python revayat-comic.py export    --doc work/comic.json --out chapter-fa.cbz
 
+    python revayat-comic.py serve mcp                   # JSON-RPC over stdio
+    python revayat-comic.py serve http --port 8765      # loopback HTTP
+
 ``doctor`` is the first thing to run. Two of the things it reports decide
 whether Persian will come out correct rather than merely present: whether
 Pillow can shape Arabic-script text itself, and whether the machine has a font
@@ -48,6 +51,9 @@ STAGES = {
     "typeset": "typeset",
     "qa": "qa",
     "export": "export",
+    # Not a pipeline stage: the same stages over MCP or loopback HTTP, for a
+    # host that cannot run this CLI. See server.py.
+    "serve": "server",
 }
 
 REQUIRED = {
