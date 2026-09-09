@@ -133,6 +133,27 @@ $PY $SKILL/scripts/revayat-comic.py export --doc work/comic.json --out out/chapt
 
 **زبان‌های مبدأ:** ژاپنی، کره‌ای، چینی، انگلیسی — و هر زبان دیگری که ایجنت بتواند از روی برش بخواند. **مقصد:** فارسی.
 
+## بدون پوسته
+
+مسیر توصیه‌شده همان CLI است. جایی که میزبان اصلاً نمی‌تواند زیرفرایند اجرا کند،
+همان مرحله‌ها از راه MCP یا HTTP روی loopback در دسترس‌اند:
+
+```bash
+revayat-comic serve mcp                   # JSON-RPC 2.0 روی stdio
+revayat-comic serve http --port 8765      # توکن روی stderr چاپ می‌شود
+```
+
+پانزده ابزار — `revayat_doctor` به‌علاوهٔ یکی برای هر مرحله — و هرکدام همان
+آرگومان‌هایی را می‌گیرد که CLI می‌گیرد. این یک **لایهٔ انتقال** است، نه پیاده‌سازی
+دوم: هر ابزار همان `main` خودِ آن مرحله است، پس هیچ‌چیزی از این راه در دسترس
+نیست که CLI نتواند انجام دهد. HTTP فقط به `127.0.0.1` بایند می‌شود و توکن را در
+`X-Revayat-Token` می‌خواهد، چون این فراخوانی‌ها فایل می‌نویسند و یک صفحهٔ وب هم
+می‌تواند به localhost درخواست POST بفرستد.
+
+گام ۵ همچنان کارِ خودتان است: مدلی که این سرور را می‌راند همان رونویس است و هیچ
+ابزاری اینجا جای او را نمی‌گیرد. جزئیات در
+[`references/serving.md`](skills/revayat-comic/references/serving.md).
+
 ## معماری
 
 <div dir="ltr">
@@ -194,6 +215,7 @@ out = original × (1 − alpha) + repaired × alpha        where alpha ≤ mask
 - [`references/artwork-preservation.md`](skills/revayat-comic/references/artwork-preservation.md) — ماسک‌ها، لایه‌های پاک‌سازی، و آنچه QA اثبات می‌کند
 - [`references/sound-effects.md`](skills/revayat-comic/references/sound-effects.md) — چهار سیاست و انتخاب میانشان
 - [`references/ocr.md`](skills/revayat-comic/references/ocr.md) — خواندن با چشم خود، و اینکه کِی یک مدل کمک می‌کند
+- [`references/serving.md`](skills/revayat-comic/references/serving.md) — MCP و HTTP روی loopback، برای میزبانی که نمی‌تواند این CLI را اجرا کند
 - [`references/troubleshooting.md`](skills/revayat-comic/references/troubleshooting.md) — خطاهایی که بیشتر با آن‌ها روبه‌رو می‌شوید
 - [`AGENTS.md`](AGENTS.md) — برای ایجنت‌هایی که *روی* این مخزن کار می‌کنند
 

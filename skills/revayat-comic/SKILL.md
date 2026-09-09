@@ -483,4 +483,5 @@ Read these only when the step points at them:
 - `references/artwork-preservation.md` — masks, cleaning tiers, what QA proves
 - `references/sound-effects.md` — the four policies and how to choose
 - `references/ocr.md` — reading with your own eyes, and when a model helps
+- `references/serving.md` — MCP and HTTP, for a host that cannot run this CLI
 - `references/troubleshooting.md` — the failures you are most likely to hit

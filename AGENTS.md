@@ -51,6 +51,7 @@ tests/              pytest; fixtures are generated, never committed
 | `context.py` | the bounded chapter context handed to a translator |
 | `ocr.py` | the optional OCR stage, off by default |
 | `translate.py` | the optional machine translator, off by default |
+| `server.py` | the same stages over MCP and loopback HTTP, for a host with no shell |
 
 The last three are **optional and unused by default**. Read the module docstring
 in `providers.py` before adding a provider: the default is none, because the

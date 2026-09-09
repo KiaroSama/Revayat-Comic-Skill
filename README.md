@@ -127,6 +127,26 @@ reading direction, so readers do not pair every two-page spread back to front.
 **Source languages:** Japanese, Korean, Chinese, English — and anything else the
 agent can read off a crop. **Target:** Persian.
 
+## Without a shell
+
+The CLI is the recommended path. Where a host cannot run a subprocess at all,
+the same stages are reachable over MCP or loopback HTTP:
+
+```bash
+revayat-comic serve mcp                   # JSON-RPC 2.0 over stdio
+revayat-comic serve http --port 8765      # token printed to stderr
+```
+
+Fifteen tools — `revayat_doctor` plus one per stage — each taking the arguments
+the CLI takes. It is a transport, not a second implementation: every tool is
+that stage's own `main`, so there is nothing reachable here that the CLI cannot
+do. HTTP binds `127.0.0.1` only and requires the token in `X-Revayat-Token`,
+because these calls write files and a page in a browser can POST to localhost.
+
+Step 5 is still yours: the reading model driving the server is the transcriber,
+and no tool here can stand in for it. Details in
+[`references/serving.md`](skills/revayat-comic/references/serving.md).
+
 ## How it works
 
 ```
@@ -240,6 +260,8 @@ only its masked pixels are ever used.
   — the four policies and how to choose
 - [`references/ocr.md`](skills/revayat-comic/references/ocr.md) — reading with
   your own eyes, and when a model helps
+- [`references/serving.md`](skills/revayat-comic/references/serving.md) — MCP
+  and loopback HTTP, for a host that cannot run the CLI
 - [`references/troubleshooting.md`](skills/revayat-comic/references/troubleshooting.md)
   — the failures you are most likely to hit
 - [`AGENTS.md`](AGENTS.md) — for agents working *on* this repository
