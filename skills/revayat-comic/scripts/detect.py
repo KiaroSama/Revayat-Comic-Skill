@@ -352,6 +352,7 @@ def _looks_like_lettering(group: list[list[int]], options: dict[str, float]) -> 
     the reader is shown the page anyway. Split the block by line if that stops
     being true.`
     """
+    group = _absorb_satellites(group)
     count = len(group)
     if count < options["sfx_min_glyphs"]:
         return False
@@ -376,6 +377,64 @@ def _looks_like_lettering(group: list[list[int]], options: dict[str, float]) -> 
     gap = max(0.0, half_trace * half_trace - (sxx * syy - sxy * sxy)) ** 0.5
     across = max(0.0, half_trace - gap) ** 0.5
     return across / median <= options["sfx_max_spread"]
+
+
+def _absorb_satellites(group: Sequence[Sequence[int]]) -> list[list[int]]:
+    """Fold a small mark into the larger one it belongs to.
+
+    A connected component is not a character. In Japanese a single one is
+    routinely several disconnected strokes of very different sizes: ド is ト
+    plus two tiny dakuten, ン is two strokes. Measured on a real katakana effect
+    at 110 px, ドカン came out as six components — three around 85 px and three
+    around 20 px — so the size-uniformity test scored 3/6 and rejected it. The
+    same shape appears in Latin: an i and its tittle, a j, an exclamation mark.
+
+    So before asking whether the marks are alike, marks far below the median
+    that sit right against a bigger one are merged into it. The threshold is the
+    *same* 0.55 the size test uses as its lower bound, on purpose: this absorbs
+    exactly the marks that test would have rejected, and nothing else.
+
+    Merging can only lower the count, never raise it, so it can make the glyph
+    minimum harder to reach but never invents a cluster that was not there.
+    """
+    if len(group) < 2:
+        return [list(box) for box in group]
+
+    sizes = sorted(max(box[2], box[3]) for box in group)
+    middle = len(sizes) // 2
+    median = float(sizes[middle] if len(sizes) % 2
+                   else (sizes[middle - 1] + sizes[middle]) / 2)
+    if median <= 0:
+        return [list(box) for box in group]
+
+    small = [box for box in group if max(box[2], box[3]) < 0.55 * median]
+    large = [list(box) for box in group if max(box[2], box[3]) >= 0.55 * median]
+    if not small or not large:
+        return [list(box) for box in group]
+
+    kept: list[list[int]] = []
+    for box in small:
+        cx, cy = box[0] + box[2] / 2, box[1] + box[3] / 2
+        best, best_gap = None, None
+        for host in large:
+            reach = 0.75 * max(host[2], host[3])
+            # Distance from the small mark's centre to the host's box, zero
+            # when it is inside. A diacritic sits against its base character;
+            # a speck of screentone half a glyph away does not.
+            dx = max(host[0] - cx, 0.0, cx - (host[0] + host[2]))
+            dy = max(host[1] - cy, 0.0, cy - (host[1] + host[3]))
+            gap = (dx * dx + dy * dy) ** 0.5
+            if gap <= reach and (best_gap is None or gap < best_gap):
+                best, best_gap = host, gap
+        if best is None:
+            kept.append(list(box))
+            continue
+        x0 = min(best[0], box[0])
+        y0 = min(best[1], box[1])
+        x1 = max(best[0] + best[2], box[0] + box[2])
+        y1 = max(best[1] + best[3], box[1] + box[3])
+        best[0], best[1], best[2], best[3] = x0, y0, x1 - x0, y1 - y0
+    return large + kept
 
 
 def _free_lettering(gray, taken: Sequence[Sequence[int]],

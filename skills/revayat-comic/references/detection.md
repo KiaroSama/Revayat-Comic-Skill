@@ -210,3 +210,26 @@ such a book, try in this order:
 page sizes, so neither can move silently. The weekly
 `.github/workflows/integration.yml` runs a whole four-page chapter at 300 dpi
 end to end.
+
+## A character is not a connected component
+
+The free-lettering test asks whether a cluster's marks are alike in size, and it
+is the strongest of the three because letters cut from one font are within a
+factor of two of each other while artwork is not. It has one blind spot, and it
+took a page drawn with a real Japanese face to find it.
+
+**ド is ト plus two tiny dakuten. ン is two strokes.** So a three-character
+katakana effect arrives as six components — measured at 110 px: three around
+85 px and three around 20 px — and the size test scores 3/6 against a threshold
+of 0.80 and throws the whole effect away. Both balloons on the same page were
+found at 0.80 while the effect was invisible.
+
+Marks far below the cluster's median that sit right against a bigger one are
+now folded into it before the test runs. The threshold is the same 0.55 the size
+test uses as its lower bound, on purpose: it absorbs exactly the marks that test
+would have rejected and nothing else. Merging can only lower the count, so it
+can make the glyph minimum harder to reach but never invents a cluster.
+
+The same shape exists in Latin — an i and its tittle, a j, an exclamation mark —
+so this is not a Japanese special case. Measured across four real English pages
+already on disk: 71 regions before, 72 after.
