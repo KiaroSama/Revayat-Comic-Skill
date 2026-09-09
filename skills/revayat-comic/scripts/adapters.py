@@ -108,6 +108,11 @@ def register_all() -> dict[str, list[str]]:
 #
 #     providers.register("image_edit", "my-editor", MyImageEditor)
 #
+# A method may also name an optional argument the stage knows about and will
+# pass only if you ask for it — an OCR `read` that names `orientation` is told
+# whether the line runs vertically. Nothing breaks if you leave it out; see
+# `providers.wants`.
+#
 # Three things the boundary guarantees, so your adapter does not have to:
 #
 #   * whatever it returns is composited under the authoritative mask, so it
