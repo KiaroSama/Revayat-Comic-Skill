@@ -53,6 +53,7 @@ so. See `persian-typesetting.md` for what differs between the two paths.
 | `clean` ran but `provider_calls` says `fell_back` | the model errored, timed out, refused or returned the wrong size | the reason is in the same record; the classical cleaners ran instead and the page is complete |
 | `ocr` wrote nothing | every reading was below `--min-confidence` (0.65) | look at the crops; a low-confidence reading is deliberately never written |
 | `ocr` reports disagreements | the engine read a **locked** region differently | not an error: the committed value was kept and the reading recorded beside it |
+| an OCR adapter's `orientation` argument is never set | the stage passes it only to a method whose signature names it, and a C callable or an un-introspectable wrapper is declined | name `orientation` (or `**kwargs`) directly on `read`; `stages.ocr.orientation_aware` in `comic.json` says which way it went |
 | `qa visual` findings look wrong | they are a model's opinions | they are advisory and never gate; `qa check` is the gate |
 | `context` refused: pages are translated but not merged | an earlier page’s `.done.txt` has not reached `comic.json`, so its Persian would be missing from this package | run `worksheet merge`, then build the context again; `--allow-unmerged` overrides and lists what is missing |
 | a sound effect’s outline looks too heavy or too light | it is matched to the weight the original was drawn at, clamped by `MIN_STROKE`/`MAX_STROKE` | `typeset.stroke` on the region records what was measured; `--flat-sfx` opts out of matching entirely |
