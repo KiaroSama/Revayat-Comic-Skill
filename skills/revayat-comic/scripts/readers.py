@@ -184,6 +184,20 @@ def _load_page(path: Path):
         ) from error
 
 
+def _copy_member(archive, member: str, target: Path) -> None:
+    """One archive member onto disk without holding it in memory.
+
+    `archive.read(member)` returns the whole member as one `bytes`, so a legal
+    600-DPI double spread cost its full size in RAM before a byte reached the
+    page directory. Both `zipfile` and `rarfile` expose the same `open()`, so
+    the fix is the stdlib copy and nothing else changes: the destination name
+    is still generated (`pNNNN`), so a hostile member name still cannot escape
+    the pages directory, and the write is still atomic.
+    """
+    with archive.open(member) as source:
+        ir.write_stream(target, source)
+
+
 # --------------------------------------------------------------------------- #
 # Sources
 # --------------------------------------------------------------------------- #
@@ -205,7 +219,7 @@ def _from_zip(path: Path, pages_dir: Path) -> list[Path]:
         for index, member in enumerate(members):
             suffix = Path(member).suffix.lower()
             target = pages_dir / f"{ir.page_id_for(index)}{suffix}"
-            ir.write_bytes(target, archive.read(member))
+            _copy_member(archive, member, target)
             written.append(target)
     return written
 
@@ -255,7 +269,7 @@ def _from_rar(path: Path, pages_dir: Path) -> list[Path]:
             for index, member in enumerate(members):
                 suffix = Path(member).suffix.lower()
                 target = pages_dir / f"{ir.page_id_for(index)}{suffix}"
-                ir.write_bytes(target, archive.read(member))
+                _copy_member(archive, member, target)
                 written.append(target)
     except rarfile.RarCannotExec as error:  # pragma: no cover - depends on host
         # **Opening a RAR5 archive succeeds without a backend; reading one does
