@@ -1,0 +1,478 @@
+"""Lettering that was drawn rather than typed, and put back the same way.
+
+Split out of `test_typeset.py`, which had grown to two thirds lettering. The
+boundary is a module: `typeset.py` sets Persian into a balloon, and
+`lettering.py` measures what a letterer did to a sound effect — its slant, its
+arc, how it recedes, how heavy the brush was and whether the weight changed
+along the word — and draws the Persian back with the same hand.
+
+Two rules run through every test here. **A measurement that does not hold up is
+a request to leave the artwork alone**, never a guess: `unreliable` means the
+original stays drawn and a person looks at it. And **a region mask is local to
+`mask_box`**, so anything measured in it is meaningless on the page until the
+box origin is added back — that shipped once without it and put every rotated
+effect near (0, 0), which is why the coordinate test is here by name.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from PIL import Image
+
+import clean
+import lettering
+import masks
+import pageir as ir
+import typeset
+
+
+# --- lettering that was drawn, not typed ------------------------------------
+# A sound effect leans, arcs and recedes. Every number comes out of the region's
+# mask, which is the shape of what `clean` erased, and every transform is gated
+# on a measurement that says the number means something.
+#
+# The contract that matters most here is the COORDINATE FRAME. A stored region
+# mask is a *local* array covering `region["mask_box"]`; the first version of
+# this feature measured in that frame and pasted onto the full page, putting
+# every rotated effect near the origin. The integration tests below use a real
+# local mask at a deliberately non-zero page position for exactly that reason.
+
+def _bar(angle: float, shape=(120, 300), thickness=20):
+    """A local region mask: a long bar, rotated, sized like a real mask_box."""
+    height, width = shape
+    canvas = np.zeros((height, width), np.uint8)
+    top = (height - thickness) // 2
+    canvas[top:top + thickness, 20:width - 20] = 255
+    if angle:
+        canvas = np.asarray(Image.fromarray(canvas).rotate(
+            angle, resample=Image.BILINEAR))
+    return canvas
+
+
+def _arc(sagitta: int, shape=(160, 320)):
+    """A local mask whose ink follows a parabola — lettering along a curve."""
+    height, width = shape
+    canvas = np.zeros((height, width), np.uint8)
+    for x in range(20, width - 20):
+        t = (x - width / 2) / (width / 2)
+        y = int(height / 2 + (t * t - 1) * sagitta)
+        canvas[max(0, y - 9):y + 9, x] = 255
+    return canvas
+
+
+def _deep_arc(sagitta: int):
+    """An arc bent past being lettering. Measured band: about 100-130 trips the
+    curvature ceiling, and past ~150 the bounding box is no longer elongated at
+    all and the elongation gate takes it first."""
+    canvas = np.zeros((420, 320), np.uint8)
+    for x in range(30, 290):
+        t = (x - 160) / 130
+        y = int(200 + (t * t - 1) * sagitta)
+        canvas[max(0, y - 8):y + 8, x] = 255
+    return canvas
+
+
+def _wedge(shape=(140, 320)):
+    """A local mask that is thick at one end and thin at the other."""
+    height, width = shape
+    canvas = np.zeros((height, width), np.uint8)
+    for x in range(20, width - 20):
+        half = int(8 + 20 * (1 - (x - 20) / (width - 40)))
+        canvas[height // 2 - half:height // 2 + half, x] = 255
+    return canvas
+
+
+@pytest.mark.parametrize("drawn", [-35, -20, 20, 35, 60])
+def test_a_measured_slant_round_trips_through_the_renderer(drawn):
+    """`measure` reports the negative of the rotation that made the shape, so
+    the renderer turns by `-angle` to put it back. Measured, not read out of
+    OpenCV's documentation: a mirrored angle looks deliberate on a page and is
+    wrong on every one of them."""
+    style = lettering.measure(_bar(drawn), np)
+    assert style is not None and style["verdict"] == "rotated"
+    assert style["angle"] == pytest.approx(-drawn, abs=1.5)
+
+
+def test_the_measured_centre_is_in_page_coordinates():
+    """THE REGRESSION. A region mask is local to `mask_box`, so a centre
+    measured in it is meaningless on the page until the box origin is added.
+    Shipped once without this and put every rotated effect near (0, 0)."""
+    mask = _bar(-20)
+    local = lettering.measure(mask, np)
+    placed = lettering.measure(mask, np, origin=(800, 1200))
+    assert placed["cx"] == pytest.approx(local["cx"] + 800)
+    assert placed["cy"] == pytest.approx(local["cy"] + 1200)
+
+
+def test_lettering_set_straight_is_flat_not_a_failure():
+    style = lettering.measure(_bar(0), np)
+    assert style is not None and style["verdict"] == "flat"
+
+
+def test_a_blob_of_glyphs_is_unreliable_rather_than_guessed_at():
+    """minAreaRect always returns an angle. On a shape with no long axis that
+    angle is wherever the fit landed, so the verdict is `unreliable` and the
+    lettering stays drawn — not a wilder guess, and not a silent flat replace."""
+    blob = np.zeros((200, 200), np.uint8)
+    blob[70:130, 60:140] = 255
+    style = lettering.measure(blob, np)
+    assert style["verdict"] == "unreliable" and style["reason"]
+
+
+def test_an_arc_is_measured_as_curved():
+    style = lettering.measure(_arc(34), np)
+    assert style["verdict"] == "curved"
+    assert style["curvature"] >= lettering.MIN_CURVE
+
+
+def test_a_gentle_wobble_is_not_an_arc():
+    """A quadratic fits any scatter. Without the curvature floor every ragged
+    straight effect reads as curved."""
+    assert lettering.measure(_arc(3), np)["verdict"] != "curved"
+
+
+def test_lettering_that_tapers_is_measured_as_receding():
+    style = lettering.measure(_wedge(), np)
+    assert style["verdict"] == "warped"
+    assert abs(style["taper"] - 1.0) >= lettering.MIN_TAPER
+
+
+def test_a_baseline_that_folds_back_is_refused():
+    """Curvature past `MAX_CURVE` is not an arc, it is usually two effects
+    caught in one mask. The safe answer is to leave the artwork alone."""
+    style = lettering.measure(_deep_arc(108), np)
+    assert style["curvature"] > lettering.MAX_CURVE
+    assert style["verdict"] == "unreliable"
+
+
+def test_a_fold_so_deep_it_has_no_long_axis_is_also_refused():
+    """The second road to the same answer, and the reason both gates exist. Bend
+    a line far enough and its bounding box stops being long at all: the axis
+    flips to vertical and every measurement taken along it is meaningless. The
+    elongation gate catches that before the curvature gate ever sees it."""
+    style = lettering.measure(_deep_arc(200), np)
+    assert style["elongation"] < lettering.MIN_ELONGATION
+    assert style["verdict"] == "unreliable"
+
+
+def test_the_renderer_refuses_a_box_the_words_cannot_fill():
+    """No font sets 13-point type in eight pixels, so the renderer reports that
+    it could not and paints nothing."""
+    canvas = Image.new("RGB", (200, 200), "white")
+    style = {"cx": 100.0, "cy": 100.0, "width": 8.0, "height": 6.0,
+             "angle": 20.0, "curvature": 0.0, "taper": 1.0,
+             "verdict": "rotated"}
+    assert lettering.render(
+        canvas, "\u06cc\u06a9 \u062c\u0645\u0644\u0647\u0654 \u0628\u0644\u0646\u062f", style, typeset.Shaper(),
+        typeset.find_font(), (0, 0, 0), None, np, typeset.fit_region,
+        typeset._pil(), max_size=64, min_size=13) is None
+    assert np.asarray(canvas).min() == 255
+
+
+def _sfx_page(doc_path, *, mask, box, text="\u0628\u0648\u0645"):
+    """Put one sound effect on the page with a REAL local mask at `box`."""
+    doc = ir.load_doc(doc_path)
+    root = ir.doc_dir(doc_path)
+    page = doc["pages"][0]
+    doc["meta"]["sfx_policy"] = "translate"
+    # Only the effect under test. These assertions measure what changed on the
+    # page, and the fixture's other regions get typeset too — they landed inside
+    # the window and read as the effect having been drawn in the wrong place.
+    region = page["regions"][0]
+    page["regions"] = [region]
+    region.update(kind="sfx", target_text=text, balloon=None,
+                  bbox=[box[0], box[1], box[2], box[3]])
+    relative = f"masks/{page['id']}/{region['id']}.png"
+    ir.write_bytes(root / relative,
+                   masks._encode_png(Image.fromarray(mask, mode="L")))
+    region["mask"] = relative
+    region["mask_box"] = list(box)
+    ir.save_doc(doc, doc_path)
+    return page, region
+
+
+def test_a_rotated_effect_lands_where_the_lettering_was(translated):
+    """The regression, end to end and on the pixels. The mask is a normal local
+    array and its box sits well away from the origin; the ink the typesetter
+    adds has to appear there and not at the top-left of the page."""
+    doc = ir.load_doc(translated)
+    page_w = doc["pages"][0]["width"]
+    page_h = doc["pages"][0]["height"]
+    box = (page_w // 2, page_h // 2, 300, 120)
+    if box[0] + 300 > page_w or box[1] + 120 > page_h:
+        pytest.skip("fixture page is too small to place the effect off-origin")
+    page, region = _sfx_page(translated, mask=_bar(-20), box=box)
+    root = ir.doc_dir(translated)
+    before = np.asarray(ir.load_image(root / (page.get("clean") or page["image"])))
+
+    typeset.typeset_document(translated)
+    after_doc = ir.load_doc(translated)
+    after_region = after_doc["pages"][0]["regions"][0]
+    assert after_region["typeset"]["style"] == "rotated"
+
+    final = np.asarray(ir.load_image(root / after_doc["pages"][0]["final"]))
+    changed = np.abs(final.astype(int) - before.astype(int)).max(axis=2) > 12
+    assert changed.any(), "nothing was drawn at all"
+    ys, xs = np.nonzero(changed)
+    # Every changed pixel sits around the region, not at the page origin.
+    assert xs.min() >= box[0] - 160 and xs.max() <= box[0] + box[2] + 160
+    assert ys.min() >= box[1] - 160 and ys.max() <= box[1] + box[3] + 160
+
+
+def test_an_unreadable_effect_is_left_drawn_and_sent_to_review(translated):
+    """`unreliable` must not quietly become ordinary flat Persian. The artwork
+    stays as the letterer drew it, the region says why, and the census reports
+    `needs_review` rather than claiming a translation that is not on the page."""
+    blob = np.zeros((150, 150), np.uint8)
+    blob[40:110, 35:115] = 255
+    page, region = _sfx_page(translated, mask=blob, box=(120, 140, 150, 150))
+    root = ir.doc_dir(translated)
+    before = np.asarray(ir.load_image(root / (page.get("clean") or page["image"])))
+
+    report = typeset.typeset_document(translated)
+    assert report["unreliable_count"] >= 1
+
+    after_doc = ir.load_doc(translated)
+    after_region = after_doc["pages"][0]["regions"][0]
+    assert after_region["typeset"]["status"] == "unreliable"
+    assert after_region["review"], "the reader was never told why"
+    assert ir.region_state(after_region, "translate") == "needs_review"
+
+    final = np.asarray(ir.load_image(root / after_doc["pages"][0]["final"]))
+    x, y, w, h = after_region["mask_box"]
+    delta = np.abs(final.astype(int) - before.astype(int)).max(axis=2)
+    assert delta[y:y + h, x:x + w].max() == 0, "the artwork was written on"
+
+
+def test_flat_sfx_turns_every_transform_off(translated):
+    """The escape hatch, and the control that proves the rotated path above is
+    real rather than the flat one wearing a different label."""
+    page_w = ir.load_doc(translated)["pages"][0]["width"]
+    page_h = ir.load_doc(translated)["pages"][0]["height"]
+    box = (min(40, page_w - 300), min(40, page_h - 120), 300, 120)
+    _sfx_page(translated, mask=_bar(-20), box=box)
+    typeset.typeset_document(translated, stylise=False)
+    after = ir.load_doc(translated)["pages"][0]["regions"][0]
+    assert after["typeset"]["style"] == "flat"
+
+
+def test_an_unreliable_effect_survives_the_real_clean_to_typeset_flow(
+        translated):
+    """THE invariant, measured against the page as it arrived.
+
+    `clean` runs before `typeset`, so a decision made at typeset time to "leave
+    the lettering as drawn" is a promise about pixels that were erased two
+    stages earlier. The previous version of this test compared the final page to
+    `page["clean"]` — the already-cleaned input — and so could not see the loss
+    at all. It compares to `page["image"]` now, which is the only comparison
+    that means anything.
+    """
+    blob = np.zeros((150, 150), np.uint8)
+    blob[40:110, 35:115] = 255                 # no long axis: unreliable
+    page, region = _sfx_page(translated, mask=blob, box=(120, 140, 150, 150))
+    root = ir.doc_dir(translated)
+    original = np.asarray(ir.load_image(root / page["image"]))
+
+    clean.clean_document(translated)
+    typeset.typeset_document(translated)
+
+    after_doc = ir.load_doc(translated)
+    after = after_doc["pages"][0]["regions"][0]
+    assert after["typeset"]["status"] == "unreliable"
+    assert after["fill"] == "keep", "clean erased it before typeset could decide"
+
+    final = np.asarray(ir.load_image(root / after_doc["pages"][0]["final"]))
+    x, y, w, h = after["mask_box"]
+    delta = np.abs(final.astype(int) - original.astype(int)).max(axis=2)
+    assert delta[y:y + h, x:x + w].max() == 0, \
+        "the original lettering is not on the final page"
+
+
+def test_a_stylised_effect_that_will_not_fit_is_restored_not_flattened(
+        translated, monkeypatch):
+    """A curved effect whose Persian will not fit its arc must not quietly
+    become a horizontal line of type across the artwork. `clean` has already
+    erased it by then, so the original ink is put back under its own mask."""
+    page, region = _sfx_page(translated, mask=_arc(34), box=(60, 60, 320, 160),
+                             text="\u0628\u0648\u0645")
+    root = ir.doc_dir(translated)
+    original = np.asarray(ir.load_image(root / page["image"]))
+
+    clean.clean_document(translated)
+    # The measurement stands; only the fitting fails.
+    monkeypatch.setattr(lettering, "render", lambda *a, **k: None)
+    typeset.typeset_document(translated)
+
+    after_doc = ir.load_doc(translated)
+    after = after_doc["pages"][0]["regions"][0]
+    assert after["typeset"]["status"] == "unreliable"
+    assert after["typeset"]["style"] == "curved"
+    assert after.get("review")
+
+    final = np.asarray(ir.load_image(root / after_doc["pages"][0]["final"]))
+    x, y, w, h = after["mask_box"]
+    delta = np.abs(final.astype(int) - original.astype(int)).max(axis=2)
+    assert delta[y:y + h, x:x + w].max() == 0
+
+
+# --- matching the hand -------------------------------------------------------
+
+def _bar_of_weight(thickness: int, angle: float = -20.0):
+    canvas = np.zeros((160, 400), np.uint8)
+    top = 80 - thickness // 2
+    canvas[top:top + thickness, 40:360] = 255
+    return np.asarray(Image.fromarray(canvas).rotate(
+        angle, resample=Image.BILINEAR))
+
+
+def test_the_stroke_weight_of_the_original_is_measured():
+    """A delicate effect and a heavy one are drawn with the same letters and
+    different weight, and replacing both with one fixed outline throws away
+    half of what made them different.
+
+    The distance transform's ridge is the half-width of the stroke it sits in;
+    a high percentile rather than the maximum keeps a junction of three strokes
+    from speaking for the whole hand.
+    """
+    light = lettering.measure(_bar_of_weight(4), np)["stroke"]
+    medium = lettering.measure(_bar_of_weight(10), np)["stroke"]
+    heavy = lettering.measure(_bar_of_weight(22), np)["stroke"]
+    assert light < medium < heavy
+    assert light < 0.07 and heavy > 0.12
+
+
+def test_a_heavier_original_gets_a_heavier_outline(monkeypatch):
+    """The measurement has to reach the ink.
+
+    Isolated on purpose: two full pipeline runs fit different type sizes, so
+    their absolute stroke widths are not comparable — the first version of this
+    test compared them anyway and reported the heavy effect as lighter. Here the
+    box, the text and the fitted size are identical and only `stroke` differs,
+    which is the one thing under test.
+    """
+    from PIL import ImageDraw
+
+    widths = []
+    original = ImageDraw.ImageDraw.text
+
+    def _spy(self, xy, txt, **kw):
+        if kw.get("stroke_width"):
+            widths.append(kw["stroke_width"])
+        return original(self, xy, txt, **kw)
+
+    monkeypatch.setattr(ImageDraw.ImageDraw, "text", _spy)
+
+    def _draw(stroke_fraction):
+        widths.clear()
+        canvas = Image.new("RGB", (600, 400), "white")
+        style = {"cx": 300.0, "cy": 200.0, "width": 320.0, "height": 120.0,
+                 "angle": -20.0, "curvature": 0.0, "taper": 1.0,
+                 "stroke": stroke_fraction, "verdict": "rotated"}
+        done = lettering.render(
+            canvas, "بوم", style, typeset.Shaper(), typeset.find_font(),
+            (18, 18, 18), (250, 250, 250), np, typeset.fit_region,
+            typeset._pil(), max_size=64, min_size=13)
+        assert done is not None
+        return max(widths)
+
+    light = _draw(0.05)
+    heavy = _draw(0.40)
+    assert heavy > light, f"light {light}, heavy {heavy} - weight was not matched"
+
+    # And it is clamped at both ends rather than tracking the mask blindly.
+    assert _draw(0.9) == _draw(0.44), "MAX_STROKE is not holding"
+
+
+# --- the hand that changes weight along the word -----------------------------
+# `stroke` matches how heavy the effect was. This is the other half: how evenly.
+# A brush that swells is the difference between hand lettering and type, and one
+# uniform weight is exactly what throws it away.
+
+def _comb(widths, height=60, gap=14, pad=20):
+    """Vertical strokes of given widths, all the same height.
+
+    Deliberately not a wedge. A wedge changes the ink per column, so `taper`
+    sees it too and the test could not tell which measurement fired. Here every
+    column with ink has the same amount of it — only the stroke width changes,
+    so `taper` stays 1.0 and modulation is measured alone.
+    """
+    total = pad * 2 + sum(widths) + gap * (len(widths) - 1)
+    canvas = np.zeros((height + 2 * pad, total), np.uint8)
+    x = pad
+    for width in widths:
+        canvas[pad:pad + height, x:x + width] = 255
+        x += width + gap
+    return canvas
+
+
+def test_a_brush_that_thickens_along_the_word_is_measured():
+    """Measured: even 0.000, growing +0.455, falling -0.455, taper 1.00 in all
+    three — so the signal is the stroke width and not the silhouette."""
+    even = lettering.measure(_comb([8] * 7), np)
+    grow = lettering.measure(_comb([4, 6, 8, 10, 12, 14, 16]), np)
+    fall = lettering.measure(_comb([16, 14, 12, 10, 8, 6, 4]), np)
+
+    assert abs(even["modulation"]) < lettering.MIN_MODULATION
+    assert grow["modulation"] > lettering.MIN_MODULATION
+    assert fall["modulation"] < -lettering.MIN_MODULATION
+    assert grow["modulation"] == pytest.approx(-fall["modulation"], abs=0.05)
+    for style in (even, grow, fall):
+        assert style["taper"] == pytest.approx(1.0, abs=0.05)
+
+
+def test_a_blot_at_one_end_is_not_a_brush_stroke():
+    """One heavy stroke among even ones is a splash, an inking slip, or two
+    effects caught in one mask. A trend needs the bands in between to agree."""
+    blot = lettering.measure(_comb([8, 8, 8, 8, 8, 8, 26]), np)
+    assert blot["modulation"] == 0.0
+
+
+def _swelling_layer(modulation: float):
+    shaper = typeset.Shaper()
+    font_path = Path(typeset.find_font())
+    from PIL import ImageDraw, ImageFont
+
+    style = {"width": 420.0, "height": 120.0, "stroke": 0.16,
+             "modulation": modulation}
+    layer, _ = lettering._strip(
+        "بوووم", style, shaper, font_path, (20, 20, 20, 255),
+        (255, 255, 255, 255), np, typeset.fit_region,
+        (Image, ImageDraw, ImageFont), max_size=110, min_size=20)
+    return np.asarray(layer)[..., 3].astype(float)
+
+
+def _ends(alpha):
+    third = alpha.shape[1] // 3
+    return alpha[:, :third].sum(), alpha[:, -third:].sum()
+
+
+def test_an_effect_that_swells_is_drawn_swelling():
+    """Compared against the unmodulated render of the same word, so the word's
+    own left-right asymmetry cancels and what is left is the brush.
+
+    Measured on this machine: right/left 0.967 flat, 1.105 swelling to the
+    right, 0.844 swelling to the left.
+    """
+    def ratio(modulation):
+        left, right = _ends(_swelling_layer(modulation))
+        return right / max(left, 1.0)
+
+    flat = ratio(0.0)
+    rightwards = ratio(0.5)
+    leftwards = ratio(-0.5)
+
+    assert rightwards > flat * 1.05, "the right end did not get heavier"
+    assert leftwards < flat * 0.95, "the left end did not get heavier"
+
+
+def test_an_evenly_drawn_effect_is_not_put_through_the_second_pass():
+    """The gate. Below `MIN_MODULATION` the render must be byte-identical to
+    the single-weight path — otherwise every ordinary effect pays for two
+    passes and a blend to look exactly the same."""
+    plain = _swelling_layer(0.0)
+    under = _swelling_layer(lettering.MIN_MODULATION * 0.9)
+    assert np.array_equal(plain, under)

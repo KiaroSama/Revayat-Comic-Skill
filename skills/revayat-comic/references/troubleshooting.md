@@ -60,6 +60,7 @@ so. See `persian-typesetting.md` for what differs between the two paths.
 | an MCP client hangs at the handshake | it is waiting for a reply to a notification | notifications have no `id` and are never answered; check the client, this server does not reply to them |
 | `context` refused: pages are translated but not merged | an earlier page’s `.done.txt` has not reached `comic.json`, so its Persian would be missing from this package | run `worksheet merge`, then build the context again; `--allow-unmerged` overrides and lists what is missing |
 | a sound effect’s outline looks too heavy or too light | it is matched to the weight the original was drawn at, clamped by `MIN_STROKE`/`MAX_STROKE` | `typeset.stroke` on the region records what was measured; `--flat-sfx` opts out of matching entirely |
+| a sound effect gets heavier toward one end | the original did, and it was matched | `typeset.modulation` records the trend, signed; below `MIN_MODULATION` (0.22) it is not applied at all, and `--flat-sfx` turns it off with everything else |
 | `translate` skipped everything | the regions already have Persian, or no `src:` yet | it fills empty regions only; a value already there is never replaced |
 | `translate`/`ocr` re-run did nothing | that work is recorded as complete | by design — rerunning costs no calls; edit the text to have it looked at again |
 
