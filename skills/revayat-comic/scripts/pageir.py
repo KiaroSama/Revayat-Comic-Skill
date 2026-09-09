@@ -24,6 +24,7 @@ import json
 import os
 import re
 import sys
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Any, Iterator, Sequence
@@ -99,6 +100,35 @@ def write_bytes(path: str | os.PathLike[str], payload: bytes) -> Path:
     try:
         with handle as stream:
             stream.write(payload)
+        os.replace(handle.name, target)
+    except BaseException:
+        Path(handle.name).unlink(missing_ok=True)
+        raise
+    return target
+
+
+def write_stream(path: str | os.PathLike[str], source) -> Path:
+    """`write_bytes`, for a payload nobody should hold in memory at once.
+
+    Same atomicity — a temporary file beside the target, replaced in one step,
+    so an interrupted copy never leaves a half-written page that looks like a
+    page. What differs is that the bytes are never all present at the same
+    time: an archive member is copied through a fixed buffer rather than read
+    into one `bytes` object first.
+
+    A page is capped at `readers.MAX_MEMBER_BYTES` (512 MB), so the version
+    that read the member whole was bounded — just bounded at half a gigabyte of
+    resident memory for one page of one comic.
+    """
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    handle = tempfile.NamedTemporaryFile(
+        "wb", delete=False, dir=str(target.parent),
+        prefix=f".{target.name}.", suffix=".tmp",
+    )
+    try:
+        with handle as stream:
+            shutil.copyfileobj(source, stream, 1024 * 1024)
         os.replace(handle.name, target)
     except BaseException:
         Path(handle.name).unlink(missing_ok=True)

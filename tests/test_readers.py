@@ -72,6 +72,34 @@ def test_a_single_image_imports(sample_page, tmp_path):
     assert report["pages"] == 1
 
 
+def test_a_member_is_streamed_onto_disk_not_read_whole(tmp_path, monkeypatch):
+    """A page is capped at 512 MB, so reading a member whole was bounded — at
+    half a gigabyte of resident memory for one page of one comic.
+
+    `ZipFile.read` is made to fail, so the only way the import can succeed is
+    through `open()` and the stdlib copy. Without the change every page here
+    would go through `read` and this test would fail on the first one.
+    """
+    original = zipfile.ZipFile.read
+
+    def _refuse(self, *args, **kwargs):
+        raise AssertionError("the whole member was read into memory")
+
+    monkeypatch.setattr(zipfile.ZipFile, "read", _refuse)
+
+    archive = write_cbz(tmp_path / "chapter.cbz", pages=2)
+    report = readers.import_source(archive, tmp_path / "work")
+    assert report["pages"] == 2
+
+    # And the bytes are the bytes: streaming is only worth anything if the page
+    # that lands is the page that was in the archive.
+    monkeypatch.setattr(zipfile.ZipFile, "read", original)
+    with zipfile.ZipFile(archive) as zf:
+        expected = zf.read("page1.png")
+    landed = (ir.doc_dir(Path(report["document"])) / "pages" / "p0001.png")
+    assert landed.read_bytes() == expected
+
+
 def test_a_cbz_with_the_wrong_extension_is_still_recognised(tmp_path):
     archive = tmp_path / "chapter.bin"
     with zipfile.ZipFile(archive, "w") as zf:
