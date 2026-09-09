@@ -71,6 +71,151 @@ class MangaOcr:
         return text, MANGA_OCR_CONFIDENCE
 
 
+# --------------------------------------------------------------------------- #
+# Hosted models, through the shape most of them speak
+# --------------------------------------------------------------------------- #
+#
+# Not "the Gemini adapter" or "the OpenAI adapter". The two roles below talk to
+# whatever is at `REVAYAT_API_BASE`, using the request shape OpenAI defined and
+# most things since have implemented — OpenAI, Azure, OpenRouter, Together,
+# Groq, vLLM, llama.cpp's server, LM Studio. One adapter reaches all of them,
+# including the ones that run on your own machine and cost nothing.
+#
+# Written with `urllib` rather than a vendor SDK on purpose: this project has
+# five dependencies and none of them is a client library. An SDK would also pin
+# the adapter to one vendor, which is the thing the boundary exists to avoid.
+
+#: Where to send the request. No default — an adapter that quietly talks to a
+#: paid endpoint because a variable was unset is not a reasonable thing to ship.
+API_BASE = "REVAYAT_API_BASE"
+
+#: The credential. Read at call time, never stored, never written into
+#: `comic.json`, never logged.
+API_KEY = "REVAYAT_API_KEY"
+
+#: Which model to ask for. Model names change faster than this file will.
+TRANSLATION_MODEL = "REVAYAT_TRANSLATION_MODEL"
+IMAGE_MODEL = "REVAYAT_IMAGE_MODEL"
+
+#: How confident to call a hosted translation. Lower than `manga-ocr`'s: a
+#: generalist writing Persian from a source string, without the page in front
+#: of it, is exactly the position this project argues is the weak one. Its
+#: answer fills an empty region and never outranks a person.
+HOSTED_CONFIDENCE = 0.7
+
+
+def _endpoint(path: str) -> str:
+    import os
+
+    base = (os.environ.get(API_BASE) or "").rstrip("/")
+    if not base:
+        raise RuntimeError(
+            f"{API_BASE} is not set. Point it at an OpenAI-compatible endpoint "
+            f"— a hosted one, or something local like http://127.0.0.1:1234/v1"
+        )
+    return f"{base}/{path.lstrip('/')}"
+
+
+def _post(path: str, payload: dict, timeout: float = 90.0) -> dict:
+    import json
+    import os
+    import urllib.request
+
+    headers = {"Content-Type": "application/json"}
+    key = os.environ.get(API_KEY)
+    if key:
+        # Only when there is one: a local server usually wants no credential,
+        # and an empty bearer token makes some of them refuse outright.
+        headers["Authorization"] = f"Bearer {key}"
+    request = urllib.request.Request(
+        _endpoint(path), data=json.dumps(payload).encode("utf-8"),
+        headers=headers, method="POST")
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+class HostedTranslation:
+    """Persian for one source string, from any OpenAI-compatible chat endpoint.
+
+    The bounded chapter context `context.py` builds is handed over as data in
+    the user message — the glossary as hard constraints, the nearby lines as
+    what came before. The system message carries the two things that make comic
+    translation different from sentence translation: it has to fit a balloon,
+    and the answer is the line and nothing else.
+    """
+
+    name = "openai-compatible"
+
+    def translate(self, source: str, context: dict):
+        import json
+        import os
+
+        model = os.environ.get(TRANSLATION_MODEL)
+        if not model:
+            raise RuntimeError(f"{TRANSLATION_MODEL} is not set")
+
+        answer = _post("chat/completions", {
+            "model": model,
+            "temperature": 0.3,
+            "messages": [
+                {"role": "system", "content":
+                 "You translate comic dialogue into natural Persian. Return "
+                 "only the Persian line: no quotes, no notes, no romanisation. "
+                 "Keep it short enough to fit a speech balloon. Obey the "
+                 "glossary under `constraints` exactly."},
+                {"role": "user",
+                 "content": json.dumps({"source": source, **context},
+                                       ensure_ascii=False)},
+            ],
+        })
+        choices = answer.get("choices") or []
+        if not choices:
+            return None
+        text = (choices[0].get("message", {}).get("content") or "").strip()
+        return (text, HOSTED_CONFIDENCE) if text else None
+
+
+class HostedImageEdit:
+    """Artwork reconstruction, from any OpenAI-compatible image-edit endpoint.
+
+    **The one role a coding agent genuinely cannot fill.** Everything else in
+    this pipeline is measurement or judgement; putting back the drawing that was
+    under a sound effect is neither.
+
+    What comes back is a candidate and nothing more. `clean.py` composites it
+    under the authoritative mask, so a model that repaints the whole page still
+    reaches no pixel it was not asked about — which is what makes it safe to
+    point this at a model nobody here has audited.
+    """
+
+    name = "openai-compatible-image"
+
+    def repair(self, page_png: bytes, mask_png: bytes, instructions: str):
+        import base64
+        import os
+
+        model = os.environ.get(IMAGE_MODEL)
+        if not model:
+            raise RuntimeError(f"{IMAGE_MODEL} is not set")
+
+        answer = _post("images/edits", {
+            "model": model,
+            "prompt": instructions,
+            "image": base64.b64encode(page_png).decode("ascii"),
+            "mask": base64.b64encode(mask_png).decode("ascii"),
+            "response_format": "b64_json",
+        }, timeout=300.0)
+        data = answer.get("data") or []
+        if not data:
+            return None
+        encoded = data[0].get("b64_json")
+        if not encoded:
+            # A URL rather than bytes. Fetching it is a second request to a host
+            # nobody vetted, so decline and let the classical cleaners run.
+            return None
+        return base64.b64decode(encoded)
+
+
 def register_all() -> dict[str, list[str]]:
     """Make every adapter in this module selectable, and say what is usable.
 
@@ -79,7 +224,12 @@ def register_all() -> dict[str, list[str]]:
     is reported, so `doctor` can tell "not registered" from "registered but you
     still need to `pip install` it".
     """
+    import os
+
     providers.register("ocr", MangaOcr.name, MangaOcr)
+    providers.register("translation", HostedTranslation.name, HostedTranslation)
+    providers.register("image_edit", HostedImageEdit.name, HostedImageEdit)
+    registered = [MangaOcr.name, HostedTranslation.name, HostedImageEdit.name]
 
     usable: list[str] = []
     missing: list[str] = []
@@ -89,7 +239,18 @@ def register_all() -> dict[str, list[str]]:
         missing.append(MangaOcr.name)
     else:
         usable.append(MangaOcr.name)
-    return {"registered": [MangaOcr.name], "installed": usable,
+
+    # The hosted pair needs no package at all — only somewhere to send the
+    # request. Reported the same way, so `doctor` can say "registered, but you
+    # still have to point it at something" rather than looking ready.
+    for name, model_variable in ((HostedTranslation.name, TRANSLATION_MODEL),
+                                 (HostedImageEdit.name, IMAGE_MODEL)):
+        if os.environ.get(API_BASE) and os.environ.get(model_variable):
+            usable.append(name)
+        else:
+            missing.append(name)
+
+    return {"registered": registered, "installed": usable,
             "needs_install": missing}
 
 
