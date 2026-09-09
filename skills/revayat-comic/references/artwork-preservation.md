@@ -133,6 +133,12 @@ revayat-comic clean --doc work/comic.json --provider <name>
 Same composite, one fewer step: the model's page goes through the identical
 per-region masking and participates in none of the arithmetic that bounds it.
 
+One real provider ships: `openai-compatible-image`, which posts to whatever is
+at `REVAYAT_API_BASE` — a hosted image endpoint or a server on your own machine.
+Set `REVAYAT_IMAGE_MODEL`, and `REVAYAT_API_KEY` when the endpoint wants one.
+See the module docstring in `scripts/adapters.py` for writing another; it is
+about twenty lines and nothing in this file changes for it.
+
 **But it is not treated like `--external`, and the difference is deliberate.**
 
 | | who decided | which regions |
