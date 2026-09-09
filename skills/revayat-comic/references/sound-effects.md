@@ -206,9 +206,28 @@ counters of the Persian and turns a word into a blob, too thin stops doing the
 job an outline is there for, which on artwork is the only thing keeping the word
 legible. With nothing to measure it falls back to `size // 8`.
 
+**And the weight changes along the word, if the original's did.** A brush that
+starts light and swells is the difference between hand lettering and type, and
+one uniform weight is what throws it away. The upright mask is split into five
+bands, each band's stroke half-width taken at the same percentile, and the two
+ends compared; the bands in between have to agree on the direction, so a single
+blot at one end is not mistaken for a swell. Past `MIN_MODULATION` (0.22) the
+lettering is drawn twice, at a lighter and a heavier outline, and cross-faded
+along the same axis the measurement ran down. Below it, the render is
+byte-identical to the single-weight path — an ordinary effect pays nothing.
+
+The weight is carried by the **outline** rather than by the font's `wght` axis,
+and that is a measured decision rather than a limitation. Vazirmatn ships the
+axis and Pillow can set it, but the advance width changes with the weight — 104
+px against 113 px for one word at size 40, about 9% — so two renders drift apart
+across the strip and the blend ghosts. Growing the outline leaves every glyph at
+exactly the same position in both passes, and grows the mark the way a heavier
+brush does. The blend is premultiplied, or the new ring picks up a dark fringe
+from the transparent side.
+
 `--flat-sfx` turns every transform off. `typeset.style` on the region records
-which path ran, and `typeset.angle`, `curvature` and `taper` record what was
-measured.
+which path ran, and `typeset.angle`, `curvature`, `taper`, `stroke` and
+`modulation` record what was measured.
 
 ## `unreliable` means keep, and that is deliberate
 
@@ -225,9 +244,11 @@ separately, and nothing here ever contradicts one.
 ## Still not implemented
 
 Matching the original's **typeface** and its per-glyph flourishes is out, and so
-is anything needing a mesh warp finer than the four-point one. Overall stroke
-weight *is* matched now (above); what is not is modulation *within* a stroke —
-a brush that thickens on the downstroke — which needs a variable font axis and a
-letterer's judgement about where the pressure went. Those need a lettering artist or a font drawn to
-match, and a half-hearted version looks worse than leaving the source in place.
+is anything needing a mesh warp finer than the four-point one. Weight is matched
+both overall and along the word (above). What is left is genuinely a lettering
+artist's job: where inside a single letterform the pressure went — a stem heavy
+at the top and light at the foot — which is a property of the typeface's own
+drawing rather than anything measurable from an erased mask. That needs a font
+drawn to match, and a half-hearted version looks worse than leaving the source
+in place.
 

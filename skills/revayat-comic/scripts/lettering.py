@@ -73,6 +73,15 @@ MAX_STROKE = 0.22
 #: is the only thing keeping the word readable.
 MIN_STROKE = 0.06
 
+#: How lopsided the weight along an effect has to be before it is treated as a
+#: brush thickening rather than measurement noise. A hand-drawn effect that
+#: genuinely swells reaches 0.4 easily; a machine-set one sits near zero.
+MIN_MODULATION = 0.22
+
+#: And the cap. Past this the light end thins to nothing and the word stops
+#: reading as one word.
+MAX_MODULATION = 0.8
+
 #: How far a rendered effect may spill outside the area the original occupied,
 #: as a fraction of that area's size. Rotation and warping both grow a bitmap;
 #: this bounds the growth so a replacement cannot wander across the panel.
@@ -126,6 +135,57 @@ def _stroke_weight(mask, np, cv2) -> float:
         return 0.0
     half = float(np.percentile(inside, 92))
     return round(min(1.0, (2.0 * half) / height), 4)
+
+
+def _stroke_modulation(upright, np, cv2) -> float:
+    """How much heavier one end of the lettering is than the other.
+
+    `_stroke_weight` answers *how thick*, as one number for the whole effect.
+    This answers *how evenly* — the thing a brush does that a typeface does not.
+    A drawn effect often starts light and swells, or lands heavy and lifts off;
+    replacing both with one uniform weight throws that away.
+
+    Measured on the **upright** mask, so "along the effect" is simply left to
+    right. The ink is split into five bands, each band's stroke half-width taken
+    at the same high percentile `_stroke_weight` uses, and the two ends
+    compared. Five is enough to see a trend and few enough that one gap between
+    words does not become the signal.
+
+    Returns a signed fraction: positive means the right-hand end is heavier,
+    negative the left. Near zero means evenly drawn, which is the common case
+    and the one that must stay cheap.
+    """
+    ink = (upright > 0).astype(np.uint8)
+    columns = np.flatnonzero(ink.any(axis=0))
+    if columns.size < 25:
+        return 0.0
+    distance = cv2.distanceTransform(ink, cv2.DIST_L2, 3)
+
+    bands = np.array_split(columns, 5)
+    weights = []
+    for band in bands:
+        inside = distance[:, band]
+        inside = inside[inside > 0]
+        # A band that is nearly all gap says nothing about the hand; skip it
+        # rather than let a thin sample drag the trend.
+        if inside.size < 12:
+            return 0.0
+        weights.append(float(np.percentile(inside, 92)))
+
+    first, last = weights[0], weights[-1]
+    total = first + last
+    if total <= 0.0:
+        return 0.0
+    trend = (last - first) / total
+
+    # One end being heavier is only a brush stroke if the bands in between go
+    # the same way. Without this a single blot at one end reads as a swell.
+    steps = np.diff(weights)
+    if steps.size and float(np.sign(trend)) != 0.0:
+        agreeing = float((np.sign(steps) == np.sign(trend)).mean())
+        if agreeing < 0.6:
+            return 0.0
+    return round(float(np.clip(trend, -MAX_MODULATION, MAX_MODULATION)), 4)
 
 
 def _upright(mask, angle: float, np, cv2):
@@ -241,6 +301,7 @@ def measure(mask, np, origin: Sequence[float] = (0.0, 0.0)) -> dict[str, Any] | 
         "curvature": 0.0,
         "taper": 1.0,
         "stroke": _stroke_weight(mask, np, cv2),
+        "modulation": 0.0,
         "verdict": "flat",
     }
 
@@ -257,6 +318,7 @@ def measure(mask, np, origin: Sequence[float] = (0.0, 0.0)) -> dict[str, Any] | 
         return style
 
     upright = _upright(mask, style["angle"], np, cv2)
+    style["modulation"] = _stroke_modulation(upright, np, cv2)
     columns, centre, weight = _baseline(upright, np)
     curvature, residual = _curvature(columns, centre, np)
     taper = _taper(weight, np)
@@ -336,9 +398,72 @@ def _strip(text: str, style: dict[str, Any], shaper, font_path, fill, stroke,
         # The shadow goes down and right, under everything, the way a letterer
         # would ink it — and before the outline, so the outline stays crisp.
         draw.text((line["x"] + offset, line["y"] + offset), shaped, **shadow)
+
+    swell = float(style.get("modulation") or 0.0)
+    if abs(swell) >= MIN_MODULATION and options.get("stroke_width"):
+        # The original was drawn with a brush that changed weight along the
+        # word. Two passes at two weights, cross-faded along the same axis the
+        # measurement ran down, put that back.
+        base = options["stroke_width"]
+        light = dict(options)
+        heavy = dict(options)
+        light["stroke_width"] = max(1, int(round(base * (1.0 - abs(swell) / 2.0))))
+        heavy["stroke_width"] = max(light["stroke_width"] + 1,
+                                    int(round(base * (1.0 + abs(swell) / 2.0))))
+        body = _swell(_body(layer.size, fitted, light, shaper, pil),
+                      _body(layer.size, fitted, heavy, shaper, pil),
+                      swell, np, Image)
+    else:
+        body = _body(layer.size, fitted, options, shaper, pil)
+    layer.alpha_composite(body)
+    return layer, fitted
+
+
+def _body(size, fitted, options: dict[str, Any], shaper, pil):
+    """The lettering alone, on its own transparent layer.
+
+    Separate from the shadow so the two weights below can be blended without
+    the shadow being blended twice along with them.
+    """
+    Image, ImageDraw, _ = pil
+    layer = Image.new("RGBA", size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(layer)
     for line in fitted["lines"]:
         draw.text((line["x"], line["y"]), shaper.prepare(line["text"]), **options)
-    return layer, fitted
+    return layer
+
+
+def _swell(light, heavy, modulation: float, np, Image):
+    """Cross-fade a light pass into a heavy one along the effect's long axis.
+
+    **Why the weight is carried by the outline rather than a variable font
+    axis.** Vazirmatn ships a `wght` axis and Pillow can set it, so the obvious
+    route is to render the same string at two weights and blend. It does not
+    work: the advance widths differ — measured here, 104 px against 113 px for
+    one word at size 40, about 9% — so the two renders drift apart across the
+    strip and the blend ghosts. Growing the outline instead leaves every glyph
+    at exactly the same position in both passes, which is what makes the fade
+    clean, and it grows the mark the way a heavier brush does.
+
+    The blend is done premultiplied. A straight lerp of non-premultiplied RGBA
+    drags the new ring's colour toward the transparent side's black and leaves a
+    dark fringe around a coloured outline.
+    """
+    ramp = np.linspace(0.0, 1.0, light.width, dtype=np.float32)
+    if modulation < 0:
+        ramp = ramp[::-1]
+    ramp = ramp[None, :, None]
+
+    a = np.asarray(light).astype(np.float32)
+    b = np.asarray(heavy).astype(np.float32)
+    a = np.dstack([a[..., :3] * (a[..., 3:4] / 255.0), a[..., 3:4]])
+    b = np.dstack([b[..., :3] * (b[..., 3:4] / 255.0), b[..., 3:4]])
+
+    out = a + (b - a) * ramp
+    alpha = out[..., 3:4]
+    rgb = np.where(alpha > 0.0, out[..., :3] * 255.0 / np.maximum(alpha, 1e-6), 0.0)
+    blended = np.dstack([rgb, alpha])
+    return Image.fromarray(np.clip(blended, 0, 255).astype(np.uint8), "RGBA")
 
 
 def _bend(layer, curvature: float, np, Image):
@@ -451,6 +576,7 @@ def render(canvas, text: str, style: dict[str, Any], shaper, font_path, fill,
         "curvature": style["curvature"],
         "taper": style["taper"],
         "stroke": style.get("stroke", 0.0),
+        "modulation": style.get("modulation", 0.0),
         "size": fitted["size"],
         "lines": fitted["line_count"],
         "font": fitted["font"],

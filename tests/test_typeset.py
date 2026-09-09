@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -717,3 +719,95 @@ def test_a_heavier_original_gets_a_heavier_outline(monkeypatch):
 
     # And it is clamped at both ends rather than tracking the mask blindly.
     assert _draw(0.9) == _draw(0.44), "MAX_STROKE is not holding"
+
+
+# --- the hand that changes weight along the word -----------------------------
+# `stroke` matches how heavy the effect was. This is the other half: how evenly.
+# A brush that swells is the difference between hand lettering and type, and one
+# uniform weight is exactly what throws it away.
+
+def _comb(widths, height=60, gap=14, pad=20):
+    """Vertical strokes of given widths, all the same height.
+
+    Deliberately not a wedge. A wedge changes the ink per column, so `taper`
+    sees it too and the test could not tell which measurement fired. Here every
+    column with ink has the same amount of it — only the stroke width changes,
+    so `taper` stays 1.0 and modulation is measured alone.
+    """
+    total = pad * 2 + sum(widths) + gap * (len(widths) - 1)
+    canvas = np.zeros((height + 2 * pad, total), np.uint8)
+    x = pad
+    for width in widths:
+        canvas[pad:pad + height, x:x + width] = 255
+        x += width + gap
+    return canvas
+
+
+def test_a_brush_that_thickens_along_the_word_is_measured():
+    """Measured: even 0.000, growing +0.455, falling -0.455, taper 1.00 in all
+    three — so the signal is the stroke width and not the silhouette."""
+    even = lettering.measure(_comb([8] * 7), np)
+    grow = lettering.measure(_comb([4, 6, 8, 10, 12, 14, 16]), np)
+    fall = lettering.measure(_comb([16, 14, 12, 10, 8, 6, 4]), np)
+
+    assert abs(even["modulation"]) < lettering.MIN_MODULATION
+    assert grow["modulation"] > lettering.MIN_MODULATION
+    assert fall["modulation"] < -lettering.MIN_MODULATION
+    assert grow["modulation"] == pytest.approx(-fall["modulation"], abs=0.05)
+    for style in (even, grow, fall):
+        assert style["taper"] == pytest.approx(1.0, abs=0.05)
+
+
+def test_a_blot_at_one_end_is_not_a_brush_stroke():
+    """One heavy stroke among even ones is a splash, an inking slip, or two
+    effects caught in one mask. A trend needs the bands in between to agree."""
+    blot = lettering.measure(_comb([8, 8, 8, 8, 8, 8, 26]), np)
+    assert blot["modulation"] == 0.0
+
+
+def _swelling_layer(modulation: float):
+    shaper = typeset.Shaper()
+    font_path = Path(typeset.find_font())
+    from PIL import ImageDraw, ImageFont
+
+    style = {"width": 420.0, "height": 120.0, "stroke": 0.16,
+             "modulation": modulation}
+    layer, _ = lettering._strip(
+        "بوووم", style, shaper, font_path, (20, 20, 20, 255),
+        (255, 255, 255, 255), np, typeset.fit_region,
+        (Image, ImageDraw, ImageFont), max_size=110, min_size=20)
+    return np.asarray(layer)[..., 3].astype(float)
+
+
+def _ends(alpha):
+    third = alpha.shape[1] // 3
+    return alpha[:, :third].sum(), alpha[:, -third:].sum()
+
+
+def test_an_effect_that_swells_is_drawn_swelling():
+    """Compared against the unmodulated render of the same word, so the word's
+    own left-right asymmetry cancels and what is left is the brush.
+
+    Measured on this machine: right/left 0.967 flat, 1.105 swelling to the
+    right, 0.844 swelling to the left.
+    """
+    def ratio(modulation):
+        left, right = _ends(_swelling_layer(modulation))
+        return right / max(left, 1.0)
+
+    flat = ratio(0.0)
+    rightwards = ratio(0.5)
+    leftwards = ratio(-0.5)
+
+    assert rightwards > flat * 1.05, "the right end did not get heavier"
+    assert leftwards < flat * 0.95, "the left end did not get heavier"
+
+
+def test_an_evenly_drawn_effect_is_not_put_through_the_second_pass():
+    """The gate. Below `MIN_MODULATION` the render must be byte-identical to
+    the single-weight path — otherwise every ordinary effect pays for two
+    passes and a blend to look exactly the same."""
+    plain = _swelling_layer(0.0)
+    under = _swelling_layer(lettering.MIN_MODULATION * 0.9)
+    assert np.array_equal(plain, under)
+
