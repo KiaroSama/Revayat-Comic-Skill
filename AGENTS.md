@@ -47,7 +47,7 @@ tests/              pytest; fixtures are generated, never committed
 | `export.py` | CBZ, PDF, folder |
 | `lettering.py` | matching a drawn effect's slant, arc and recession |
 | `providers.py` | the optional second-opinion boundary, and its fakes |
-| `adapters.py` | real providers — currently `manga-ocr`, local and keyless |
+| `adapters.py` | real providers: `manga-ocr` local and keyless, plus translation and image edit against any OpenAI-compatible endpoint |
 | `context.py` | the bounded chapter context handed to a translator |
 | `ocr.py` | the optional OCR stage, off by default |
 | `translate.py` | the optional machine translator, off by default |
