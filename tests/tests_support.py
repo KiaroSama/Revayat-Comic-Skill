@@ -11,6 +11,13 @@ which script the ink came from. Drawing with a CJK font instead would make the
 suite depend on a font that is not installed on a stock CI runner, and would
 test the font rather than the detector. Script-specific behaviour is unit-tested
 directly on strings, where it belongs.
+
+`japanese_page` is the one exception, and it is opt-in: it returns `None` when
+no CJK font is installed, so the test that uses it skips exactly the way the
+RAQM and unrar tests do. What it buys is the thing shapes cannot stand in for —
+a vertical column of real kanji with real furigana beside it, which is denser
+ink at a smaller size than any block of rectangles, and is the case the whole
+`orientation` path exists for.
 """
 
 from __future__ import annotations
@@ -134,6 +141,130 @@ def manga_page(
              px0 + 300 * scale, py1 - 40 * scale],
             rows=1, columns=4, colour=BLACK, seed=2, gaps=False,
         )
+    return page
+
+
+#: Faces that carry kanji and kana, most specific first. Windows ships the first
+#: two; the Noto builds are what a Linux runner is likely to have if it has any.
+CJK_FACES = (
+    "msgothic.ttc", "YuGothM.ttc", "YuGothR.ttc",
+    "NotoSansCJKjp-Regular.otf", "NotoSansJP-Regular.otf",
+    "NotoSerifCJK-Regular.ttc", "DroidSansFallbackFull.ttf",
+)
+
+
+def cjk_font(size: int):
+    """A font that can draw Japanese, or `None` on a machine without one.
+
+    Checked by asking for a glyph rather than by trusting the filename: a face
+    can be installed under a promising name and still have no kanji, and a
+    fixture that silently draws tofu tests nothing.
+    """
+    from PIL import ImageFont
+
+    roots = [Path("C:/Windows/Fonts"), Path("/usr/share/fonts"),
+             Path("/Library/Fonts"), Path("/System/Library/Fonts")]
+    for name in CJK_FACES:
+        for root in roots:
+            if not root.is_dir():
+                continue
+            found = next(root.rglob(name), None) if root.name != "Fonts" \
+                else (root / name if (root / name).exists() else None)
+            if found is None:
+                found = next(root.rglob(name), None)
+            if found is None:
+                continue
+            try:
+                font = ImageFont.truetype(str(found), size)
+                # 力 is a kanji every CJK face has and no Latin face does.
+                box = font.getbbox("\u529b")
+            except OSError:
+                continue
+            if box and box[2] > box[0]:
+                return font
+    return None
+
+
+def japanese_page(width: int = 1000, height: int = 1500):
+    """A page whose lettering is real Japanese, or `None` without a CJK font.
+
+    Three things a block of rectangles cannot produce:
+
+    * **a vertical column** — glyphs stacked in square em boxes, which is what
+      the detector has to read as one region running the other way;
+    * **furigana** — a second, much smaller column beside the first. It is the
+      case that breaks a naive merge, because it is close enough to the main
+      column to be swallowed and is not part of the line;
+    * **kanji density** — many strokes inside one em, so the mask has far more
+      internal edges per glyph than Latin does.
+
+    **The balloons hug their text**, and that is not cosmetic. The detector
+    requires a balloon interior to hold at least `ink_min` (1.5%) of ink, and
+    the first version of this fixture drew three glyphs in an ellipse five times
+    their size: 1.3%, just under, and detection found none of them. A real manga
+    balloon is drawn around its text with a margin of roughly half a character,
+    so a fixture that leaves more says more about the fixture than the page.
+    """
+    font = cjk_font(40)
+    if font is None:
+        return None
+    small = cjk_font(18)
+
+    scale = min(width, height) / 1000.0
+    page = Image.new("RGB", (width, height), WHITE)
+    draw = ImageDraw.Draw(page)
+    border = max(2, round(5 * scale))
+    outline = max(2, round(4 * scale))
+
+    panels = []
+    margin, gutter = 40 * scale, 34 * scale
+    panel_w = (width - 2 * margin - gutter) / 2
+    panel_h = (height - 2 * margin - gutter) / 2
+    for row in range(2):
+        for column in range(2):
+            x0 = margin + column * (panel_w + gutter)
+            y0 = margin + row * (panel_h + gutter)
+            box = [x0, y0, x0 + panel_w, y0 + panel_h]
+            draw.rectangle(box, outline=BLACK, width=border)
+            panels.append(box)
+
+    # --- a vertical balloon, the column running top to bottom ----------------
+    px0, py0, _, _ = panels[0]
+    step = 46 * scale
+    column_text = "\u3084\u3081\u308d\u3063\u3066"          # やめろって
+    cx = px0 + panel_w * 0.52
+    top = py0 + 60 * scale
+    pad_x, pad_y = 42 * scale, 34 * scale
+    draw.ellipse([cx - pad_x, top - pad_y,
+                  cx + 40 * scale + pad_x, top + step * len(column_text) + pad_y],
+                 fill=WHITE, outline=BLACK, width=outline)
+    y = top
+    for glyph in column_text:
+        draw.text((cx, y), glyph, font=font, fill=BLACK)
+        y += step
+    # Furigana: a smaller column to the *right* of the main one, which is where
+    # a reading goes in vertical Japanese.
+    if small is not None:
+        ry = top + 4 * scale
+        for glyph in "\u3061\u304b\u3089":                    # ちから
+            draw.text((cx + 42 * scale, ry), glyph, font=small, fill=BLACK)
+            ry += 21 * scale
+
+    # --- a horizontal balloon, so the page carries both orientations ---------
+    px0, py0, _, _ = panels[1]
+    line = "\u305d\u3046\u304b\u3001\u3068\u601d\u3046"   # そうか、と思う
+    text_w = 40 * scale * len(line)
+    mid = (px0 + panel_w / 2, py0 + 110 * scale)
+    draw.ellipse([mid[0] - text_w / 2 - 34 * scale, mid[1] - 52 * scale,
+                  mid[0] + text_w / 2 + 34 * scale, mid[1] + 52 * scale],
+                 fill=WHITE, outline=BLACK, width=outline)
+    draw.text(mid, line, font=font, fill=BLACK, anchor="mm")
+
+    # --- a sound effect drawn onto the artwork, no balloon around it ---------
+    px0, py0, _, py1 = panels[3]
+    effect = cjk_font(int(110 * scale)) or font
+    draw.text((px0 + 44 * scale, py1 - 190 * scale),
+              "\u30c9\u30ab\u30f3", font=effect, fill=BLACK)   # ドカン
     return page
 
 
