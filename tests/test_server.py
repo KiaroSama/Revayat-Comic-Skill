@@ -240,3 +240,102 @@ def test_the_document_is_untouched_by_being_reachable(detected):
                arguments={"args": ["check", "--doc", str(detected)]}))
     assert Path(detected).read_bytes() == before
     assert ir.load_doc(detected)["pages"]
+
+
+# --- a real client, over a real process ---------------------------------------
+# Everything above drives `serve_mcp` in-process with StringIO. That proves the
+# protocol and proves nothing about the transport: pipe buffering, the child's
+# stdout encoding, whether the process exits when the pipe closes. A client
+# talking to a subprocess is the shape every MCP host actually uses.
+
+class _StdioClient:
+    """The smallest MCP client that is really a client: a subprocess, two
+    pipes, newline-delimited JSON-RPC, and no shared memory with the server."""
+
+    def __init__(self, argv):
+        import subprocess
+
+        self.process = subprocess.Popen(
+            argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True, encoding="utf-8", bufsize=1)
+        self._id = 0
+
+    def request(self, method, **params):
+        self._id += 1
+        self.process.stdin.write(json.dumps(
+            {"jsonrpc": "2.0", "id": self._id, "method": method,
+             "params": params}) + "\n")
+        self.process.stdin.flush()
+        line = self.process.stdout.readline()
+        assert line, "the server closed the pipe without answering"
+        return json.loads(line)
+
+    def notify(self, method, **params):
+        self.process.stdin.write(json.dumps(
+            {"jsonrpc": "2.0", "method": method, "params": params}) + "\n")
+        self.process.stdin.flush()
+
+    def close(self, timeout=20):
+        self.process.stdin.close()
+        return self.process.wait(timeout=timeout)
+
+
+@pytest.fixture
+def stdio_client():
+    import sys
+
+    cli = Path(server.__file__).resolve().parent / "revayat-comic.py"
+    client = _StdioClient([sys.executable, str(cli), "serve", "mcp"])
+    try:
+        yield client
+    finally:
+        if client.process.poll() is None:
+            client.process.kill()
+            client.process.wait(timeout=10)
+
+
+def test_a_real_client_completes_the_handshake_and_calls_a_tool(stdio_client,
+                                                                detected):
+    """The full conversation an MCP host has, across a process boundary:
+    initialize, the notification that gets no answer, tools/list, tools/call."""
+    hello = stdio_client.request("initialize", protocolVersion="2025-03-26",
+                                 capabilities={}, clientInfo={"name": "probe"})
+    assert hello["result"]["serverInfo"]["name"] == server.SERVER_NAME
+
+    # A notification must not be answered. If the server replies to it, the
+    # next `readline` returns that reply instead and every id after is off by
+    # one — which is exactly how this fails in the wild.
+    stdio_client.notify("notifications/initialized")
+
+    listed = stdio_client.request("tools/list")
+    assert listed["id"] == 2, "the notification was answered"
+    assert len(listed["result"]["tools"]) == len(server.tools())
+
+    called = stdio_client.request(
+        "tools/call", name="revayat_qa",
+        arguments={"args": ["check", "--doc", str(detected)]})
+    assert called["id"] == 3
+    body = json.loads(called["result"]["content"][0]["text"])
+    assert body["stage"] == "qa" and body["report"]["findings"]
+
+
+def test_the_server_exits_when_the_client_closes_the_pipe(stdio_client):
+    """A host that goes away must not leave a python process behind."""
+    stdio_client.request("ping")
+    assert stdio_client.close() == 0
+
+
+def test_persian_and_japanese_survive_the_pipe(stdio_client, detected):
+    """The wire is UTF-8 on every platform. A Windows console defaults to a
+    legacy code page, and a stage report full of Persian is the first thing to
+    hit it — which is why every entry point calls `ir.use_utf8_stdio`."""
+    stdio_client.request("initialize")
+    called = stdio_client.request(
+        "tools/call", name="revayat_worksheet",
+        arguments={"args": ["build", "--doc", str(detected)]})
+    text = called["result"]["content"][0]["text"]
+    assert json.loads(text)["stage"] == "worksheet"
+
+    sheet = next((ir.doc_dir(detected) / "worksheets").glob("*.txt"))
+    assert sheet.read_text(encoding="utf-8").strip()
+
