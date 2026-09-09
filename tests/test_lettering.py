@@ -476,3 +476,82 @@ def test_an_evenly_drawn_effect_is_not_put_through_the_second_pass():
     plain = _swelling_layer(0.0)
     under = _swelling_layer(lettering.MIN_MODULATION * 0.9)
     assert np.array_equal(plain, under)
+
+
+# --- the nib, which is the measurable half of "pressure" ----------------------
+# Where the pressure went *along* one stroke belongs to the typeface's drawing
+# and cannot be recovered from ink already lifted off the page. Which direction
+# the pen was wide in can: a broad nib lays a heavy upright and a light flat.
+
+def _nib_grid(upright_width, flat_height, n=5, cell=70, pad=20):
+    """Upright stems crossed by flat bars, each drawn at its own thickness."""
+    canvas = np.zeros((pad * 2 + cell, pad * 2 + n * cell), np.uint8)
+    for index in range(n):
+        x = pad + index * cell + cell // 3
+        canvas[pad:pad + cell, x:x + upright_width] = 255
+        canvas[pad + cell // 2:pad + cell // 2 + flat_height,
+               x:x + cell // 2] = 255
+    return canvas
+
+
+def test_the_direction_the_pen_was_wide_in_is_measured():
+    """Measured: a round hand 0.000, a broad nib +0.538, a flat nib -0.538 —
+    symmetric, and independent of overall weight and of the trend along the
+    word, which the same fixture leaves at zero."""
+    round_hand = lettering.measure(_nib_grid(10, 10), np)
+    broad = lettering.measure(_nib_grid(20, 7), np)
+    flat = lettering.measure(_nib_grid(7, 20), np)
+
+    assert abs(round_hand["contrast"]) < lettering.MIN_CONTRAST
+    assert broad["contrast"] > lettering.MIN_CONTRAST
+    assert flat["contrast"] < -lettering.MIN_CONTRAST
+    assert broad["contrast"] == pytest.approx(-flat["contrast"], abs=0.05)
+    assert abs(broad["modulation"]) < lettering.MIN_MODULATION
+
+
+def test_a_thick_stem_is_not_mistaken_for_a_flat_stroke():
+    """THE MEASUREMENT BUG. The first version separated the two directions with
+    a morphological opening, and a 20 px stem is also a 20 px-wide horizontal
+    run — so it survived the horizontal opening too and both directions ended up
+    measuring the same ink. Scored 0.001 where it should have scored about 0.5.
+    """
+    stems = lettering._runs(_nib_grid(20, 7) > 0, np, vertical=True)
+    across = lettering._runs(_nib_grid(20, 7) > 0, np, vertical=False)
+    # A pixel in the middle of a stem: long down, short across.
+    assert stems.max() > across.max()
+    assert lettering.measure(_nib_grid(20, 7), np)["contrast"] > 0.3
+
+
+def _nib_extent(contrast: float):
+    shaper = typeset.Shaper()
+    font_path = Path(typeset.find_font())
+    from PIL import ImageDraw, ImageFont
+
+    style = {"width": 420.0, "height": 120.0, "stroke": 0.16,
+             "modulation": 0.0, "contrast": contrast}
+    layer, _ = lettering._strip(
+        "بوووم", style, shaper, font_path, (20, 20, 20, 255),
+        (255, 255, 255, 255), np, typeset.fit_region,
+        (Image, ImageDraw, ImageFont), max_size=110, min_size=20)
+    alpha = np.asarray(layer)[..., 3] > 0
+    return int(alpha.any(axis=0).sum()), int(alpha.any(axis=1).sum())
+
+
+def test_a_broad_nib_widens_across_and_a_flat_one_widens_down():
+    """Measured at type size 92: 211x77 round, 216x77 broad, 211x81 flat. The
+    unchanged dimension in each is the point — an isotropic `stroke_width`
+    would have moved both."""
+    round_cols, round_rows = _nib_extent(0.0)
+    broad_cols, broad_rows = _nib_extent(0.6)
+    flat_cols, flat_rows = _nib_extent(-0.6)
+
+    assert broad_cols > round_cols and broad_rows == round_rows
+    assert flat_rows > round_rows and flat_cols == round_cols
+
+
+def test_a_round_hand_is_not_put_through_the_nib():
+    """Below the gate the render must be byte-identical, so an ordinary effect
+    pays nothing."""
+    plain = _nib_extent(0.0)
+    assert _nib_extent(lettering.MIN_CONTRAST * 0.9) == plain
+

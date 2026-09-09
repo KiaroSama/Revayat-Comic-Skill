@@ -225,9 +225,24 @@ exactly the same position in both passes, and grows the mark the way a heavier
 brush does. The blend is premultiplied, or the new ring picks up a dark fringe
 from the transparent side.
 
+**And the direction the pen was wide in.** A round pen lays the same mark
+whichever way it moves; a brush or a chisel nib does not, and that difference
+survives being measured from an erased mask. Every ink pixel gets two numbers —
+how far the ink runs across it and how far it runs down — and the larger says
+which kind of stroke it belongs to while the smaller is that stroke's thickness.
+Comparing the two populations gives the nib. Past `MIN_CONTRAST` (0.18) the
+drawn lettering is widened in the matching direction, by dilating its alpha with
+a flat kernel rather than by an outline, which grows a glyph the same amount on
+every side and is a ballpoint.
+
+Measured on a deliberately broad-nibbed grid: 0.000 for a round hand, +0.538
+broad, −0.538 flat. At type size 92 the rendered word goes from 211×77 to
+216×77 broad and 211×81 flat — one dimension moves and the other does not,
+which an isotropic stroke could not do.
+
 `--flat-sfx` turns every transform off. `typeset.style` on the region records
-which path ran, and `typeset.angle`, `curvature`, `taper`, `stroke` and
-`modulation` record what was measured.
+which path ran, and `typeset.angle`, `curvature`, `taper`, `stroke`,
+`modulation` and `contrast` record what was measured.
 
 ## `unreliable` means keep, and that is deliberate
 
@@ -244,11 +259,13 @@ separately, and nothing here ever contradicts one.
 ## Still not implemented
 
 Matching the original's **typeface** and its per-glyph flourishes is out, and so
-is anything needing a mesh warp finer than the four-point one. Weight is matched
-both overall and along the word (above). What is left is genuinely a lettering
-artist's job: where inside a single letterform the pressure went — a stem heavy
-at the top and light at the foot — which is a property of the typeface's own
-drawing rather than anything measurable from an erased mask. That needs a font
-drawn to match, and a half-hearted version looks worse than leaving the source
-in place.
+is anything needing a mesh warp finer than the four-point one. Weight is now
+matched three ways: overall, along the word, and by direction (above).
+
+What is left is one thing, and it is genuinely a lettering artist's job: where
+the pressure went *along a single stroke* — a stem heavy at the top and lifting
+at the foot. That is not measurable from an erased mask, because the mask shows
+where ink was and not the order it was laid down, and reproducing it means a
+face drawn that way rather than a transform applied to one that was not. A
+half-hearted version looks worse than leaving the source in place.
 
