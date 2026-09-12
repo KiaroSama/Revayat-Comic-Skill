@@ -99,6 +99,14 @@ def _fit(image, minimum: int, maximum: int):
 # --------------------------------------------------------------------------- #
 
 def render_overview(page_image, page: dict[str, Any]):
+    """The whole page with its regions outlined, and the factor it was drawn at.
+
+    The factor used to be computed here and discarded, while the worksheet and
+    the watermark command both told a reader to take box coordinates straight
+    off this image — coordinates in a space nothing recorded. On any page taller
+    than OVERVIEW_MAX_SIDE that is a different space from the page's own, so a
+    visually correct box erased a different part of the artwork.
+    """
     Image, ImageDraw, _ = _pil()
     canvas = page_image.convert("RGB").copy()
     scale = min(1.0, OVERVIEW_MAX_SIDE / max(canvas.size))
@@ -130,7 +138,7 @@ def render_overview(page_image, page: dict[str, Any]):
         draw.rectangle([x, by, x + tw, by + th], fill=colour)
         draw.text((x + pad, by + pad - box[1]), tag, font=font, fill=(255, 255, 255))
 
-    return canvas
+    return canvas, scale
 
 
 # --------------------------------------------------------------------------- #
@@ -235,7 +243,8 @@ def build_document(
         folder = f"crops/{page['id']}"
 
         overview = f"{folder}/overview.png"
-        ir.save_image(render_overview(image, page), root / overview)
+        drawn, overview_scale = render_overview(image, page)
+        ir.save_image(drawn, root / overview)
 
         sheets = render_sheets(image, page)
         names: list[str] = []
@@ -245,10 +254,14 @@ def build_document(
             names.append(name)
 
         page["overview"] = overview
+        # How to get from a box outlined on the overview back to the page:
+        # page_value = overview_value / overview_scale.
+        page["overview_scale"] = overview_scale
         page["sheets"] = names
         produced.append({
             "page": page["id"],
             "overview": overview,
+            "overview_scale": overview_scale,
             "sheets": names,
             "regions": len(page.get("regions", [])),
         })

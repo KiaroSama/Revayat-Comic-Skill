@@ -140,3 +140,85 @@ def test_a_crop_is_enlarged_so_small_lettering_is_readable(detected):
 
     assert min(crop.size) > 0
     assert max(crop.size) <= crops.MAX_CROP_SIDE
+
+
+# --- R16: a box read off the overview is in overview pixels ------------------
+
+def _tall_chapter(tmp_path, width=1400, height=2600):
+    """One page taller than OVERVIEW_MAX_SIDE, so the overview is downscaled.
+
+    The shared fixtures are 1000x1500 — under the 1600 limit, so their overview
+    is drawn at 1:1 and every coordinate claim about it happens to be true.
+    That is exactly why nothing caught this.
+    """
+    import detect
+    import readers
+    from tests_support import manga_page
+
+    source = tmp_path / "src"
+    source.mkdir()
+    manga_page(width, height).save(source / "001.png")
+    readers.import_source(source, tmp_path / "work",
+                          source_language="ja", direction="rtl")
+    doc_path = tmp_path / "work" / "comic.json"
+    detect.detect_document(doc_path)
+    return doc_path
+
+
+def test_the_overview_records_the_scale_it_was_drawn_at(tmp_path):
+    """The overview is downscaled to fit 1600 pixels, and the factor was used
+    and thrown away. Everything that tells a reader to read box coordinates off
+    it — the worksheet, the watermark command — was therefore asking for numbers
+    in a coordinate space nothing recorded."""
+    doc_path = _tall_chapter(tmp_path)
+    report = crops.build_document(doc_path)
+
+    page = ir.load_doc(doc_path)["pages"][0]
+    assert "overview_scale" in page, f"the transform is not recorded: {report}"
+
+    overview = ir.load_image(ir.doc_dir(doc_path) / page["overview"])
+    assert max(overview.size) <= crops.OVERVIEW_MAX_SIDE
+    assert page["overview_scale"] == pytest.approx(
+        overview.height / page["height"], rel=0.01)
+    assert page["overview_scale"] < 1.0, "the fixture is not tall enough to scale"
+
+
+def test_a_box_read_off_the_overview_converts_to_the_right_place(tmp_path):
+    """The conversion has to exist and be right, or a visually correct box
+    erases a different part of the page."""
+    import watermark
+
+    doc_path = _tall_chapter(tmp_path)
+    crops.build_document(doc_path)
+    page = ir.load_doc(doc_path)["pages"][0]
+    scale = page["overview_scale"]
+
+    # A mark a reader would outline on the overview: bottom-left corner.
+    overview_box = [30, int(page["height"] * scale) - 70, 240, 40]
+    report = watermark.mark_document(doc_path, overview_box, label="stamp",
+                                     from_overview=True)
+    assert report["marked"], report["refused"]
+
+    marked = next(region for region in ir.load_doc(doc_path)["pages"][0]["regions"]
+                  if region.get("erase"))
+    x, y, w, h = marked["bbox"]
+    assert w == pytest.approx(overview_box[2] / scale, rel=0.02)
+    assert y + h == pytest.approx(page["height"] - 30 / scale, rel=0.05), (
+        f"a box outlined at the foot of the overview landed at y={y}")
+
+
+def test_a_page_that_needs_no_downscaling_is_unchanged(imported):
+    """1:1 must stay 1:1, and a box in page pixels must not be rescaled."""
+    import detect
+    import watermark
+
+    detect.detect_document(imported)
+    crops.build_document(imported)
+    page = ir.load_doc(imported)["pages"][0]
+    assert page["overview_scale"] == 1.0
+
+    watermark.mark_document(imported, [40, 1400, 260, 48], label="stamp",
+                            from_overview=True)
+    marked = next(region for region in ir.load_doc(imported)["pages"][0]["regions"]
+                  if region.get("erase"))
+    assert marked["bbox"] == [40, 1400, 260, 48]

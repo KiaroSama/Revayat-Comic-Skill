@@ -43,7 +43,7 @@ FIELD = re.compile(
     r"^(?P<name>src|fa|kind|speaker|note|drop|keep|erase|box|polarity)"
     r"\s*:\s?(?P<value>.*)$")
 
-#: `box: x y w h`, in the page's own pixels — the same pixels `overview.png`
+#: `box: x y w h`, in the PAGE's own pixels. `overview.png` is drawn at most
 #: is drawn at, so a reader can take the numbers straight off it.
 BOX = re.compile(r"^\s*(\d+)[ ,]+(\d+)[ ,]+(\d+)[ ,]+(\d+)\s*$")
 FINGERPRINT = re.compile(r"^#\s*fingerprint:\s*(?P<value>[0-9a-f]{64})\s*$", re.M)
@@ -141,6 +141,16 @@ def page_worksheet(doc: dict[str, Any], page: dict[str, Any], fingerprint: str) 
         # This PAGE's fingerprint. A document-wide one made a correction on
         # any page declare every other page's finished reply stale.
         f"# fingerprint: {fingerprint}",
+        # The overview is downscaled to fit OVERVIEW_MAX_SIDE, so on a tall page
+        # a box measured on it is NOT in the page's pixels. Everything used to
+        # say it was, which meant a visually correct box erased a different part
+        # of the artwork. The conversion is printed here, where the reader is.
+        *([
+            f"# This page is {page['width']}x{page['height']}. overview.png is "
+            f"drawn at {page.get('overview_scale', 1.0):.3f} of that, so divide "
+            f"any box you measure on it by that number before writing a `box:`.",
+            "#",
+        ] if page.get("overview_scale", 1.0) < 0.999 else []),
         "#",
         "# Look at these before writing anything:",
         f"#   {page.get('overview', '(run crops first)')}",
@@ -175,7 +185,8 @@ def page_worksheet(doc: dict[str, Any], page: dict[str, Any], fingerprint: str) 
         "#",
         "#   @@ +bump sfx horizontal",
         "#   box: 742 436 58 24        <- x y w h, in the page's own pixels,",
-        "#                                read straight off overview.png",
+        "#                                measured on overview.png — see the",
+        "#                                scale note above if there is one",
         "#   src: BUMP",
         "#   fa: تلپ",
         "#",
