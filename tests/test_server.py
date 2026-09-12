@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -207,6 +208,40 @@ def test_http_runs_a_stage(http_server, detected):
                          token=token)
     assert body["stage"] == "qa" and body["report"]["findings"]
     assert status == (200 if body["ok"] else 400)
+
+
+def test_two_stages_called_at_once_each_get_their_own_report(http_server,
+                                                            detected):
+    """`redirect_stdout` swaps a process-global and this transport is a thread
+    per request, so without a lock around the capture one caller is handed the
+    other's report — well-formed, plausible, and about a stage it never asked
+    for. The assertion is on the report's *shape* for that reason: a `qa`
+    answer carrying `constraints` is the corruption itself, and nothing raises
+    when it happens.
+    """
+    base, token = http_server
+    page = ir.load_doc(detected)["pages"][0]["id"]
+    # Two stages that both print their report through the capture, with no key
+    # in common. `doctor` would not do: it returns before the redirect and so
+    # cannot be corrupted, which would make this test unable to fail.
+    calls = [("revayat_qa", ["check", "--doc", str(detected)]),
+             ("revayat_context", ["--doc", str(detected), "--page", page])] * 4
+
+    def ask(call):
+        name, args = call
+        return name, _http(base, f"/tools/{name}", {"args": args}, token=token)[1]
+
+    with ThreadPoolExecutor(max_workers=len(calls)) as pool:
+        answers = list(pool.map(ask, calls))
+
+    for name, body in answers:
+        stage = name[len("revayat_"):]
+        assert body["stage"] == stage
+        report = body["report"]
+        assert isinstance(report, dict), f"{stage} came back with {report!r}"
+        mine, theirs = (("findings", "constraints") if stage == "qa"
+                        else ("constraints", "findings"))
+        assert mine in report and theirs not in report,             f"a {stage} call answered with {sorted(report)}"
 
 
 def test_http_refuses_a_caller_without_the_token(http_server):
