@@ -120,6 +120,8 @@ $PY $SKILL/scripts/revayat-comic.py worksheet build --doc work/comic.json
 $PY $SKILL/scripts/revayat-comic.py worksheet merge --doc work/comic.json
 $PY $SKILL/scripts/revayat-comic.py glossary scan --doc work/comic.json
 $PY $SKILL/scripts/revayat-comic.py falint fix --doc work/comic.json
+#   … a watermark in the same place on every page? mark it, then re-run mask …
+#   $PY $SKILL/scripts/revayat-comic.py watermark --doc work/comic.json --box "12 1840 300 44"
 $PY $SKILL/scripts/revayat-comic.py clean   --doc work/comic.json
 $PY $SKILL/scripts/revayat-comic.py typeset --doc work/comic.json
 $PY $SKILL/scripts/revayat-comic.py qa check --doc work/comic.json
@@ -264,6 +266,8 @@ only its masked pixels are ever used.
   — masks, cleaning tiers, what QA proves
 - [`references/sound-effects.md`](skills/revayat-comic/references/sound-effects.md)
   — the four policies and how to choose
+- [`references/watermarks.md`](skills/revayat-comic/references/watermarks.md)
+  — erasing a mark, and whether it is yours to erase
 - [`references/ocr.md`](skills/revayat-comic/references/ocr.md) — reading with
   your own eyes, and when a model helps
 - [`references/serving.md`](skills/revayat-comic/references/serving.md) — MCP

@@ -14,6 +14,8 @@
     python revayat-comic.py qa        check --doc work/comic.json
     python revayat-comic.py export    --doc work/comic.json --out chapter-fa.cbz
 
+    python revayat-comic.py watermark --doc work/comic.json --box "12 1840 300 44"
+
     python revayat-comic.py serve mcp                   # JSON-RPC over stdio
     python revayat-comic.py serve http --port 8765      # loopback HTTP
 
@@ -51,6 +53,10 @@ STAGES = {
     "typeset": "typeset",
     "qa": "qa",
     "export": "export",
+    # One box marked for erasure on every page, for a mark that sits in the
+    # same place throughout. A mark that moves belongs in the worksheet as
+    # `erase: yes`. See references/watermarks.md.
+    "watermark": "watermark",
     # Not a pipeline stage: the same stages over MCP or loopback HTTP, for a
     # host that cannot run this CLI. See server.py.
     "serve": "server",

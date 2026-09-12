@@ -59,6 +59,10 @@ SERVER_NAME = "revayat-comic"
 STAGES = (
     "import", "detect", "mask", "crops", "worksheet", "ocr", "context",
     "translate", "glossary", "falint", "clean", "typeset", "qa", "export",
+    # Not a step in the chain: it marks one box for erasure on every page,
+    # before `mask` and `clean`. Listed here because a host with no shell needs
+    # it as much as one with a shell — and the drift test says so.
+    "watermark",
 )
 
 #: `doctor` lives in the CLI script rather than in a stage module, so it is

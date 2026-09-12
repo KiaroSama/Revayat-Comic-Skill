@@ -260,6 +260,10 @@ are missing from the package.
 >     census count real lettering as a false detection. `kind:`, `speaker:` and
 >     `note:` still apply beside it, and a `keep` counts as a review: it locks
 >     the region, so a later `detect` run leaves the decision alone.
+>   - `erase: yes` when the ink should be **removed with nothing put back** — a
+>     watermark, a site stamp, a scan credit. `drop` would claim there is no ink
+>     there and leave it printed; `keep` leaves it on purpose. Only for marks
+>     the user has the right to remove: `references/watermarks.md`.
 >   - `kind: sfx` / `sign` / `narration` / `thought` when it is misclassified
 >   - `speaker: <short stable name>` — the same name every time, on every page
 > - **Check every crop for two balloons in one box.** This is the commonest way
@@ -374,6 +378,19 @@ $PY $SKILL_DIR/scripts/revayat-comic.py clean --doc $WORK/comic.json --provider 
 because painting one flat or inpainting it blanks a rectangle out of the drawing.
 See `references/artwork-preservation.md`.
 
+A mark sitting in the **same place on every page** — a corner stamp on all two
+hundred — is one command rather than two hundred worksheet lines:
+
+```bash
+$PY $SKILL_DIR/scripts/revayat-comic.py watermark --doc $WORK/comic.json --box "12 1840 300 44"
+$PY $SKILL_DIR/scripts/revayat-comic.py mask --doc $WORK/comic.json
+```
+
+Run it before `clean`, and re-run `mask` after it, because the new boxes have no
+masks yet. A mark that *moves* between pages belongs in the worksheet instead,
+where you can see it. Read `references/watermarks.md` first — including the part
+about which marks are yours to remove.
+
 ## Step 9 — Set the Persian
 
 ```bash
@@ -429,13 +446,14 @@ disappeared":
 | --- | --- |
 | `translated` | carries Persian |
 | `kept_by_policy` | left as drawn on purpose — a sound effect under `keep` |
+| `erased` | removed on purpose with nothing put back — a watermark under `erase` |
 | `dropped_false_detection` | you said there is no text there |
 | `needs_review` | seen but unresolved: overflowing, or a doubt you noted |
 | `unresolved` | **must be zero** — detected and then forgotten |
 
 `unresolved` is not its own error — every region in it is already blocked by
 `untranslated-region`, and two codes on the same rows is noise. The census is
-there to be *read*: the other four are all decisions, so report the counts to
+there to be *read*: the other five are all decisions, so report the counts to
 the user rather than only the total.
 
 ## Step 11 — Export and report
@@ -492,6 +510,7 @@ Read these only when the step points at them:
 - `references/detection.md` — thresholds, difficult pages, correcting a region
 - `references/artwork-preservation.md` — masks, cleaning tiers, what QA proves
 - `references/sound-effects.md` — the four policies and how to choose
+- `references/watermarks.md` — erasing a mark, and whether it is yours to erase
 - `references/ocr.md` — reading with your own eyes, and when a model helps
 - `references/serving.md` — MCP and HTTP, for a host that cannot run this CLI
 - `references/troubleshooting.md` — the failures you are most likely to hit
