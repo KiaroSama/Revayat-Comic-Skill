@@ -24,13 +24,29 @@ import pageir as ir
 FORMATS = ("cbz", "pdf", "dir")
 
 
-def _page_source(root: Path, page: dict[str, Any]) -> Path:
-    """The most finished version of this page that exists."""
+def _resolve(root: Path, page: dict[str, Any]) -> tuple[Path, str]:
+    """The most finished version of this page that exists, and which it is."""
     for key in ("final", "clean", "image"):
         relative = page.get(key)
         if relative and (root / relative).exists():
-            return root / relative
+            return root / relative, key
     raise FileNotFoundError(f"no image for {page['id']}")
+
+
+def _page_source(root: Path, page: dict[str, Any]) -> Path:
+    return _resolve(root, page)[0]
+
+
+def _wants_rendering(page: dict[str, Any]) -> bool:
+    """Whether this page has Persian on it that a render has to carry."""
+    return any((region.get("target_text") or "").strip()
+               for region in page.get("regions", [])
+               if not region.get("dropped"))
+
+
+def _manifest(doc: dict[str, Any], root: Path) -> dict[str, str]:
+    """Which file each page will ship, resolved before anything is written."""
+    return {page["id"]: _resolve(root, page)[1] for page in doc["pages"]}
 
 
 def _dependencies(doc: dict[str, Any], root: Path, doc_path: Path) -> set[Path]:
@@ -131,9 +147,13 @@ def _comic_info(doc: dict[str, Any]) -> str:
         ("PageCount", str(len(doc["pages"]))),
         ("Translator", meta.get("tool", "")),
         # Persian is read right to left, so a two-page spread has to be paired
-        # the other way round. Readers honour this tag; without it every spread
-        # in the book is shown back to front.
-        ("Manga", "Yes" if meta.get("reading_direction") == "rtl" else "No"),
+        # the other way round. `Manga` carries that: the ComicInfo
+        # documentation says the field "defines the reading direction as
+        # right-to-left when set to YesAndRightToLeft". Plain `Yes` only says
+        # the book is a manga and leaves direction unstated, so every spread
+        # in the book was still shown back to front.
+        ("Manga", "YesAndRightToLeft"
+         if meta.get("reading_direction") == "rtl" else "No"),
     ]
     body = "".join(
         f"  <{name}>{escape(value)}</{name}>\n" for name, value in fields if value
@@ -220,7 +240,7 @@ def _export_dir(doc: dict[str, Any], root: Path, out: Path,
 
 def export_document(
     doc_path: str | Path, out: str | Path, *, fmt: str | None = None,
-    quality: int = 0,
+    quality: int = 0, draft: bool = False,
 ) -> dict[str, Any]:
     doc_path = Path(doc_path)
     doc = ir.load_doc(doc_path)
@@ -234,15 +254,44 @@ def export_document(
         raise ValueError(f"unknown format {fmt!r}; expected one of {FORMATS}")
     _refuse_collisions(doc, root, doc_path, out, fmt)
 
+    # Resolved before a byte is written, because the fallback is silent: a
+    # page whose render is missing shipped its cleaned version — or the
+    # untranslated original — and was still counted under `typeset_pages`.
+    sources = _manifest(doc, root)
+    unrendered = sorted(
+        page["id"] for page in doc["pages"]
+        if _wants_rendering(page) and sources[page["id"]] != "final"
+    )
+    if unrendered and not draft:
+        raise ValueError(
+            f"{len(unrendered)} page(s) carry Persian that has not been "
+            f"rendered: {', '.join(unrendered[:6])}. Run `typeset`, or pass "
+            "--draft to ship the cleaned pages instead and have the report "
+            "say so page by page."
+        )
+
     writers = {"cbz": _export_cbz, "pdf": _export_pdf, "dir": _export_dir}
     report = writers[fmt](doc, root, out, quality)
 
-    finished = sum(1 for page in doc["pages"] if page.get("final"))
-    report["typeset_pages"] = finished
-    report["untouched_pages"] = len(doc["pages"]) - finished
-    if report["untouched_pages"]:
+    # Counted from what was actually written, not from what the document says
+    # exists. A recorded `final` whose file has been deleted is not a
+    # typeset page, and a cleaned page is not an unchanged original.
+    report["sources"] = sources
+    report["draft"] = draft
+    report["typeset_pages"] = sum(1 for key in sources.values() if key == "final")
+    report["cleaned_pages"] = sum(1 for key in sources.values() if key == "clean")
+    report["original_pages"] = sum(1 for key in sources.values() if key == "image")
+    report["untouched_pages"] = report["original_pages"]
+    if unrendered:
+        report["unrendered_pages"] = unrendered
         report["note"] = (
-            f"{report['untouched_pages']} page(s) had no translated text and "
+            f"DRAFT: {len(unrendered)} page(s) carry Persian that was never "
+            "rendered and shipped without it. `sources` says which file each "
+            "page used."
+        )
+    elif report["original_pages"]:
+        report["note"] = (
+            f"{report['original_pages']} page(s) had no translated text and "
             "were exported exactly as they arrived."
         )
     ir.stamp_stage(doc, "export", {"format": fmt, "path": str(out)})
@@ -260,6 +309,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="chapter-fa.cbz, chapter-fa.pdf, or a folder")
     parser.add_argument("--format", choices=list(FORMATS), default=None,
                         help="inferred from --out when omitted")
+    parser.add_argument("--draft", action="store_true",
+                        help="ship pages whose Persian was never rendered, "
+                             "using their cleaned or original image; the "
+                             "report then says which file each page used")
     parser.add_argument("--jpeg-quality", type=int, default=0,
                         help="re-encode pages as JPEG at this quality; 0 keeps "
                              "the original bytes, which is the default. Note "
@@ -269,7 +322,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     report = export_document(
-        args.doc, args.out, fmt=args.format, quality=args.jpeg_quality
+        args.doc, args.out, fmt=args.format, quality=args.jpeg_quality,
+        draft=args.draft,
     )
     ir.emit(report)
     return 0
