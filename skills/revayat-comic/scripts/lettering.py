@@ -460,8 +460,12 @@ def _strip(text: str, style: dict[str, Any], shaper, font_path, fill, stroke,
 
     layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(layer)
+    # `stroke=` for the same reason as the balloon path: the fitter has to
+    # measure the outline the draw below adds, or it accepts a size whose ink
+    # is wider than the space it was fitted to.
     fitted = fit_region(draw, text, np.full((height, width), 255, np.uint8), np,
-                        shaper, font_path, max_size=max_size, min_size=min_size)
+                        shaper, font_path, max_size=max_size, min_size=min_size,
+                        stroke=bool(stroke))
     if fitted is None:
         return None, None
 

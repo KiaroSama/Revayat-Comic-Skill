@@ -355,9 +355,28 @@ def _tokens(text: str) -> list[str]:
     return [token for token in collapsed.split(" ") if token]
 
 
-def _measure(draw, text: str, font, shaper: Shaper) -> tuple[int, int]:
+def stroke_for(size: int) -> int:
+    """The outline width the renderer adds at this size.
+
+    Asked in ONE place, because the fitter and the renderer disagreeing about
+    it is the whole of the bug below.
+    """
+    return max(1, int(size) // 12)
+
+
+def _measure(draw, text: str, font, shaper: Shaper,
+             stroke_width: int = 0) -> tuple[int, int]:
+    """The ink `text` puts down, INCLUDING the outline that will be drawn on it.
+
+    `stroke_width` was not passed here while the draw added `size // 12` on
+    every side, so the fitter accepted a line by measuring a box smaller than
+    the one that got painted. With the house face the difference stayed inside
+    the balloon and nothing noticed; with the fallback face the Persian spilled
+    52 pixels past the balloon and the preservation gate — once it stopped
+    deriving its own authorisation from the drawing — said so.
+    """
     box = draw.textbbox((0, 0), shaper.prepare(text), font=font,
-                        **shaper.draw_kwargs())
+                        stroke_width=stroke_width, **shaper.draw_kwargs())
     return box[2] - box[0], box[3] - box[1]
 
 
@@ -396,7 +415,7 @@ def _body(widths: Sequence[int]) -> tuple[int, int]:
 
 
 def _wrap(draw, tokens: Sequence[str], font, shaper: Shaper,
-          width_for_line) -> list[str] | None:
+          width_for_line, stroke_width: int = 0) -> list[str] | None:
     """Greedy wrap where each line asks how wide *it* is allowed to be."""
     lines: list[str] = []
     current = ""
@@ -405,7 +424,7 @@ def _wrap(draw, tokens: Sequence[str], font, shaper: Shaper,
         if available <= 0:
             return None
         trial = f"{current} {token}".strip()
-        if _measure(draw, trial, font, shaper)[0] <= available:
+        if _measure(draw, trial, font, shaper, stroke_width)[0] <= available:
             current = trial
             continue
         if current:
@@ -414,7 +433,7 @@ def _wrap(draw, tokens: Sequence[str], font, shaper: Shaper,
             available = width_for_line(len(lines))
             if available <= 0:
                 return None
-        if _measure(draw, token, font, shaper)[0] > available:
+        if _measure(draw, token, font, shaper, stroke_width)[0] > available:
             # One word that does not fit on a line of its own. Splitting a
             # Persian word is worse than a smaller font, so the caller retries.
             #
@@ -436,7 +455,7 @@ def _wrap(draw, tokens: Sequence[str], font, shaper: Shaper,
 
 def fit_region(
     draw, text: str, mask, np, shaper: Shaper, font_path: Path,
-    *, max_size: int, min_size: int,
+    *, max_size: int, min_size: int, stroke: bool = False,
 ) -> dict[str, Any] | None:
     """Largest size at which `text` sets inside `mask`. ``None`` if it never does."""
     _, _, ImageFont = _pil()
@@ -458,6 +477,8 @@ def fit_region(
 
     for size in range(int(max_size), int(min_size) - 1, -1):
         font = ImageFont.truetype(str(font_path), size, layout_engine=shaper.layout)
+        # What this size will really cost once the outline is on it.
+        stroke_px = stroke_for(size) if stroke else 0
         step = max(1, int(round(size * LINE_SPACING)))
 
         placement: list[int] | None = None
@@ -478,7 +499,8 @@ def fit_region(
                 band = widths[start:start + step]
                 return min(band) if band else 0
 
-            lines = _wrap(draw, tokens, font, shaper, width_for_line)
+            lines = _wrap(draw, tokens, font, shaper, width_for_line,
+                          stroke_px)
             if lines is None:
                 break
             if len(lines) == count:
@@ -499,11 +521,23 @@ def fit_region(
                 overflow = True
                 break
             available = min(band)
-            text_width, _ = _measure(draw, line, font, shaper)
+            text_width, text_height = _measure(draw, line, font, shaper,
+                                               stroke_px)
             if text_width > available:
                 overflow = True
                 break
             middle = start + step // 2
+            # And the HEIGHT, which was measured and then thrown away. The only
+            # vertical test was `count * step <= body_height`, and `step` is a
+            # nominal `size * 1.30` — not what the face actually inks. With the
+            # house font the difference stayed inside the balloon; with the
+            # fallback face the line's ink reached past it, and the preservation
+            # gate counted 52 pixels on the artwork. A line is drawn centred on
+            # `middle`, so its ink runs half its height either side of that.
+            half = text_height / 2.0
+            if middle - half < 0 or middle + half > (bottom - top):
+                overflow = True
+                break
             centre_x = left + band_starts[len(band_starts) // 2] + available / 2.0
             rendered.append({
                 "text": line,
@@ -714,7 +748,7 @@ def typeset_page(
             area = interior_mask(clean_rgb, region, size)
             fitted = fit_region(
                 draw, text, area, np, shaper, font_path,
-                max_size=max_size, min_size=min_size,
+                max_size=max_size, min_size=min_size, stroke=bool(stroke),
             )
             if fitted is None:
                 overflow.append(region["id"])
@@ -730,7 +764,7 @@ def typeset_page(
                     **shaper.draw_kwargs(),
                 }
                 if stroke:
-                    options["stroke_width"] = max(1, fitted["size"] // 12)
+                    options["stroke_width"] = stroke_for(fitted["size"])
                     options["stroke_fill"] = stroke
                 draw.text((line["x"], line["y"]), shaped, **options)
                 box = draw.textbbox((line["x"], line["y"]), shaped, **{
@@ -763,6 +797,18 @@ def typeset_page(
                 changed = (before_draw[y0:y1, x0:x1] != after).any(axis=2)
                 stray = int((changed & (writable[y0:y1, x0:x1] == 0)).sum())
                 if stray:
+                    # Painted, checked, and taken back off again. Noticing the
+                    # overflow after the ink is down is not enough — the ink is
+                    # down, and the gate is right to count it. Restoring the
+                    # rectangle leaves the cleaned page exactly as it was and
+                    # the region honestly marked `overflow`, which is what "the
+                    # words do not fit this balloon" has always meant here: the
+                    # Persian is shortened and merged again, not shipped over
+                    # the artwork.
+                    Image = _pil()[0]
+                    canvas.paste(
+                        Image.fromarray(before_draw[y0:y1, x0:x1]), (x0, y0))
+                    painted.clear()
                     record["status"] = "overflow"
                     record["outside_authorised"] = stray
                     if region["id"] not in overflow:
