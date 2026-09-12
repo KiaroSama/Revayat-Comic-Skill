@@ -6,19 +6,10 @@ import zipfile
 
 import pytest
 
-import clean
 import export
 import glossary
 import pageir as ir
 import qa
-import typeset
-
-
-@pytest.fixture
-def finished(translated):
-    clean.clean_document(translated)
-    typeset.typeset_document(translated)
-    return translated
 
 
 # --- Export -----------------------------------------------------------------
