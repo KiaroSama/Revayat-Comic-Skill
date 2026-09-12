@@ -49,7 +49,8 @@ MIN_ANGLE = 5.0
 #: Sagitta over chord length, above which the lettering is following an arc
 #: rather than sitting on a line. 0.04 is about a 9-degree turn end to end —
 #: visible to a reader, and comfortably outside what a straight line of
-#: hand lettering wanders by.
+#: hand lettering wanders by. Compared as a magnitude: the measurement is
+#: signed, and the sign is which way the arc bends.
 MIN_CURVE = 0.04
 
 #: How far the ink's thickness at one end may differ from the other before the
@@ -309,6 +310,14 @@ def _curvature(columns, centre, np) -> tuple[float, float]:
     gives a real one. The residual comes back too because a quadratic fits *any*
     scatter — it is the residual, not the coefficient, that says whether the
     scatter was ever a curve.
+
+    **Signed**, and the sign is which way the lettering bends: positive when the
+    middle of the arc sits above the chord joining its ends, which is the
+    direction `_bend` lifts a strip for a positive number. Returning the
+    magnitude read an effect arching up and one sagging down as the same arc and
+    bent both of them upwards — two effects curving against each other came back
+    curving together. Every gate below compares the magnitude, so what the sign
+    changes is the render and nothing else.
     """
     if columns.size < 12:
         return 0.0, 1.0
@@ -325,7 +334,9 @@ def _curvature(columns, centre, np) -> tuple[float, float]:
     # joining its ends. That is the quantity a reader actually sees.
     ends = np.polyval(coefficients, np.array([x[0], x[-1]]))
     middle = float(np.polyval(coefficients, (x[0] + x[-1]) / 2.0))
-    sagitta = abs(middle - float(ends.mean()))
+    # Rows count downward, so the ends minus the middle is positive when the
+    # middle is the higher of the two.
+    sagitta = float(ends.mean()) - middle
     return sagitta / span, residual
 
 
@@ -412,17 +423,17 @@ def measure(mask, np, origin: Sequence[float] = (0.0, 0.0)) -> dict[str, Any] | 
     style["curvature"] = round(float(curvature), 4)
     style["taper"] = round(float(taper), 3)
 
-    if curvature > MAX_CURVE:
+    if abs(curvature) > MAX_CURVE:
         style["verdict"] = "unreliable"
         style["reason"] = (
-            f"the baseline bends by {curvature:.2f} of its own length, which is "
-            f"not an arc — most likely two effects caught in one mask"
+            f"the baseline bends by {abs(curvature):.2f} of its own length, "
+            f"which is not an arc — most likely two effects caught in one mask"
         )
         return style
 
     # A quadratic fits any scatter. The residual is what separates an arc from a
     # cloud, and without this gate a ragged straight effect reads as curved.
-    if curvature >= MIN_CURVE and residual < 0.25:
+    if abs(curvature) >= MIN_CURVE and residual < 0.25:
         style["verdict"] = "curved"
     elif abs(taper - 1.0) >= MIN_TAPER:
         style["verdict"] = "warped"
@@ -518,9 +529,14 @@ def _nib(body, contrast: float, size: int, np, Image):
     the other, and that is measurable from the erased ink — so it is applied
     here, by dilating the drawn alpha with a deliberately lopsided kernel.
 
-    Alpha only. Growing the colour channels would drag the outline's colour
-    across the fill; growing the coverage and leaving the colours where they
-    are thickens the mark and keeps every edge the colour it already was.
+    Coverage first. Growing the colour channels everywhere would drag the
+    outline's colour across the fill, so the ink already on the layer is left
+    exactly as it is — but a pixel nothing has been drawn on is not colourless,
+    it is `(0, 0, 0, 0)`: transparent *black*. Handing those pixels coverage and
+    nothing else put a black rim on the side a light outline grew towards —
+    measured on one render of `بوووم`, 1313 pixels at a mean of 13 against the
+    250 they grew from, 1231 of them visibly darker on mid-grey artwork. So the
+    ink is carried out with the coverage, and only into pixels that had none.
     """
     cv2 = _cv2()
     grow = int(round(size * MAX_CONTRAST_GROWTH * min(1.0, abs(contrast))))
@@ -537,7 +553,11 @@ def _nib(body, contrast: float, size: int, np, Image):
     # vertical case worked — measured: identical ink for +0.5, changed for -0.5.
     # A chisel nib is flat anyway.
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (width, height))
+    bare = array[..., 3] == 0
     array[..., 3] = cv2.dilate(array[..., 3], kernel)
+    array[..., :3] = np.where(bare[..., None] & (array[..., 3:] > 0),
+                              cv2.dilate(array[..., :3], kernel),
+                              array[..., :3])
     return Image.fromarray(array, "RGBA")
 
 
