@@ -137,6 +137,7 @@ that is where the reader is already looking at the crop:
 - `keep: yes` — there *is* text, and it stays in the artwork
 - `kind:` — it is a sign, not speech
 - `speaker:` — who is talking
+- `propose:` — a name or term the balloon mentions, for the glossary
 - `@@ +<name>` with `box: x y w h` — **there is text here and no region on it**
 
 The last one is the counterpart to `drop`, and a real page needs both. Free

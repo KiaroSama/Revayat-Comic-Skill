@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 import pageir as ir
+import stages
 
 #: How far the glyph shapes are grown, as a share of the page's smaller side.
 #: Enough to swallow anti-aliasing and JPEG ringing, small enough that a balloon
@@ -323,7 +324,7 @@ def build_document(
     # Recorded so `clean` can refuse the one combination that would destroy
     # artwork: a solid free-lettering mask handed to the built-in cleaners.
     doc["meta"]["free_lettering_mask"] = "solid" if solid_free else "glyphs"
-    ir.stamp_stage(doc, "masks", {"written": written, "balloons_derived": derived})
+    stages.stamp_stage(doc, "masks", {"written": written, "balloons_derived": derived})
     ir.save_doc(doc, doc_path)
 
     # A mask covering a third of the page is not lettering; something matched

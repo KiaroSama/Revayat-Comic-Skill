@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 import pageir as ir
+import stages
 from pageir import IMAGE_SUFFIXES
 
 FORMATS = ("cbz", "pdf", "dir")
@@ -295,7 +296,7 @@ def export_document(
             f"{report['original_pages']} page(s) had no translated text and "
             "were exported exactly as they arrived."
         )
-    ir.stamp_stage(doc, "export", {"format": fmt, "path": str(out)})
+    stages.stamp_stage(doc, "export", {"format": fmt, "path": str(out)})
     ir.save_doc(doc, doc_path)
     return report
 

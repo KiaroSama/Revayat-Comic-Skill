@@ -29,6 +29,7 @@ from typing import Any
 import falint
 import masks as mask_tools
 import pageir as ir
+import stages
 from pageir import IMAGE_SUFFIXES
 import providers
 
@@ -48,7 +49,9 @@ CODES = {
     "reading-order-broken": "error",
     "archive-invalid": "error",
     "archive-page-count": "error",
+    "archive-page-size": "error",
     "source-text-survived": "error",
+    "stale-stage": "error",
     "mask-excessive": "warning",
     "duplicate-translation": "warning",
     "low-confidence-region": "warning",
@@ -324,6 +327,14 @@ def check_document(doc_path: str | Path, *, strict: bool = False) -> dict[str, A
         # does — what happened to all of them.
         "states": ir.state_census(doc),
     }
+    for stage, reason in stages.stale_stages(doc).items():
+        # `typeset` here is the one that ships a wrong page: the render on disk
+        # was made from Persian somebody has since corrected. The others are
+        # reported for the same reason at a lower cost.
+        findings.add("stale-stage", stage,
+                     f"the `{stage}` result is out of date: {reason}. "
+                     f"Re-run `{stage}` before publishing")
+
     seen_translations: dict[str, list[str]] = defaultdict(list)
 
     for page in doc["pages"]:
@@ -547,6 +558,48 @@ def check_document(doc_path: str | Path, *, strict: bool = False) -> dict[str, A
 # Package checks
 # --------------------------------------------------------------------------- #
 
+def _page_size(payload: bytes) -> tuple[int, int] | None:
+    """The image's dimensions, or ``None`` when those bytes are not an image.
+
+    Only the header is parsed — `Image.open` is lazy — so this costs almost
+    nothing per page and still catches the thing name-matching cannot: a file
+    called `p0002.png` that is not a PNG at all.
+    """
+    import io
+
+    from PIL import Image
+
+    try:
+        with Image.open(io.BytesIO(payload)) as image:
+            return image.size
+    except Exception:
+        return None
+
+
+def _check_pages(findings: Findings, where: str, sizes: list[tuple[str, bytes]],
+                 doc: dict[str, Any]) -> None:
+    """Open every page the package claims to have, and measure it.
+
+    The check used to be a suffix match on a name. Measured against a package
+    built by hand: bytes that are not an image passed, a *directory* entry named
+    `p0002.png/` passed (its `Path(...).suffix` is `.png`), and a page at the
+    wrong size passed. Only the name-ordering test did real work.
+    """
+    expected = [(page["width"], page["height"]) for page in doc["pages"]]
+    for index, (name, payload) in enumerate(sizes):
+        size = _page_size(payload)
+        if size is None:
+            findings.add("archive-invalid", where,
+                         f"{name} is not an image the reader can open")
+            continue
+        if index < len(expected) and size != expected[index]:
+            findings.add(
+                "archive-page-size", where,
+                f"{name} is {size[0]}x{size[1]}; the document says page "
+                f"{index + 1} is {expected[index][0]}x{expected[index][1]}",
+            )
+
+
 def check_package(package: str | Path, doc_path: str | Path) -> dict[str, Any]:
     package = Path(package)
     doc = ir.load_doc(Path(doc_path))
@@ -567,11 +620,17 @@ def check_package(package: str | Path, doc_path: str | Path) -> dict[str, Any]:
                 if bad:
                     findings.add("archive-invalid", package.name,
                                  f"corrupt member: {bad}")
-                names = [
-                    name for name in archive.namelist()
-                    if Path(name).suffix.lower() in IMAGE_SUFFIXES
-                ]
+                # `info.is_dir()`, not the name: a member called `p0002.png/`
+                # is a directory, and `Path("p0002.png/").suffix` is `.png`, so
+                # counting by name alone let one stand in for a page.
+                names = sorted(
+                    info.filename for info in archive.infolist()
+                    if not info.is_dir()
+                    and Path(info.filename).suffix.lower() in IMAGE_SUFFIXES
+                )
                 found = len(names)
+                _check_pages(findings, package.name,
+                             [(name, archive.read(name)) for name in names], doc)
                 # Order is the whole point of a comic archive, and a reader that
                 # sorts by name gets it wrong unless the names sort correctly.
                 if names != sorted(names):
@@ -585,10 +644,13 @@ def check_package(package: str | Path, doc_path: str | Path) -> dict[str, Any]:
         except Exception as error:
             findings.add("archive-invalid", package.name, f"cannot open: {error}")
     else:
-        found = len([
+        children = sorted(
             child for child in package.iterdir()
-            if child.suffix.lower() in IMAGE_SUFFIXES
-        ]) if package.is_dir() else 0
+            if child.is_file() and child.suffix.lower() in IMAGE_SUFFIXES
+        ) if package.is_dir() else []
+        found = len(children)
+        _check_pages(findings, package.name,
+                     [(child.name, child.read_bytes()) for child in children], doc)
 
     if found != expected:
         findings.add("archive-page-count", package.name,

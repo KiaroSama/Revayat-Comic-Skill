@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 import pageir as ir
 import typeset
@@ -515,3 +515,123 @@ def test_a_persian_capable_font_is_still_accepted():
     except Exception:
         pytest.skip("no Persian-capable font installed")
     assert typeset._supports_persian(_Path(font)) is True
+
+
+# --- R10c/R10e/R10f: the band a line actually lies across ---------------------
+
+def _stepped_mask(height=240, width=360, rows=6):
+    """A shape whose rows do not line up: each band of rows is interior over a
+    different stretch of columns, marching left to right.
+
+    A real balloon leans like this wherever it has a tail, a slanted side or a
+    divider. The point is that `min(width per row)` and `start of the middle
+    row` describe two different pieces of the shape.
+    """
+    mask = Image.new("L", (width, height), 0)
+    draw = ImageDraw.Draw(mask)
+    band = height // rows
+    for index in range(rows):
+        left = 10 + index * 18
+        draw.rectangle([left, index * band, left + 200, (index + 1) * band - 1],
+                       fill=255)
+    return np.asarray(mask)
+
+
+def _double_run_mask(height=200, width=400):
+    """Every row split in two by a vertical divider down the middle."""
+    mask = Image.new("L", (width, height), 0)
+    draw = ImageDraw.Draw(mask)
+    draw.rectangle([20, 20, 180, height - 20], fill=255)
+    draw.rectangle([220, 20, 380, height - 20], fill=255)
+    return np.asarray(mask)
+
+
+def test_a_band_is_the_columns_every_one_of_its_rows_shares():
+    """The width came from the narrowest row's own longest run and the position
+    came from the middle row's. On a shape whose rows do not line up those are
+    different columns, so a line was measured against one span and centred on
+    another — and could be declared to fit while lying over the outline."""
+    mask = _stepped_mask()
+    span = typeset._band_span(mask, np)
+    band = 40
+    for start in range(0, mask.shape[0] - band, band):
+        left, width = span(start, start + band)
+        if width <= 0:
+            continue
+        assert mask[start:start + band, left:left + width].all(), (
+            f"rows {start}-{start + band} are not all interior over "
+            f"columns {left}-{left + width}")
+
+
+def test_a_row_split_in_two_does_not_lose_the_half_that_was_dropped():
+    """Only the longest run per row survived, and which of two equal runs that
+    was came down to a pixel. The intersection uses the whole row."""
+    mask = _double_run_mask()
+    left, width = typeset._band_span(mask, np)(40, 80)
+    assert width == 161, width           # one side, whole, not the gap
+    assert left in (20, 220), left
+    assert mask[40:80, left:left + width].all()
+
+
+def test_a_fitted_line_never_leaves_the_shape_it_was_measured_against():
+    """The property, end to end: every line `fit_region` places is drawn
+    centred on its own band, so its ink has to stay inside the columns that
+    band shares. Measured on the stepped shape, where the old answer does not.
+    """
+    shaper = typeset.Shaper()
+    font_path = typeset.find_font()
+    mask = _stepped_mask()
+    draw = _canvas(mask.shape[1], mask.shape[0])
+    fitted = typeset.fit_region(
+        draw, "هیچ‌کس نمی‌داند او کجا رفته است و چرا", mask, np, shaper,
+        font_path, max_size=40, min_size=10)
+    assert fitted is not None
+
+    from PIL import ImageFont
+
+    font = ImageFont.truetype(str(font_path), fitted["size"],
+                              layout_engine=shaper.layout)
+    step = max(1, int(round(fitted["size"] * typeset.LINE_SPACING)))
+    for line in fitted["lines"]:
+        width, _ = typeset._measure(draw, line["text"], font, shaper)
+        first = int(round(line["y"] - step / 2))
+        left = int(line["x"] - width / 2)
+        right = int(round(line["x"] + width / 2))
+        window = mask[max(0, first):first + step, max(0, left):right]
+        assert window.size and window.all(), (
+            f"{line['text']!r} at y={line['y']:.0f} covers columns "
+            f"{left}-{right} that its band does not share")
+
+
+def test_a_hard_line_break_is_honoured_and_not_carried_inside_a_word():
+    """A newline is not `[ \t]`, so it was not collapsed, and it is not `" "`,
+    so `split` left it INSIDE a token. Pillow draws a string containing a
+    newline as two lines of its own — below the band the fitter measured, and
+    outside a tight balloon."""
+    paragraphs = typeset._tokens("خط اول\nخط دوم")
+    assert paragraphs == [["خط", "اول"], ["خط", "دوم"]]
+    assert not any("\n" in token
+                   for paragraph in paragraphs for token in paragraph)
+
+
+def test_the_break_the_translation_asked_for_becomes_a_line():
+    """Two short words that would happily share one line stay on two, because
+    the break is a decision about the balloon and not whitespace to reflow."""
+    shaper = typeset.Shaper()
+    font = typeset.find_font()
+    mask = _ellipse_mask()
+    together = typeset.fit_region(_canvas(), "بله نه", mask, np, shaper, font,
+                                  max_size=40, min_size=10)
+    apart = typeset.fit_region(_canvas(), "بله\nنه", mask, np, shaper, font,
+                               max_size=40, min_size=10)
+    assert together and apart
+    assert together["line_count"] == 1
+    assert apart["line_count"] == 2
+    assert [line["text"] for line in apart["lines"]] == ["بله", "نه"]
+
+
+def test_blank_lines_do_not_become_empty_rows():
+    """A trailing newline or a double break is whitespace, not a request for an
+    empty line in the middle of a balloon."""
+    assert typeset._tokens("بله\n\n\nنه\n") == [["بله"], ["نه"]]
+    assert typeset._tokens("   \n  ") == []

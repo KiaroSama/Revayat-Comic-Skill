@@ -31,6 +31,7 @@ from typing import Any, Sequence
 
 import context as chapter_context
 import pageir as ir
+import stages
 import providers
 
 
@@ -87,7 +88,7 @@ def translate_document(
 
         per_page.append({"page": page["id"], **page_counts})
 
-    ir.stamp_stage(doc, "translate", {"provider": provider, "totals": counts})
+    stages.stamp_stage(doc, "translate", {"provider": provider, "totals": counts})
     ir.save_doc(doc, doc_path)
 
     return {

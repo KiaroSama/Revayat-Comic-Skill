@@ -6,10 +6,20 @@ isolation — which is exactly why the decision has to be made once and then
 enforced rather than re-taken on every page.
 
 Candidate finding here is deliberately modest. There is no named-entity model
-for Japanese hiding in this file; a name is proposed when the reader has already
-identified it as a speaker, or when a balloon says the same short thing several
-times across the chapter, which is what a name in a comic looks like. Everything
-else is the reader's judgement, entered by hand.
+for Japanese hiding in this file; a name arrives because the reader named a
+speaker, because the reader wrote it in `propose:`, or because a balloon says
+the same short thing several times across the chapter, which is what a name in
+a comic looks like. Everything else is the reader's judgement, entered by hand.
+
+`propose:` exists because the other two are not enough. A name that is only
+*mentioned* — "did you see Anna?" — is said once, by somebody else, and is too
+long for the repeat rule to notice; the only way in was to write it into
+`speaker`, which then claimed the wrong person was talking and carried that
+voice into every later page's context.
+
+A locked target is a decision, and re-deciding it does not erase the first one:
+changing one bumps `version` and keeps what it used to be, so a chapter
+translated against the earlier spelling can still be found.
 
 ``check`` is the half that earns its keep: it reports every place a locked term
 was rendered differently, which is the drift that no amount of care prevents.
@@ -26,11 +36,17 @@ from pathlib import Path
 from typing import Any
 
 import pageir as ir
+import stages
 
 #: A balloon that is only a name is short. Longer than this and a repeat is a
 #: catchphrase or a stock reaction, not a candidate for the names table.
 MAX_NAME_LENGTH = 12
 MIN_OCCURRENCES = 2
+
+
+#: Roles, weakest claim first. A term the reader named as a speaker outranks
+#: one they merely pointed at, which outranks one the repeat rule guessed.
+ROLES = ("term", "mentioned", "character")
 
 
 def _entry(source: str, *, role: str = "", first: str = "") -> dict[str, Any]:
@@ -40,7 +56,37 @@ def _entry(source: str, *, role: str = "", first: str = "") -> dict[str, Any]:
         "first_seen": first,
         "count": 0,
         "locked": False,
+        "version": 1,
     }
+
+
+def _promote(entry: dict[str, Any], role: str) -> None:
+    """Raise an entry's role, never lower it.
+
+    A character who is also mentioned by name in someone else's balloon must
+    not stop being a character because the mention was scanned second.
+    """
+    current = entry.get("role") or ""
+    if current not in ROLES or ROLES.index(role) > ROLES.index(current):
+        entry["role"] = role
+
+
+def set_target(entry: dict[str, Any], target: str) -> dict[str, Any]:
+    """Record a canonical form, keeping the one it replaces.
+
+    Only a LOCKED entry has a decision to preserve; an unlocked `target` is
+    still a suggestion and overwriting it costs nothing.
+    """
+    target = (target or "").strip()
+    previous = (entry.get("target") or "").strip()
+    if entry.get("locked") and previous and previous != target:
+        entry.setdefault("previous", []).append({
+            "target": previous,
+            "version": int(entry.get("version") or 1),
+        })
+        entry["version"] = int(entry.get("version") or 1) + 1
+    entry["target"] = target
+    return entry
 
 
 def scan(doc_path: str | Path) -> dict[str, Any]:
@@ -50,6 +96,7 @@ def scan(doc_path: str | Path) -> dict[str, Any]:
     entries: dict[str, Any] = glossary.setdefault("entries", {})
 
     speakers: Counter[str] = Counter()
+    mentioned: Counter[str] = Counter()
     repeats: Counter[str] = Counter()
     first_seen: dict[str, str] = {}
 
@@ -60,6 +107,11 @@ def scan(doc_path: str | Path) -> dict[str, Any]:
         if speaker:
             speakers[speaker] += 1
             first_seen.setdefault(speaker, page["id"])
+        for name in region.get("proposed") or []:
+            name = name.strip()
+            if name:
+                mentioned[name] += 1
+                first_seen.setdefault(name, page["id"])
         source = (region.get("source_text") or "").strip()
         if source and len(source) <= MAX_NAME_LENGTH and "\n" not in source:
             repeats[source] += 1
@@ -69,7 +121,15 @@ def scan(doc_path: str | Path) -> dict[str, Any]:
         entry = entries.setdefault(name, _entry(name, role="character",
                                                 first=first_seen.get(name, "")))
         entry["count"] = count
-        entry.setdefault("role", "character")
+        _promote(entry, "character")
+    for name, count in mentioned.items():
+        entry = entries.setdefault(name, _entry(name, role="mentioned",
+                                                first=first_seen.get(name, "")))
+        # A name that is both said and mentioned is counted once for each, so
+        # the table shows how often the chapter uses it at all.
+        entry["count"] = entry.get("count", 0) + count if name in speakers \
+            else count
+        _promote(entry, "mentioned")
     for text, count in repeats.items():
         existing = entries.get(text)
         if existing is not None:
@@ -89,8 +149,9 @@ def scan(doc_path: str | Path) -> dict[str, Any]:
         # would have kept whichever count it had when it last did.
         if entry.get("role") == "term" and text not in repeats:
             entry["count"] = 0
+        entry.setdefault("version", 1)
 
-    ir.stamp_stage(doc, "glossary", {"entries": len(entries)})
+    stages.stamp_stage(doc, "glossary", {"entries": len(entries)})
     ir.save_doc(doc, doc_path)
 
     needs = sorted(

@@ -624,3 +624,28 @@ def test_the_accepted_image_formats_are_defined_once(tmp_path):
     assert set(qa.IMAGE_SUFFIXES) == shared
     assert set(export_module.IMAGE_SUFFIXES) == shared
     assert set(clean_module.IMAGE_SUFFIXES) == shared
+
+
+# --- R03: QA refuses to bless a render made from a line since corrected -------
+
+def test_qa_reports_a_render_older_than_the_translation_it_shows(finished):
+    """Every stage stamped that it had run and nothing ever asked whether the
+    answer still held, so a corrected line left a finished page on disk that
+    showed the old one — and `qa` passed it."""
+    clean_report = qa.check_document(finished)
+    assert "stale-stage" not in {item["code"] for item in clean_report["findings"]}
+
+    doc = ir.load_doc(finished)
+    for region in doc["pages"][0]["regions"]:
+        if region.get("translation"):
+            region["translation"] = region["translation"] + " و باز هم"
+            break
+    else:
+        pytest.skip("this fixture has no translated region to correct")
+    ir.save_doc(doc, finished)
+
+    report = qa.check_document(finished)
+    stale = [item for item in report["findings"] if item["code"] == "stale-stage"]
+    assert stale, [item["code"] for item in report["findings"]]
+    assert not report["ok"], "a stale render is an error, not a note"
+    assert any(item["where"] == "typeset" for item in stale), stale

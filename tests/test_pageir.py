@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 import pageir as ir
+import stages
 
 
 # --- Geometry ---------------------------------------------------------------
@@ -179,3 +180,111 @@ def test_a_document_from_a_future_schema_is_refused(tmp_path):
 def test_missing_dependency_names_the_package():
     with pytest.raises(ir.MissingDependency, match="pip install"):
         ir.require("no_such_module_here", "no-such-package", "testing")
+
+
+# --- R03: what a stage ran against, and what that makes stale ----------------
+
+def _doc():
+    return {
+        "meta": {"sfx_policy": "keep", "target_language": "fa"},
+        "pages": [{
+            "id": "p0001", "sha256": "a" * 64, "width": 100, "height": 100,
+            "regions": [{
+                "id": "r001", "bbox": [1, 2, 3, 4], "kind": "speech",
+                "orientation": "horizontal",
+                "source_text": "hello", "translation": "سلام",
+            }],
+        }],
+    }
+
+
+def test_a_stage_records_what_it_read_and_when():
+    doc = _doc()
+    stages.stamp_stage(doc, "typeset", {"placed": 1})
+    record = doc["stages"]["typeset"]
+    assert set(record["inputs"]) == {"geometry", "text", "policy"}
+    assert record["seq"] == 1
+    assert not stages.stale_stages(doc)
+
+
+def test_correcting_an_approved_line_stales_the_page_already_rendered_from_it():
+    """**The one that matters.** The render on disk was made from Persian
+    somebody has since corrected, and it stayed stamped `typeset` and shipped.
+    Nothing anywhere asked."""
+    doc = _doc()
+    stages.stamp_stage(doc, "typeset", {"placed": 1})
+    doc["pages"][0]["regions"][0]["translation"] = "سلام، حالت چطور است؟"
+
+    stale = stages.stale_stages(doc)
+    assert "typeset" in stale
+    assert "text" in stale["typeset"]
+
+
+def test_correcting_a_line_does_not_stale_the_detection_that_found_the_box():
+    """Named facets rather than one document hash, exactly so that this does
+    not happen: re-detecting on every edit would renumber the regions and throw
+    away every reply written against the old ids."""
+    doc = _doc()
+    stages.stamp_stage(doc, "detect", {"totals": {}})
+    stages.stamp_stage(doc, "worksheet", {"merged": 1})
+    doc["pages"][0]["regions"][0]["translation"] = "چیز دیگری"
+
+    assert not stages.stale_stages(doc)
+
+
+def test_moving_a_box_stales_the_worksheet_and_the_masks():
+    doc = _doc()
+    stages.stamp_stage(doc, "worksheet", {"merged": 1})
+    stages.stamp_stage(doc, "masks", {"written": 1})
+    doc["pages"][0]["regions"][0]["bbox"] = [9, 9, 3, 4]
+
+    stale = stages.stale_stages(doc)
+    assert set(stale) == {"worksheet", "masks"}
+
+
+def test_changing_the_sfx_policy_stales_the_masks_not_the_worksheet():
+    doc = _doc()
+    stages.stamp_stage(doc, "worksheet", {"merged": 1})
+    stages.stamp_stage(doc, "masks", {"written": 1})
+    doc["meta"]["sfx_policy"] = "translate"
+
+    assert set(stages.stale_stages(doc)) == {"masks"}
+
+
+def test_re_running_a_stage_stales_everything_downstream_of_it():
+    """A path in `comic.json` does not change when the file behind it is
+    redrawn, so content hashing cannot see this. Order can."""
+    doc = _doc()
+    for stage in ("masks", "clean", "typeset"):
+        stages.stamp_stage(doc, stage, {"written": 1})
+    assert not stages.stale_stages(doc)
+
+    stages.stamp_stage(doc, "masks", {"written": 2})   # re-run, new masks
+    stale = stages.stale_stages(doc)
+    assert stale["clean"] == "masks has run since"
+    # `typeset` depends on `clean`, which has not re-run yet, so it is not
+    # reported twice for the same cause.
+    assert "typeset" not in stale
+
+
+def test_re_running_a_stage_that_changed_nothing_stales_nothing():
+    """`seq` counts changes, not runs. Running `mask` twice with the same
+    options is an ordinary thing to do, and it must not tell `clean` and every
+    page rendered from it that they are out of date."""
+    doc = _doc()
+    for stage in ("masks", "clean", "typeset"):
+        stages.stamp_stage(doc, stage, {"written": 1})
+    before = ir.dumps(doc)
+
+    stages.stamp_stage(doc, "masks", {"written": 1})
+
+    assert ir.dumps(doc) == before, "an identical re-run changed the document"
+    assert not stages.stale_stages(doc)
+
+
+def test_a_stamp_from_an_older_build_is_unknown_rather_than_stale():
+    """An upgrade must not look like a defect: a record with no `inputs` is a
+    build that never recorded them, not proof that anything moved."""
+    doc = _doc()
+    doc["stages"] = {"typeset": {"fingerprint": "whatever", "placed": 1}}
+    assert not stages.stale_stages(doc)

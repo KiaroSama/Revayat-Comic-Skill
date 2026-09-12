@@ -22,6 +22,7 @@ import pytest
 import clean
 import masks
 import pageir as ir
+import context
 import providers
 
 
@@ -1148,3 +1149,44 @@ def test_a_locked_term_is_never_dropped_to_fit(translated):
                             budget=1)
     assert len(package["constraints"]["glossary"]) == 300
     assert package["budget"].get("constraints_over_budget") is True
+
+
+# --- the title's standing decisions travel as constraints --------------------
+
+def test_a_title_policy_reaches_the_translator_as_a_constraint():
+    """`constraints` is what a person decided and `context` is what informs a
+    choice. Honorifics and name policy are decisions — putting them in
+    `context` invites a translator to re-take them per page."""
+    doc = {
+        "meta": {"title_policy": {"honorifics": "keep -senpai, drop -san",
+                                  "profanity": "full strength",
+                                  "slang": "  "}},
+        "pages": [{"id": "p0001", "regions": []}],
+    }
+    package = context.build(doc, "p0001")
+    policy = package["constraints"]["policy"]
+
+    assert policy["honorifics"] == "keep -senpai, drop -san"
+    assert policy["profanity"] == "full strength"
+    assert "slang" not in policy              # an empty entry is not a decision
+    assert "title_policy" not in package["context"]
+
+
+def test_no_title_policy_invents_nothing():
+    """Absent means nobody decided, and then the page decides."""
+    package = context.build({"meta": {}, "pages": [{"id": "p0001",
+                                                    "regions": []}]}, "p0001")
+    assert set(package["constraints"]["policy"]) == {
+        "sfx", "direction", "source_language"}
+
+
+def test_the_rules_forbid_assigning_register_by_stereotype():
+    """Forcing every narration into past tense, every older character into
+    formal language and every shout into impolite grammar is the failure mode
+    the register table reads like."""
+    rules = " ".join(
+        context.build({"meta": {}, "pages": [{"id": "p0001", "regions": []}]},
+                      "p0001")["constraints"]["rules"])
+    assert "not from a character's age, rank or gender" in rules
+    assert "narration is not automatically past tense" in rules
+    assert "a line break first" in rules

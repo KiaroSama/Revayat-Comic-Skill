@@ -35,6 +35,23 @@ import pageir as ir
 import providers
 
 
+def _parse_multipart(content_type: str, body: bytes) -> dict[str, bytes]:
+    """The parts of a `multipart/form-data` body, by field name.
+
+    Hand-rolled on purpose: `email`'s parser re-encodes a binary part, and the
+    thing under test here is whether a PNG arrived intact.
+    """
+    boundary = content_type.split("boundary=")[1].strip().encode()
+    parts: dict[str, bytes] = {}
+    for chunk in body.split(b"--" + boundary):
+        if not chunk.strip(b"-\r\n"):
+            continue  # the preamble and the closing `--`
+        head, _, payload = chunk.partition(b"\r\n\r\n")
+        name = head.decode("utf-8", "replace").split('name="')[1].split('"')[0]
+        parts[name] = payload[:-2] if payload.endswith(b"\r\n") else payload
+    return parts
+
+
 class _Endpoint:
     """An OpenAI-compatible server that answers however a test needs it to."""
 
@@ -52,10 +69,28 @@ class _Endpoint:
 
             def do_POST(self):  # noqa: N802 - BaseHTTPRequestHandler's name
                 length = int(self.headers.get("Content-Length") or 0)
-                payload = json.loads(self.rfile.read(length).decode("utf-8"))
+                raw = self.rfile.read(length)
+                kind = self.headers.get("Content-Type", "")
+                if self.path.endswith("images/edits"):
+                    # `images/edits` is multipart, and this server now refuses
+                    # anything else. It used to read JSON from every path, and
+                    # that is the whole reason a JSON image request looked like
+                    # it worked for as long as it did: nothing but this handler
+                    # had ever accepted one.
+                    if not kind.startswith("multipart/form-data"):
+                        endpoint.requests.append(
+                            {"path": self.path, "refused": kind})
+                        self.send_response(400)
+                        self.send_header("Content-Length", "0")
+                        self.end_headers()
+                        return
+                    payload = _parse_multipart(kind, raw)
+                else:
+                    payload = json.loads(raw.decode("utf-8"))
                 endpoint.requests.append({
                     "path": self.path,
                     "authorization": self.headers.get("Authorization"),
+                    "content_type": kind,
                     "payload": payload,
                 })
                 if endpoint.status != 200:
@@ -289,12 +324,116 @@ def test_a_hosted_repair_that_repaints_everything_reaches_nothing_outside_the_ma
     assert not changed.any(), f"{int(changed.sum())} pixels changed outside"
 
 
+def _png(size=(8, 6), colour=(20, 30, 40)) -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", size, colour).save(buffer, "PNG")
+    return buffer.getvalue()
+
+
+def _grey(size=(8, 6), box=(2, 1, 4, 3)) -> bytes:
+    """A mask in this project's convention: white is the part to repair."""
+    mask = Image.new("L", size, 0)
+    x, y, w, h = box
+    mask.paste(255, (x, y, x + w, y + h))
+    buffer = io.BytesIO()
+    mask.save(buffer, "PNG")
+    return buffer.getvalue()
+
+
 def test_a_url_instead_of_bytes_is_declined(endpoint):
     """Fetching it is a second request to a host nobody vetted."""
     endpoint.image = {"data": [{"url": "https://example.invalid/x.png"}]}
     result = providers.call(adapters.HostedImageEdit(), "image_edit",
-                            b"page", b"mask", "repair", timeout=30)
+                            _png(), _grey(), "repair", timeout=30)
     assert not result.ok and result.status == "refused"
+
+
+# --- R14c: the request is the one the endpoint documents ---------------------
+
+def test_the_image_edit_is_multipart_and_not_a_json_body(endpoint):
+    """It went out as `application/json` carrying base64 strings. `images/edits`
+    is `multipart/form-data`; a real endpoint answers that with a 400, so this
+    adapter had never worked anywhere but against a fake server that read JSON
+    from every path.
+
+    The fake server refuses it now, which is what makes this a regression and
+    not a restatement of the implementation."""
+    endpoint.image = {"data": [{"b64_json": base64.b64encode(_png()).decode()}]}
+    adapters.HostedImageEdit().repair(_png(), _grey(), "repair")
+
+    sent = [r for r in endpoint.requests if r["path"].endswith("images/edits")]
+    assert sent and "refused" not in sent[-1], sent
+    assert sent[-1]["content_type"].startswith("multipart/form-data")
+    assert set(sent[-1]["payload"]) >= {"model", "prompt", "image", "mask"}
+
+
+def test_the_page_arrives_byte_for_byte(endpoint):
+    """A part that a header folder or a transfer encoding touched is not a PNG
+    any more, which is why the body is written out rather than taken from
+    `email.mime`."""
+    page = _png(colour=(13, 200, 99))
+    endpoint.image = {"data": [{"b64_json": base64.b64encode(page).decode()}]}
+    adapters.HostedImageEdit().repair(page, _grey(), "repair")
+
+    sent = [r for r in endpoint.requests
+            if r["path"].endswith("images/edits")][-1]
+    assert sent["payload"]["image"] == page
+
+
+def test_the_mask_arrives_in_the_polarity_the_endpoint_reads(endpoint):
+    """Here white means repair this pixel. There, **fully transparent** means
+    repair this pixel and anything opaque is kept — the exact opposite. The
+    mask that went out unconverted asked the model to repaint the whole page
+    *except* the sound effect."""
+    endpoint.image = {"data": [{"b64_json": base64.b64encode(_png()).decode()}]}
+    adapters.HostedImageEdit().repair(_png(), _grey(box=(2, 1, 4, 3)), "repair")
+
+    sent = [r for r in endpoint.requests
+            if r["path"].endswith("images/edits")][-1]
+    with Image.open(io.BytesIO(sent["payload"]["mask"])) as arrived:
+        assert arrived.mode == "RGBA", arrived.mode
+        alpha = np.asarray(arrived.getchannel("A"))
+    repair = np.zeros(alpha.shape, bool)
+    repair[1:4, 2:6] = True
+    assert (alpha[repair] == 0).all(), "the region to repair is not transparent"
+    assert (alpha[~repair] == 255).all(), "the artwork to keep is not opaque"
+
+
+def test_a_mask_of_a_different_size_is_refused(endpoint):
+    """The endpoint requires them to match, and a silent resize would move the
+    repair somewhere other than where the sound effect is."""
+    result = providers.call(adapters.HostedImageEdit(), "image_edit",
+                            _png((8, 6)), _grey((4, 3), (1, 1, 2, 1)),
+                            "repair", timeout=30)
+    assert not result.ok
+    assert "4x3" in (result.detail or "") and "8x6" in (result.detail or "")
+
+
+def test_no_mask_means_no_call_at_all(endpoint):
+    """An empty mask is "edit the whole page". `clean.py` composites under its
+    own mask regardless, so nothing unsafe would land — but paying for a full
+    repaint to throw almost all of it away is a bill, not a repair."""
+    assert adapters.HostedImageEdit().repair(_png(), b"", "repair") is None
+    assert not [r for r in endpoint.requests
+                if r["path"].endswith("images/edits")]
+
+
+@pytest.mark.parametrize("model,expected", [
+    ("gpt-image-1", False),
+    ("dall-e-2", True),
+])
+def test_response_format_is_sent_only_where_it_is_accepted(
+        endpoint, monkeypatch, model, expected):
+    """The `gpt-image` family always answers in base64 and rejects the
+    parameter outright; `dall-e-2` defaults to a URL, which this adapter
+    declines, so it has to be asked."""
+    monkeypatch.setenv(adapters.IMAGE_MODEL, model)
+    endpoint.image = {"data": [{"b64_json": base64.b64encode(_png()).decode()}]}
+    adapters.HostedImageEdit().repair(_png(), _grey(), "repair")
+
+    sent = [r for r in endpoint.requests
+            if r["path"].endswith("images/edits")][-1]
+    assert ("response_format" in sent["payload"]) is expected
 
 
 # --- timeouts -----------------------------------------------------------------
@@ -309,14 +448,14 @@ def test_the_image_edit_gives_up_before_the_stage_stops_waiting_for_it(
     constant, so hardcoding a number at the call site again fails here."""
     endpoint.image = {"data": [{"b64_json": ""}]}
     sent: list[float] = []
-    original = adapters._post
+    original = adapters._post_form
 
-    def record(path, payload, timeout=None):
+    def record(path, fields, files, timeout=None):
         sent.append(timeout)
-        return original(path, payload, timeout=timeout)
+        return original(path, fields, files, timeout=timeout)
 
-    monkeypatch.setattr(adapters, "_post", record)
-    adapters.HostedImageEdit().repair(b"page", b"mask", "repair")
+    monkeypatch.setattr(adapters, "_post_form", record)
+    adapters.HostedImageEdit().repair(_png(), _grey(), "repair")
 
     assert sent == [adapters.IMAGE_EDIT_TIMEOUT]
     assert sent[0] < clean.PROVIDER_TIMEOUT, (
@@ -433,20 +572,36 @@ def test_the_key_does_not_follow_a_redirect_to_another_origin(monkeypatch):
         assert not leaked, "the key was re-sent to the redirect target"
 
 
-def test_a_response_body_is_bounded(monkeypatch):
+@pytest.mark.parametrize("declares_length", [True, False])
+def test_a_response_body_is_bounded(monkeypatch, declares_length):
     """`response.read()` had no limit, so a hostile or broken endpoint could
-    hand back gigabytes and the process would take all of it."""
+    hand back gigabytes and the process would take all of it.
+
+    Both paths, because they are guarded differently: an answer that announces
+    its size is refused from the header without reading a byte, and one that
+    announces nothing is stopped by the bounded read. The sizes stay small on
+    purpose — a flood large enough to fill the socket buffers made this test
+    race the server's reset and fail on Windows with a connection error
+    instead of the refusal it was written to prove."""
     import threading
 
-    payload = b'{"choices": [{"message": {"content": "' + b'x' * (3 * 1024 * 1024) + b'"}}]}'
+    limit = 4 * 1024
+    payload = (b'{"choices": [{"message": {"content": "'
+               + b'x' * (4 * limit) + b'"}}]}')
 
     class Flood(BaseHTTPRequestHandler):
+        # HTTP/1.0 with no length: the close is what delimits the body, which
+        # is the shape a chunked or malformed answer presents to the reader.
+        protocol_version = "HTTP/1.1" if declares_length else "HTTP/1.0"
+
         def do_POST(self):
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(payload)))
+            if declares_length:
+                self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
             self.wfile.write(payload)
+            self.close_connection = True
 
         def log_message(self, *args):
             pass
@@ -457,10 +612,73 @@ def test_a_response_body_is_bounded(monkeypatch):
         monkeypatch.setenv(adapters.API_BASE,
                            f"http://127.0.0.1:{server.server_address[1]}/v1")
         monkeypatch.setenv(adapters.TRANSLATION_MODEL, "a-model")
-        monkeypatch.setattr(adapters, "MAX_RESPONSE_BYTES", 64 * 1024)
+        monkeypatch.setattr(adapters, "MAX_RESPONSE_BYTES", limit)
 
-        with pytest.raises(Exception, match="too large|bytes"):
+        with pytest.raises(Exception, match="more than"):
             adapters.HostedTranslation().translate("\u3084\u3081\u308d", context={})
     finally:
         server.shutdown()
         server.server_close()
+
+
+# --- R14a/R14b: a real adapter is selectable by the name it documents --------
+
+def _cli(*args):
+    """The CLI in a FRESH interpreter, which is the whole point.
+
+    In-process the registry may already hold whatever an earlier test put
+    there. A subprocess starts with nothing registered, which is the state a
+    user's shell is in.
+    """
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    script = Path(adapters.__file__).resolve().parent / "revayat-comic.py"
+    return subprocess.run(
+        [sys.executable, str(script), *args],
+        capture_output=True, text=True,
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+    )
+
+
+@pytest.mark.parametrize("stage,name", [
+    ("ocr", "manga-ocr"),
+    ("translate", "openai-compatible"),
+    ("clean", "openai-compatible-image"),
+])
+def test_a_documented_provider_name_is_not_refused_as_unknown(imported, stage, name):
+    """Every adapter here documents a name to pass to `--provider`. Nothing
+    imported this module, so the registry held only the fakes and each of those
+    names came back as "no provider named …, Available: fake-…" — the feature
+    did not work from the CLI or over MCP at all.
+
+    The run may still fail for an honest reason (no `manga_ocr` installed, no
+    endpoint configured). What it may not say is that the name is unknown."""
+    result = _cli(stage, "--doc", str(imported), "--provider", name)
+    said = result.stdout + result.stderr
+    assert f"no {stage} provider named" not in said, said[:400]
+    assert "Available: fake-" not in said, said[:400]
+
+
+def test_registering_for_a_lookup_does_not_import_the_optional_packages():
+    """The lazy path must stay cheap: asking whether `manga_ocr` is importable
+    costs an import of gigabytes, and an ordinary run must never pay it."""
+    report = adapters.register_all(probe=False)
+    assert report["registered"], report
+    assert report["installed"] == [] and report["needs_install"] == []
+
+
+def test_doctor_still_reports_what_is_actually_usable():
+    """The probe is what `doctor` is for, and it must still run there."""
+    report = adapters.register_all()
+    assert set(report["installed"]) | set(report["needs_install"]) == set(
+        report["registered"])
+
+
+def test_no_adapters_flag_is_advertised():
+    """The module said to "pass `--adapters`" and no such flag was ever built.
+    Registration is automatic now, so there is nothing to advertise."""
+    assert "--adapters" not in (adapters.__doc__ or "").replace(
+        "There is no `--adapters` flag", "")

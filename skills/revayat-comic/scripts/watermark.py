@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any
 
 import pageir as ir
+import stages
 
 #: `x y w h`, in the page's own pixels — the same numbers a reader reads off
 #: `overview.png`. Commas are accepted because people type them.
@@ -158,7 +159,7 @@ def mark_document(
         region.pop("dropped", None)
         marked.append({"page": page["id"], "region": region["id"]})
 
-    ir.stamp_stage(doc, "watermark", {"label": label, "box": box,
+    stages.stamp_stage(doc, "watermark", {"label": label, "box": box,
                                       "pages": len(marked)})
     ir.save_doc(doc, doc_path)
 

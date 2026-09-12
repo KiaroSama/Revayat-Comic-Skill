@@ -30,6 +30,7 @@ from typing import Any, Sequence
 
 import crops
 import pageir as ir
+import stages
 import providers
 
 #: Below this a reading is a guess. It becomes a review note rather than text.
@@ -47,7 +48,14 @@ def _crop_path(root: Path, page: dict[str, Any], region: dict[str, Any],
     is the right input: same padding, same bounds, so a disagreement is about
     the reading rather than about two different pictures.
     """
-    target = root / "ocr" / page["id"] / f"{region['id']}.png"
+    # Named for the geometry it came from, not for the region alone. Region
+    # ids are ordinals and survive a re-detection, so `p0001/r002.png` from
+    # before the boxes moved was still on disk and still matched the name —
+    # and the engine read the old picture of a different part of the page.
+    where = ir.sha256_bytes(
+        f"{page['sha256']}|{region['bbox']}|{region.get('orientation')}"
+        .encode("utf-8"))[:8]
+    target = root / "ocr" / page["id"] / f"{region['id']}-{where}.png"
     if not target.exists():
         crop = crops._crop_for(page_image, region,
                                (page["width"], page["height"]))
@@ -151,7 +159,7 @@ def read_document(
 
         per_page.append({"page": page["id"], **page_counts})
 
-    ir.stamp_stage(doc, "ocr", {"provider": provider, "totals": counts,
+    stages.stamp_stage(doc, "ocr", {"provider": provider, "totals": counts,
                                 "orientation_aware": orientation_aware})
     ir.save_doc(doc, doc_path)
 

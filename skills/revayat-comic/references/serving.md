@@ -71,9 +71,13 @@ to inject into — but a caller can name any path the process can reach.
 
 The HTTP transport therefore:
 
-- **binds loopback only.** `--host` off `127.0.0.1` is refused rather than
-  warned about. A file-writing service reachable from the network is not a
-  configuration choice.
+- **binds loopback only.** `--host` takes `127.0.0.1`, `::1` or `localhost`;
+  anything else is refused rather than warned about. A file-writing service
+  reachable from the network is not a configuration choice.
+- **bounds what it will read.** A request body over 1 MiB is refused, and a
+  connection that stops sending is dropped after 30 seconds. A stage's arguments
+  are a few hundred bytes; reading 64 MiB of them to refuse them afterwards is a
+  denial of service written as politeness.
 - **requires a token**, printed to stderr at startup and sent as
   `X-Revayat-Token`. A page in a browser can POST to `localhost`; it cannot read
   a token from the terminal, and it cannot set that header cross-origin without
