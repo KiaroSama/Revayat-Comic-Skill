@@ -615,25 +615,41 @@ def is_persian(text: str) -> bool:
 # Staleness
 # --------------------------------------------------------------------------- #
 
-def fingerprint(doc: dict[str, Any]) -> str:
-    """A hash of everything a worksheet was generated from.
+def page_fingerprint(page: dict[str, Any]) -> str:
+    """A hash of everything ONE page's worksheet was generated from.
 
-    Re-detecting a page changes region ids and boxes, which silently invalidates
-    every worksheet already written against the old ones. ``worksheet merge``
-    compares this and refuses rather than merging a reply into the wrong region.
+    Re-detecting a page changes its region ids and boxes, which invalidates a
+    reply already written against the old ones — merging it would attach the
+    dialogue to the wrong balloons. That is a fact about THAT page.
+
+    The document-wide hash used to be the only one, so a correction on page 1
+    told the reader that page 2's finished translation was stale and had to be
+    done again, when nothing about page 2 had moved.
+    """
+    digest = hashlib.sha256()
+    digest.update(f"{page['id']}|{page['sha256']}".encode("utf-8"))
+    for region in page.get("regions", []):
+        digest.update(
+            "|".join([
+                region["id"],
+                ",".join(str(v) for v in region["bbox"]),
+                region["kind"],
+                region["orientation"],
+            ]).encode("utf-8")
+        )
+    return digest.hexdigest()
+
+
+def fingerprint(doc: dict[str, Any]) -> str:
+    """A hash of everything every worksheet was generated from.
+
+    Built from the per-page hashes so the two cannot drift apart. Still used
+    where a single value for the whole document is the right question — and to
+    recognise a worksheet stamped by an older build.
     """
     digest = hashlib.sha256()
     for page in doc.get("pages", []):
-        digest.update(f"{page['id']}|{page['sha256']}".encode("utf-8"))
-        for region in page.get("regions", []):
-            digest.update(
-                "|".join([
-                    region["id"],
-                    ",".join(str(v) for v in region["bbox"]),
-                    region["kind"],
-                    region["orientation"],
-                ]).encode("utf-8")
-            )
+        digest.update(page_fingerprint(page).encode("utf-8"))
     return digest.hexdigest()
 
 
