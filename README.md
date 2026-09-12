@@ -173,6 +173,7 @@ original's SHA-256 is re-checked at the end.
 | Module | Role |
 | --- | --- |
 | `pageir.py` | the page document, atomic UTF-8 IO, geometry, reading order, script detection |
+| `stages.py` | what each stage ran against, in what order, and what that makes stale |
 | `readers.py` | CBZ / CBR / PDF / folder / image → immutable page images |
 | `detect.py` | panels, balloons in both polarities, free lettering |
 | `masks.py` | glyph shapes clipped to the balloon interior |
@@ -181,7 +182,8 @@ original's SHA-256 is re-checked at the end.
 | `glossary.py` | names and terms, and the drift check |
 | `falint.py` | Persian typography, mechanically |
 | `clean.py` | tiered repair and the mask-bounded composite |
-| `typeset.py` | shaping, balloon-shaped fitting, rendering |
+| `typefont.py` | the Persian face, and the shaping engine |
+| `typeset.py` | balloon-shaped fitting, wrapping, rendering |
 | `qa.py` | the gate, including the pixel-preservation proof |
 | `export.py` | CBZ, PDF, folder |
 | `lettering.py` | matching a drawn sound effect's slant, arc and recession |

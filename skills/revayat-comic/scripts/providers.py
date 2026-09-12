@@ -62,6 +62,9 @@ MAX_OUTSTANDING_CALLS = 16
 
 _OUTSTANDING = threading.BoundedSemaphore(MAX_OUTSTANDING_CALLS)
 
+#: Whether the optional adapter layer has been offered a chance to register.
+_ADAPTERS_TRIED = False
+
 #: Every role a provider can fill. The names are the ones the audits asked for.
 ROLES = ("vision", "ocr", "translation", "image_edit", "visual_qa")
 
@@ -179,6 +182,25 @@ def available(role: str | None = None) -> dict[str, list[str]]:
     return {r: sorted(_REGISTRY[r]) for r in roles}
 
 
+def _register_adapters() -> None:
+    """Make the real adapters selectable, once, and never fail the caller.
+
+    A missing or broken `adapters.py` must not turn "unknown provider name"
+    into an import error: the name is still going to be reported as unknown,
+    which is the answer the caller can act on.
+    """
+    global _ADAPTERS_TRIED
+    if _ADAPTERS_TRIED:
+        return
+    _ADAPTERS_TRIED = True
+    try:
+        import adapters
+
+        adapters.register_all(probe=False)
+    except Exception:  # noqa: BLE001 - an optional layer may be absent
+        pass
+
+
 def get(role: str, name: str | None):
     """The named provider, or ``None`` meaning *the host agent does this*.
 
@@ -190,6 +212,17 @@ def get(role: str, name: str | None):
         return None
     if role not in ROLES:
         raise ValueError(f"unknown provider role {role!r}")
+    if name not in _REGISTRY[role]:
+        # The real adapters live in `adapters.py` and register themselves when
+        # that module is imported. Nothing imported it, so every entry point
+        # offered the fakes alone and `--provider manga-ocr` came back as an
+        # unknown name — the documented way to use the feature did not work
+        # from the CLI or over MCP.
+        #
+        # Imported HERE, only on a miss, and with the usability probe off: an
+        # ordinary run never pays for it, and asking whether `manga_ocr` is
+        # installed costs an import of a package worth gigabytes.
+        _register_adapters()
     try:
         factory = _REGISTRY[role][name]
     except KeyError:

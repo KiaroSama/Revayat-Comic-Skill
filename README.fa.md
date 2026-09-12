@@ -181,6 +181,7 @@ import → detect → mask → crops → worksheet ⇄ [ the agent reads and tra
 | ماژول | نقش |
 | --- | --- |
 | `pageir.py` | سند صفحه، I/O اتمیک UTF-8، هندسه، ترتیب خواندن، تشخیص خط |
+| `stages.py` | هر مرحله روی چه چیزی اجرا شد، با چه ترتیبی، و این چه چیزی را کهنه می‌کند |
 | `readers.py` | CBZ / CBR / PDF / پوشه / تصویر ← صفحه‌های تغییرناپذیر |
 | `detect.py` | پنل‌ها، حباب‌ها در هر دو قطبیت، حروف‌نگاری آزاد |
 | `masks.py` | شکلِ گلیف‌ها، بریده‌شده به درونِ حباب |
@@ -189,7 +190,8 @@ import → detect → mask → crops → worksheet ⇄ [ the agent reads and tra
 | `glossary.py` | نام‌ها و اصطلاح‌ها، و بررسی رانش |
 | `falint.py` | تایپوگرافی فارسی، مکانیکی |
 | `clean.py` | ترمیم پلکانی و ترکیبِ محدود به ماسک |
-| `typeset.py` | shaping، جاسازی در شکل حباب، رندر |
+| `typefont.py` | قلم فارسی و موتور shaping |
+| `typeset.py` | جاسازی در شکل حباب، شکستن سطر، رندر |
 | `qa.py` | دروازه، شامل اثباتِ حفظ پیکسل |
 | `export.py` | CBZ، PDF، پوشه |
 

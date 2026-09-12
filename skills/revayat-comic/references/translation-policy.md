@@ -35,6 +35,14 @@ government notice.
 | a child | plain vocabulary, simple structures |
 | a formal or older character | full verb forms, no clipping |
 
+**That table is what the art suggests, not a lookup.** Register comes from how
+these two characters actually speak *to each other*, and the dialogue overrides
+every row of it. An older character who talks like a thug talks like a thug in
+Persian too; a narration box written as a wry aside is not narrative past tense
+because it is a narration box; a shout is loud, which is not the same as rude.
+Age, rank and gender decide nothing on their own — the relationship does, and
+`context` hands you the speakers and the recent dialogue so you can see it.
+
 Japanese carries register in verb endings that Persian carries in word choice
 and sentence length. `やめろ` and `やめてください` are the same instruction; the
 first is `بس کن` and the second is `لطفاً بس کنید`. Losing that flattens every
@@ -52,7 +60,20 @@ Practical guidance:
 - Drop filler that Persian does not need: a Japanese sentence-final particle
   usually becomes punctuation or nothing.
 - Do not pad. `そうか` is `که این‌طور`, not `آها، پس قضیه از این قرار بوده`.
-- If `typeset` later reports the region as overflowing, shorten *that* line.
+
+**Naturalisation and compression are different jobs, in that order.** Writing
+natural Persian is the translation; making it fit is layout. When `typeset`
+reports a region as overflowing, try them in this order:
+
+1. **A line break.** A newline inside `fa:` is honoured — the fitter treats it
+   as a hard break and sets the balloon on two lines. Often the words were
+   already right and only the shape was wrong.
+2. **A shorter wording** that still carries everything in *Fidelity is not
+   literalness* below. Put the original in `note:` so the choice stays
+   reviewable; a shortening nobody can see is a shortening nobody can check.
+
+Never a summary, never a dropped clause, and never a smaller font — the size
+floor holds for a reason.
 
 ## Fidelity is not literalness
 
@@ -88,7 +109,20 @@ word.
 
 The table at the top of the worksheet is binding. Use exactly the Persian it
 gives, every time. If a name is not in the table, choose a rendering, use it
-consistently, and put it in `speaker:` so it reaches the table for later pages.
+consistently, and get it into the table for later pages:
+
+- `speaker:` — **who is saying this balloon.** It also feeds voice consistency,
+  so it has to be true.
+- `propose:` — **a name or term this balloon only mentions.** `propose: Anna`
+  for "did you see Anna?". Several are separated by commas.
+
+They were one field, and the only route into the glossary was `speaker:`. A
+name that is merely talked about therefore had to be filed as the speaker,
+which told every later page that the wrong character was talking.
+
+A locked entry keeps its history: changing an approved Persian form bumps its
+`version` and records what it used to be, so an earlier chapter translated
+against the old spelling can still be found.
 
 For a Japanese name, transliterate rather than translate: ハルカ is `هاروکا`.
 For a title or a technique with a meaning, prefer the meaning when it is a
@@ -99,6 +133,27 @@ Honorifics: `-san`, `-kun`, `-chan`, `-senpai`. Keep them when the relationship
 between two characters is part of the story and Persian has no equivalent;
 drop them when they are only politeness. Do not switch between the two policies
 inside one chapter.
+
+## What the title has already settled
+
+Honorifics, name policy, sound effects, slang and profanity are decisions a
+**title** makes once, not decisions a page makes. They live in
+`meta.title_policy` in `comic.json`:
+
+```json
+"title_policy": {
+  "honorifics": "keep -senpai, drop -san",
+  "names": "transliterate Japanese given names; translate technique names",
+  "sfx": "translate, Persian onomatopoeia",
+  "slang": "contemporary Tehran register, no regional dialect",
+  "profanity": "render at full strength; this title is not for children",
+  "register": "the two leads use تو with each other from chapter 3"
+}
+```
+
+Every non-empty entry is handed to the translator under `constraints`, beside
+the locked glossary, and printed at the top of every worksheet. Nothing invents
+one: absent means nobody has decided, and then the page decides, as above.
 
 ## Persian specifics
 
@@ -146,6 +201,8 @@ Four fields fix what it got wrong:
 - `kind:` — it called a narration box `speech`, or a shop sign `sfx`.
 - `speaker:` — who is talking. Use a short, stable name and use the *same* one
   on every page. This is what makes a character sound like one person.
+- `propose:` — a name or term this balloon only *mentions*. It reaches the
+  glossary the same way, without claiming the wrong person is speaking.
 
 ## What never to do
 

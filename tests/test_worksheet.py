@@ -679,3 +679,78 @@ def test_a_worksheet_stamped_by_an_older_build_is_still_readable(detected):
     merged = worksheet.merge_document(detected)
     assert not merged["stale_worksheets"], (
         f"an older stamp was treated as stale: {merged['stale_worksheets']}")
+
+
+# --- a mentioned name is not the speaker -------------------------------------
+
+def test_a_mentioned_name_is_recorded_without_claiming_the_balloon(detected):
+    """The glossary was fed from `speaker:` alone, so the only way to get a name
+    that is merely talked about — "did you see Anna?" — into the table was to
+    write it in `speaker:`. That then told every later page that the wrong
+    character was talking, and carried the wrong voice into their context."""
+    worksheet.build_document(detected)
+    doc = ir.load_doc(detected)
+    page = doc["pages"][0]
+    region = page["regions"][0]["id"]
+
+    sheet = ir.read_text(_sheets(detected) / f"{page['id']}.txt")
+    sheet = _add_fields(sheet, region,
+                        "speaker: Ken", "propose: Anna, the Iron Gate")
+    _finish(detected, page["id"], sheet)
+    for other in doc["pages"][1:]:
+        _finish(detected, other["id"])
+    worksheet.merge_document(detected)
+
+    merged = ir.find_region(ir.load_doc(detected), region)
+    assert merged["speaker"] == "Ken"
+    assert merged["proposed"] == ["Anna", "the Iron Gate"]
+
+
+def test_a_proposal_round_trips_through_a_rebuilt_worksheet(detected):
+    """An absent field resets at the next merge, so a rebuilt worksheet that
+    forgets a proposal quietly undoes it — the same defect `drop`, `keep` and
+    `erase` already had."""
+    doc = ir.load_doc(detected)
+    page = doc["pages"][0]
+    page["regions"][0]["proposed"] = ["Anna", "the Iron Gate"]
+    ir.save_doc(doc, detected)
+
+    reloaded = ir.load_doc(detected)
+    body = worksheet.page_worksheet(reloaded, reloaded["pages"][0],
+                                    ir.page_fingerprint(reloaded["pages"][0]))
+    assert "propose: Anna, the Iron Gate" in body
+
+
+def test_a_proposal_merged_twice_is_not_listed_twice(detected):
+    """Merging the same reply again is an ordinary thing to do."""
+    worksheet.build_document(detected)
+    doc = ir.load_doc(detected)
+    page = doc["pages"][0]
+    region = page["regions"][0]["id"]
+
+    sheet = _add_fields(
+        ir.read_text(_sheets(detected) / f"{page['id']}.txt"),
+        region, "propose: Anna")
+    _finish(detected, page["id"], sheet)
+    for other in doc["pages"][1:]:
+        _finish(detected, other["id"])
+    worksheet.merge_document(detected)
+    worksheet.merge_document(detected)
+
+    assert ir.find_region(ir.load_doc(detected), region)["proposed"] == ["Anna"]
+
+
+def test_the_title_policy_is_printed_where_the_reader_is(detected):
+    """A policy filed somewhere else is a policy that gets re-decided every
+    chapter."""
+    doc = ir.load_doc(detected)
+    doc["meta"]["title_policy"] = {"honorifics": "keep -senpai, drop -san",
+                                   "slang": "   "}
+    ir.save_doc(doc, detected)
+
+    reloaded = ir.load_doc(detected)
+    body = worksheet.page_worksheet(reloaded, reloaded["pages"][0],
+                                    ir.page_fingerprint(reloaded["pages"][0]))
+    assert "# This title has settled:" in body
+    assert "#   honorifics: keep -senpai, drop -san" in body
+    assert "slang" not in body        # an empty entry is not a decision

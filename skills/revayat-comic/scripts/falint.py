@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 import pageir as ir
+import stages
 
 ZWNJ = "‌"
 
@@ -287,7 +288,7 @@ def fix_document(doc_path: str | Path, options: Options | None = None) -> dict[s
         if after != before:
             region["target_text"] = after
             changed.append(region["id"])
-    ir.stamp_stage(doc, "falint", {"changed": len(changed)})
+    stages.stamp_stage(doc, "falint", {"changed": len(changed)})
     ir.save_doc(doc, doc_path)
     return {"changed": changed[:40], "changed_count": len(changed)}
 

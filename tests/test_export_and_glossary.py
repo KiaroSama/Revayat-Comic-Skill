@@ -138,11 +138,25 @@ def test_a_corrupt_archive_fails(finished, tmp_path):
 
 
 def test_a_short_package_fails(finished, tmp_path):
+    """Real pages, one of them missing — so this tests the COUNT and nothing
+    else. It used to pack a single member holding the byte `x`, which is not an
+    image at all; the package check never opened it, so that stood in for a page
+    and the only thing left to notice was the total."""
+    good = tmp_path / "chapter.cbz"
+    export.export_document(finished, good)
+    with zipfile.ZipFile(good) as original:
+        first = next(name for name in sorted(original.namelist())
+                     if name.endswith(".png"))
+        page, info = original.read(first), original.read("ComicInfo.xml")
+
     path = tmp_path / "short.cbz"
     with zipfile.ZipFile(path, "w") as archive:
-        archive.writestr("0001.png", b"x")
+        archive.writestr(first, page)
+        archive.writestr("ComicInfo.xml", info)
+
     report = qa.check_package(path, finished)
-    assert report["findings"][0]["code"] == "archive-page-count"
+    assert not report["ok"]
+    assert "archive-page-count" in {item["code"] for item in report["findings"]}
 
 
 # --- Glossary ---------------------------------------------------------------
@@ -487,3 +501,144 @@ def test_a_finished_chapter_still_exports(finished, tmp_path):
     report = export.export_document(finished, tmp_path / "chapter.cbz")
     assert report["typeset_pages"] == len(ir.load_doc(finished)["pages"])
     assert set(report["sources"].values()) == {"final"}
+
+
+# --- R11d: the package check opens the pages it counts -----------------------
+
+def _repack(source, out, edit):
+    """A copy of an exported archive with one thing deliberately wrong."""
+    with zipfile.ZipFile(source) as original:
+        members = [(info, original.read(info.filename))
+                   for info in original.infolist()]
+    with zipfile.ZipFile(out, "w") as archive:
+        edit(archive, members)
+    return out
+
+
+def test_bytes_that_are_not_an_image_are_caught(finished, tmp_path):
+    """The check matched a suffix and counted. A file called `0001.png` holding
+    anything at all passed, and the count came out right, so the package was
+    reported fine — for an archive a reader cannot open."""
+    good = tmp_path / "chapter.cbz"
+    export.export_document(finished, good)
+
+    def swap(archive, members):
+        for info, payload in members:
+            if info.filename.endswith(".png"):
+                archive.writestr(info.filename, b"this is not a PNG")
+                payload = None
+            if payload is not None:
+                archive.writestr(info.filename, payload)
+
+    broken = _repack(good, tmp_path / "broken.cbz", swap)
+    report = qa.check_package(broken, finished)
+    assert not report["ok"], "an archive of non-images was reported fine"
+
+
+def test_a_directory_entry_does_not_count_as_a_page(finished, tmp_path):
+    """`Path("p0002.png/").suffix` is `.png`, so a directory entry inside the
+    archive was counted as a page — and the count then looked right while a page
+    was missing."""
+    good = tmp_path / "chapter.cbz"
+    export.export_document(finished, good)
+
+    def drop_one(archive, members):
+        images = [m for m in members if m[0].filename.endswith(".png")]
+        skip = images[-1][0].filename
+        for info, payload in members:
+            if info.filename == skip:
+                archive.writestr(skip + "/", b"")   # a directory, not a page
+                continue
+            archive.writestr(info.filename, payload)
+
+    faked = _repack(good, tmp_path / "faked.cbz", drop_one)
+    report = qa.check_package(faked, finished)
+    assert not report["ok"], "a directory entry stood in for a page"
+
+
+def test_a_page_at_the_wrong_size_is_caught(finished, tmp_path):
+    """Right count, right names, right order — and one page is a thumbnail.
+    Nothing measured anything, so the package passed."""
+    from PIL import Image
+
+    good = tmp_path / "chapter.cbz"
+    export.export_document(finished, good)
+
+    def shrink(archive, members):
+        first = True
+        for info, payload in members:
+            if first and info.filename.endswith(".png"):
+                import io
+
+                with Image.open(io.BytesIO(payload)) as image:
+                    small = image.resize((17, 23))
+                buffer = io.BytesIO()
+                small.save(buffer, "PNG")
+                payload = buffer.getvalue()
+                first = False
+            archive.writestr(info.filename, payload)
+
+    shrunk = _repack(good, tmp_path / "shrunk.cbz", shrink)
+    report = qa.check_package(shrunk, finished)
+    assert "archive-page-size" in {item["code"] for item in report["findings"]}, (
+        f"a 17x23 page passed: {report['findings']}")
+
+
+def test_a_sound_package_still_passes(finished, tmp_path):
+    """The guard must not fire on a package that is actually correct."""
+    out = tmp_path / "chapter.cbz"
+    export.export_document(finished, out)
+    report = qa.check_package(out, finished)
+    assert report["ok"], report["findings"]
+
+
+# --- a proposal is a candidate, and a canonical form keeps its history --------
+
+def test_a_proposed_name_becomes_a_candidate_without_a_speaker(translated):
+    doc = ir.load_doc(translated)
+    for _page, region in ir.iter_regions(doc):
+        region.pop("speaker", None)
+    doc["pages"][0]["regions"][0]["proposed"] = ["Anna"]
+    ir.save_doc(doc, translated)
+
+    glossary.scan(translated)
+
+    entry = ir.load_doc(translated)["glossary"]["entries"]["Anna"]
+    assert entry["role"] == "mentioned"
+    assert entry["count"] == 1
+
+
+def test_being_mentioned_does_not_demote_a_character(translated):
+    """A character who is also named in someone else's balloon must not stop
+    being a character because the mention was scanned second."""
+    doc = ir.load_doc(translated)
+    doc["pages"][0]["regions"][0]["speaker"] = "Anna"
+    doc["pages"][0]["regions"][-1]["proposed"] = ["Anna"]
+    ir.save_doc(doc, translated)
+
+    glossary.scan(translated)
+
+    assert ir.load_doc(translated)["glossary"]["entries"]["Anna"]["role"] == \
+        "character"
+
+
+def test_changing_a_locked_form_keeps_the_one_it_replaces():
+    """An approved spelling is a decision. Re-deciding it must not erase the
+    chapter already translated against the first one."""
+    entry = glossary._entry("Anna", role="character")
+    glossary.set_target(entry, "آنا")
+    assert entry["version"] == 1 and "previous" not in entry
+
+    entry["locked"] = True
+    glossary.set_target(entry, "آنّا")
+
+    assert entry["target"] == "آنّا"
+    assert entry["version"] == 2
+    assert entry["previous"] == [{"target": "آنا", "version": 1}]
+
+
+def test_an_unlocked_suggestion_has_no_history_to_keep():
+    entry = glossary._entry("Ken", role="character")
+    glossary.set_target(entry, "کن")
+    glossary.set_target(entry, "کِن")
+    assert entry["version"] == 1 and "previous" not in entry

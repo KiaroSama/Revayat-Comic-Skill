@@ -33,6 +33,7 @@ from typing import Any, Sequence
 import lettering
 import masks as mask_tools
 import pageir as ir
+import stages
 from pageir import IMAGE_SUFFIXES
 import providers
 
@@ -428,7 +429,7 @@ def clean_document(
         # answerable from the document months later.
         stamp["provider"] = provider
         stamp["provider_calls"] = provider_report
-    ir.stamp_stage(doc, "clean", stamp)
+    stages.stamp_stage(doc, "clean", stamp)
     ir.save_doc(doc, doc_path)
 
     heavy = [entry["page"] for entry in per_page if entry["inpaint"] > entry["flat"]]

@@ -34,6 +34,7 @@ tests/              pytest; fixtures are generated, never committed
 | Module | Role |
 | --- | --- |
 | `pageir.py` | the page document, atomic UTF-8 IO, geometry, reading order, script detection |
+| `stages.py` | what each stage ran against, in what order, and what that makes stale |
 | `readers.py` | CBZ / CBR / PDF / folder / image → immutable page images |
 | `detect.py` | panels, balloons, free lettering |
 | `masks.py` | glyph shapes clipped to the balloon's real interior |
@@ -43,7 +44,8 @@ tests/              pytest; fixtures are generated, never committed
 | `falint.py` | Persian typography, mechanically |
 | `clean.py` | tiered repair and the mask-bounded composite |
 | `watermark.py` | one box marked for erasure on every page, for a mark that does not move |
-| `typeset.py` | shaping, balloon-shaped fitting, rendering |
+| `typefont.py` | the Persian face, and the shaping engine |
+| `typeset.py` | balloon-shaped fitting, wrapping, rendering |
 | `qa.py` | the gate, including the pixel-preservation proof |
 | `export.py` | CBZ, PDF, folder |
 | `lettering.py` | matching a drawn effect's slant, arc and recession |

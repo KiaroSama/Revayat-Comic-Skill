@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 import pageir as ir
+import stages
 
 # --- Tuning knobs -----------------------------------------------------------
 # Comics vary more than any threshold can absorb: a 900-pixel web scan and a
@@ -687,7 +688,7 @@ def detect_document(
             "panels": len(page["panels"]),
         })
 
-    ir.stamp_stage(doc, "detect", {"totals": totals})
+    stages.stamp_stage(doc, "detect", {"totals": totals})
     ir.save_doc(doc, doc_path)
 
     empty = [entry["page"] for entry in per_page if entry.get("regions") == 0]

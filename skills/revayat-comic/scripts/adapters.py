@@ -4,9 +4,11 @@
 adapters for *real* models live — and there is deliberately very little here,
 because the default is still that the agent running the skill does the work.
 
-**Nothing in this file is imported by the pipeline.** Each adapter registers
-itself only when you ask for it, and each one's dependency is optional. Import
-this module (or pass `--adapters`) to make its providers selectable by name:
+**Nothing in this file is imported by the pipeline** until a provider name it
+owns is actually asked for: `providers.get` imports it on a miss, so naming one
+is all it takes. Each one's dependency stays optional, and nothing here is
+loaded by a command that does not use it. There is no `--adapters` flag — an
+earlier version of this paragraph said there was, and there never was one:
 
 ```bash
 pip install manga-ocr
@@ -196,13 +198,38 @@ def _redirect_guard():
     return urllib.request.build_opener(_Guard)
 
 
-def _post(path: str, payload: dict, timeout: float = 90.0) -> dict:
+def _multipart(fields: dict[str, str],
+               files: dict[str, tuple[str, bytes]]) -> tuple[str, bytes]:
+    """A `multipart/form-data` body: the encoding `images/edits` speaks.
+
+    Written out rather than taken from `email.mime`, which folds long header
+    lines and re-encodes a binary part. A PNG does not survive that.
+    """
+    import secrets
+
+    boundary = f"----revayat{secrets.token_hex(16)}"
+    body = bytearray()
+    for name, value in fields.items():
+        body += f"--{boundary}\r\n".encode()
+        body += f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode()
+        body += value.encode("utf-8") + b"\r\n"
+    for name, (filename, payload) in files.items():
+        body += f"--{boundary}\r\n".encode()
+        body += (f'Content-Disposition: form-data; name="{name}"; '
+                 f'filename="{filename}"\r\n').encode()
+        body += b"Content-Type: image/png\r\n\r\n"
+        body += payload + b"\r\n"
+    body += f"--{boundary}--\r\n".encode()
+    return f"multipart/form-data; boundary={boundary}", bytes(body)
+
+
+def _send(path: str, content_type: str, body: bytes, timeout: float) -> dict:
     import json
     import os
     import urllib.parse
     import urllib.request
 
-    headers = {"Content-Type": "application/json"}
+    headers = {"Content-Type": content_type}
     endpoint = _endpoint(path)
     key = os.environ.get(API_KEY)
     if key:
@@ -221,20 +248,41 @@ def _post(path: str, payload: dict, timeout: float = 90.0) -> dict:
             )
         headers["Authorization"] = f"Bearer {key}"
     request = urllib.request.Request(
-        endpoint, data=json.dumps(payload).encode("utf-8"),
-        headers=headers, method="POST")
+        endpoint, data=body, headers=headers, method="POST")
     opener = _redirect_guard()
+    too_big = (
+        f"the endpoint answered with more than {MAX_RESPONSE_BYTES} bytes. "
+        "That is not a translation or a page; check what "
+        f"{API_BASE} is pointing at."
+    )
     with opener.open(request, timeout=timeout) as response:
+        # An answer that announces its own size is refused without reading a
+        # byte of it. The bounded read below is still the real guard — a
+        # `Content-Length` can lie, and a chunked reply declares nothing — but
+        # taking the endpoint at its word when it says "gigabytes" costs one
+        # header lookup and saves the allocation and the socket both.
+        declared = response.headers.get("Content-Length")
+        if declared and declared.isdigit() and int(declared) > MAX_RESPONSE_BYTES:
+            raise RuntimeError(too_big)
         # One byte over the limit is enough to know it is over the limit; there
         # is no reason to hold the rest in memory to find out.
-        body = response.read(MAX_RESPONSE_BYTES + 1)
-    if len(body) > MAX_RESPONSE_BYTES:
-        raise RuntimeError(
-            f"the endpoint answered with more than {MAX_RESPONSE_BYTES} bytes. "
-            "That is not a translation or a page; check what "
-            f"{API_BASE} is pointing at."
-        )
-    return json.loads(body.decode("utf-8"))
+        answer = response.read(MAX_RESPONSE_BYTES + 1)
+    if len(answer) > MAX_RESPONSE_BYTES:
+        raise RuntimeError(too_big)
+    return json.loads(answer.decode("utf-8"))
+
+
+def _post(path: str, payload: dict, timeout: float = 90.0) -> dict:
+    import json
+
+    return _send(path, "application/json",
+                 json.dumps(payload).encode("utf-8"), timeout)
+
+
+def _post_form(path: str, fields: dict[str, str],
+               files: dict[str, tuple[str, bytes]], timeout: float) -> dict:
+    content_type, body = _multipart(fields, files)
+    return _send(path, content_type, body, timeout)
 
 
 class HostedTranslation:
@@ -281,6 +329,40 @@ class HostedTranslation:
         return (text, HOSTED_CONFIDENCE) if text else None
 
 
+def _edit_mask(page_png: bytes, mask_png: bytes) -> bytes:
+    """This project's mask, converted to the one `images/edits` documents.
+
+    Here a mask is 8-bit grey and **white means repair this pixel**. The
+    endpoint reads an RGBA image where **fully transparent means repair this
+    pixel** and every opaque pixel is kept. The two conventions are exact
+    opposites, so the mask that went out unconverted asked the model to
+    repaint the entire page *except* the sound effect — and it was not even
+    read that far, because the whole request was refused for being JSON.
+
+    The colour channels carry the page itself. The endpoint ignores what sits
+    under a transparent pixel, and an opaque region that matches the original
+    is the least surprising thing to hand a model that may look at it.
+    """
+    import io
+
+    from PIL import Image, ImageChops
+
+    with Image.open(io.BytesIO(page_png)) as opened:
+        rgba = opened.convert("RGB")
+    with Image.open(io.BytesIO(mask_png)) as opened:
+        grey = opened.convert("L")
+    if grey.size != rgba.size:
+        raise RuntimeError(
+            f"the mask is {grey.size[0]}x{grey.size[1]} and the page is "
+            f"{rgba.size[0]}x{rgba.size[1]}; the endpoint requires them to "
+            "match"
+        )
+    rgba.putalpha(ImageChops.invert(grey))
+    buffer = io.BytesIO()
+    rgba.save(buffer, "PNG")
+    return buffer.getvalue()
+
+
 class HostedImageEdit:
     """Artwork reconstruction, from any OpenAI-compatible image-edit endpoint.
 
@@ -292,6 +374,11 @@ class HostedImageEdit:
     under the authoritative mask, so a model that repaints the whole page still
     reaches no pixel it was not asked about — which is what makes it safe to
     point this at a model nobody here has audited.
+
+    The request is `multipart/form-data`, which is what the endpoint documents:
+    it went out as a JSON body with base64 strings, and a real endpoint refuses
+    that with a 400 — the feature had never once worked outside a test whose
+    own fake server read JSON.
     """
 
     name = "openai-compatible-image"
@@ -303,13 +390,23 @@ class HostedImageEdit:
         model = os.environ.get(IMAGE_MODEL)
         if not model:
             raise RuntimeError(f"{IMAGE_MODEL} is not set")
+        if not mask_png:
+            # No mask means "edit the whole page". `clean.py` composites under
+            # its own mask regardless, so nothing unsafe would reach the page —
+            # but paying for a full repaint in order to throw almost all of it
+            # away is not a repair request, it is a bill.
+            return None
 
-        answer = _post("images/edits", {
-            "model": model,
-            "prompt": instructions,
-            "image": base64.b64encode(page_png).decode("ascii"),
-            "mask": base64.b64encode(mask_png).decode("ascii"),
-            "response_format": "b64_json",
+        fields = {"model": model, "prompt": instructions}
+        if not model.startswith("gpt-image"):
+            # The `gpt-image` family always answers in base64 and rejects this
+            # parameter outright; `dall-e-2` defaults to a URL, which is a
+            # second request to a host nobody vetted, so it has to be asked.
+            fields["response_format"] = "b64_json"
+
+        answer = _post_form("images/edits", fields, {
+            "image": ("page.png", page_png),
+            "mask": ("mask.png", _edit_mask(page_png, mask_png)),
         }, timeout=IMAGE_EDIT_TIMEOUT)
         data = answer.get("data") or []
         if not data:
@@ -322,7 +419,7 @@ class HostedImageEdit:
         return base64.b64decode(encoded)
 
 
-def register_all() -> dict[str, list[str]]:
+def register_all(*, probe: bool = True) -> dict[str, list[str]]:
     """Make every adapter in this module selectable, and say what is usable.
 
     Registration is unconditional and cheap — nothing is constructed and no
@@ -339,6 +436,12 @@ def register_all() -> dict[str, list[str]]:
 
     usable: list[str] = []
     missing: list[str] = []
+    if not probe:
+        # Registration only. `providers.get` takes this path when a name it was
+        # handed is not in the registry yet, and asking whether `manga_ocr` is
+        # importable there would import gigabytes to answer a question nobody
+        # asked. `doctor` is where that question belongs, and it probes.
+        return {"registered": registered, "installed": [], "needs_install": []}
     try:
         import manga_ocr  # noqa: F401
     except ImportError:

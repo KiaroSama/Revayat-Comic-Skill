@@ -266,6 +266,9 @@ are missing from the package.
 >     the user has the right to remove: `references/watermarks.md`.
 >   - `kind: sfx` / `sign` / `narration` / `thought` when it is misclassified
 >   - `speaker: <short stable name>` — the same name every time, on every page
+>   - `propose: <name>, <name>` — a name or term this balloon *mentions*
+>     but does not say. It reaches the glossary without claiming somebody
+>     else is talking.
 > - **Check every crop for two balloons in one box.** This is the commonest way
 >   the page loses text, it happens several times a volume, and the detector
 >   cannot see it — four different measurements were tried and none separates a
@@ -307,8 +310,9 @@ $PY $SKILL_DIR/scripts/revayat-comic.py worksheet merge --doc $WORK/comic.json
 | `"ok": true` | everything landed | continue |
 | `missing_outputs` | those pages were never translated | translate them — **expected mid-chapter** for pages whose turn has not come |
 | `missing_regions` | ids were dropped from a worksheet | re-do those pages |
-| `unknown_regions` | ids were invented | re-do those pages |
-| `duplicate_regions` | an id appears twice | re-do that page |
+| `unknown_regions` | ids were invented — **that page is left untouched**, not partly merged | re-do those pages |
+| `duplicate_regions` | an id appears twice — **that page is left untouched** | re-do that page |
+| `conflicting_actions` | one region asks for two opposite things, e.g. `keep` and `erase` — **that page is left untouched** | pick one and re-do that page |
 | `empty_translation` | a region has `src:` but no `fa:` | fill it in, or `drop: yes` |
 | `stale_worksheets` | regions changed after translation | re-do those pages |
 
@@ -352,6 +356,7 @@ $PY $SKILL_DIR/scripts/revayat-comic.py clean --doc $WORK/comic.json
 | `totals.flat` | balloons repainted in their own colour — the good case |
 | `totals.inpaint` | lettering that sat on artwork and had to be reconstructed |
 | `totals.keep` | sound effects deliberately left in the drawing |
+| `totals.refused` | **a solid free-lettering patch with no repair available.** Nothing was touched and the region says what would fix it: `--external`, a working `--provider`, or re-running `mask --free-lettering glyphs` |
 | `inpaint_heavy_pages` | look at these; Telea smooths, it does not redraw |
 
 To use a better cleaner than this ships with, clean the pages elsewhere and
@@ -423,13 +428,14 @@ $PY $SKILL_DIR/scripts/revayat-comic.py qa check --doc $WORK/comic.json
 | --- | --- | --- |
 | `artwork-modified` | pixels changed outside the authorised mask | do not ship; re-run clean and typeset for that page |
 | `source-text-survived` | the mask missed part of the lettering, so the original script is still on the cleaned page | re-run `mask` with a larger `--grow` for that page, then `clean` |
+| `stale-stage` | a finished stage's result no longer matches what it was made from — an approved line was corrected after the page was rendered, or a stage it depends on has run since | re-run the stage it names, then `qa` |
 | `source-modified` | an original page file was edited after import | restore it, or re-import |
 | `page-missing` / `page-size-changed` | an output is gone or resized | re-run the stage that makes it |
 | `untranslated-region` | a region has no Persian | translate it, or `drop: yes` |
 | `page-not-rendered` | the page carries Persian that was never drawn onto it | run `typeset`; it is a draft until you do |
 | `source-script-left` | Japanese, Korean or Chinese survives inside the Persian | re-do that region |
 | `not-persian` | the target text is not Persian at all | re-do that region |
-| `text-overflow` | it does not fit at the minimum size | shorten the translation |
+| `text-overflow` | it does not fit at the minimum size, and the words were **not drawn** — ink that would land outside the balloon is taken back off the page | shorten the translation, merge and typeset again |
 | `reading-order-broken` | the numbering is not `1..n` | re-run detect for that page |
 | `mask-excessive` (warning) | more than 28% of a page would be repainted | tighten detection |
 | `duplicate-translation` (warning) | different sources, identical Persian | a reply was pasted twice; re-do both |
@@ -477,6 +483,7 @@ $PY $SKILL_DIR/scripts/revayat-comic.py qa package --doc $WORK/comic.json \
 | --- | --- | --- |
 | `archive-invalid` | the package will not open, or its page names do not sort into reading order | re-run export |
 | `archive-page-count` | the package has a different number of pages from the document | re-run export; if it repeats, a page failed to write |
+| `archive-page-size` | a page in the package is not the size the document says | re-run export; a mismatch means the wrong file was packed |
 
 Then report: where the file is, how many pages and balloons, which sound-effect
 policy was used, whether shaping used RAQM or the fallback, anything QA flagged
@@ -516,4 +523,6 @@ Read these only when the step points at them:
 - `references/watermarks.md` — erasing a mark, and whether it is yours to erase
 - `references/ocr.md` — reading with your own eyes, and when a model helps
 - `references/serving.md` — MCP and HTTP, for a host that cannot run this CLI
+- `references/evaluation.md` — how to judge the Persian, and why a pass
+  rate is not evidence about a translation
 - `references/troubleshooting.md` — the failures you are most likely to hit

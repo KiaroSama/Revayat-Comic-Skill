@@ -26,8 +26,6 @@ nobody can read.
 from __future__ import annotations
 
 import argparse
-import os
-import platform
 import re
 import sys
 from pathlib import Path
@@ -36,264 +34,27 @@ from typing import Any, Sequence
 import lettering
 import masks as mask_tools
 import pageir as ir
-
-ZWNJ = "\u200c"
-
-#: Fonts that carry a full Persian glyph set, best first. Vazirmatn and Sahel
-#: are the modern open Persian faces; the Noto and system entries are the
-#: fallbacks that exist on a machine with nothing installed for Persian.
-#: Note what is *not* here: DejaVu Sans. It is the fallback every Linux box has
-#: and it contains no Arabic script at all, so it would be chosen and then draw
-#: nothing. `_supports_persian` catches that, but not listing it is cheaper.
-#: The house face. **Persian in this project is set in Vazir** \u2014 Vazirmatn is
-#: the current release of that family and the one to install; the older `Vazir-*`
-#: files are the same design under its first name. Everything after this tuple is
-#: a fallback that keeps a page readable on a machine that has no Vazir, and
-#: `doctor` says so out loud rather than letting one pass unnoticed.
-VAZIR_FONTS = (
-    "Vazirmatn-Medium.ttf", "Vazirmatn-Regular.ttf", "Vazirmatn-SemiBold.ttf",
-    "Vazirmatn-Bold.ttf", "Vazirmatn-Light.ttf", "Vazirmatn-ExtraBold.ttf",
-    "Vazirmatn-Black.ttf", "Vazirmatn-ExtraLight.ttf", "Vazirmatn-Thin.ttf",
-    "Vazirmatn.ttf", "Vazirmatn[wght].ttf",
-    "Vazirmatn-VariableFont_wght.ttf",
-    "Vazir-Medium.ttf", "Vazir-Regular.ttf", "Vazir-Bold.ttf",
-    "Vazir-Light.ttf", "Vazir-Thin.ttf", "Vazir.ttf",
-    "Vazir-Medium-FD.ttf", "Vazir-FD.ttf",
+import stages
+from typefont import (  # noqa: F401 - re-exported: `typeset.find_font`
+    FONT_DIRS,                                # and friends are the names
+    PERSIAN_FONTS,                            # the CLI, `doctor` and the
+    VAZIR_FONTS,                              # tests have always used.
+    ZWNJ,
+    Shaper,
+    _numpy,
+    _pil,
+    _supports_persian,
+    find_font,
+    is_vazir,
+    raqm_available,
+    shape_fallback,
 )
-
-PERSIAN_FONTS = VAZIR_FONTS + (
-    "Sahel.ttf", "Shabnam.ttf", "IRANSansWeb.ttf", "IRANSans.ttf",
-    "NotoNaskhArabic-Regular.ttf", "NotoSansArabic-Regular.ttf",
-    "NotoNaskhArabic.ttf", "NotoSansArabic.ttf",
-    "NotoSansArabic-VariableFont_wdth,wght.ttf",
-    # macOS ships these two and nothing else with Persian coverage.
-    "GeezaPro.ttc", "Geeza Pro.ttc",
-    # Windows ships Tahoma, which has a complete Persian set.
-    "Tahoma.ttf", "tahoma.ttf",
-    "Arial.ttf", "arial.ttf", "ArialUni.ttf",
-    "Nazli.ttf", "Titr.ttf", "Mitra.ttf",
-)
-
-
-def is_vazir(font_path: Path | str) -> bool:
-    """Whether this is the house face rather than a fallback.
-
-    Matched on the family name, not the exact filename: Vazirmatn ships a dozen
-    weights and a variable build, and a user who installed `Vazirmatn-Bold` has
-    the right font.
-    """
-    return Path(font_path).name.lower().startswith("vazir")
-
-FONT_DIRS = {
-    "Windows": (r"C:\Windows\Fonts",),
-    "Darwin": ("/System/Library/Fonts", "/System/Library/Fonts/Supplemental",
-               "/Library/Fonts", "~/Library/Fonts"),
-    "Linux": ("/usr/share/fonts", "/usr/local/share/fonts",
-              "~/.fonts", "~/.local/share/fonts"),
-}
 
 DEFAULT_MAX_SIZE = 64
 DEFAULT_MIN_SIZE = 13
 LINE_SPACING = 1.30
 #: Keep this much of the balloon clear at its edge, as a share of its size.
 BALLOON_PADDING = 0.10
-
-
-def _pil():
-    ir.require("PIL", "pillow", "typesetting Persian")
-    from PIL import Image, ImageDraw, ImageFont
-
-    return Image, ImageDraw, ImageFont
-
-
-def _numpy():
-    ir.require("numpy", "numpy", "measuring balloons")
-    import numpy
-
-    return numpy
-
-
-# --------------------------------------------------------------------------- #
-# Shaping
-# --------------------------------------------------------------------------- #
-
-def raqm_available() -> bool:
-    """Whether Pillow can shape and reorder Persian itself."""
-    try:
-        from PIL import features
-
-        return bool(features.check("raqm"))
-    except Exception:  # pragma: no cover - very old Pillow
-        return False
-
-
-_RESHAPER = None
-
-
-def _reshaper():
-    """A reshaper configured for Persian rather than for its own defaults.
-
-    ``delete_harakat`` defaults to **True** in arabic-reshaper, and that is not
-    a cosmetic setting for Persian: it deletes U+0654, the hamza that carries
-    the ezafe. ``خانهٔ ما`` (*our house*) silently becomes ``خانه ما``, which is a
-    different construction. Measured, then fixed here rather than discovered in
-    a finished chapter.
-    """
-    global _RESHAPER
-    if _RESHAPER is None:
-        module = ir.require("arabic_reshaper", "arabic-reshaper",
-                            "Persian shaping without RAQM")
-        _RESHAPER = module.ArabicReshaper(configuration={
-            "delete_harakat": False,
-            "support_zwj": True,
-            "support_ligatures": False,
-        })
-    return _RESHAPER
-
-
-def shape_fallback(text: str) -> str:
-    """Pre-shape and reorder by hand, when RAQM is unavailable.
-
-    This produces presentation forms in visual order. It renders correctly, but
-    the result is a picture of Persian rather than Persian: the same string
-    copied out of the image would not be searchable, and a line broken after
-    shaping would break in the wrong place. Line breaking therefore happens on
-    the logical text, before this is ever called.
-
-    Not a rare path, and not the platform limit it was long documented as.
-    Pillow's wheels carry libraqm everywhere; libraqm loads **FriBiDi** at run
-    time, and Linux images normally have one while Windows and macOS normally do
-    not. Put a `fribidi` DLL on PATH — `fribidi.dll`, `fribidi-0.dll` or
-    `libfribidi-0.dll` — and `features.check("raqm")` turns true on Windows.
-    Measured on this project's own machine, where the claim had been repeated in
-    five files.
-    """
-    ir.require("bidi", "python-bidi", "Persian direction without RAQM")
-    from bidi.algorithm import get_display
-
-    return get_display(_reshaper().reshape(text))
-
-
-class Shaper:
-    """One place that decides how a Persian string becomes glyphs."""
-
-    def __init__(self, force_fallback: bool = False) -> None:
-        self.raqm = raqm_available() and not force_fallback
-        _, _, ImageFont = _pil()
-        self.layout = (
-            ImageFont.Layout.RAQM if self.raqm else ImageFont.Layout.BASIC
-        )
-
-    @property
-    def mode(self) -> str:
-        return "raqm" if self.raqm else "reshaper"
-
-    def prepare(self, text: str) -> str:
-        return text if self.raqm else shape_fallback(text)
-
-    def draw_kwargs(self) -> dict[str, Any]:
-        # `direction` and `language` are RAQM-only; passing them without it
-        # raises rather than degrading, so they are omitted in fallback mode.
-        return {"direction": "rtl", "language": "fa"} if self.raqm else {}
-
-
-# --------------------------------------------------------------------------- #
-# Fonts
-# --------------------------------------------------------------------------- #
-
-def _candidate_paths() -> list[Path]:
-    roots = FONT_DIRS.get(platform.system(), FONT_DIRS["Linux"])
-    found: list[Path] = []
-    for root in roots:
-        base = Path(os.path.expanduser(root))
-        if not base.is_dir():
-            continue
-        try:
-            found.extend(
-                path for path in base.rglob("*")
-                if path.suffix.lower() in {".ttf", ".otf", ".ttc"}
-            )
-        except OSError:  # pragma: no cover - unreadable font directory
-            continue
-    return found
-
-
-def find_font(preferred: str | None = None) -> Path:
-    """Locate a font that can actually draw Persian."""
-    _, _, ImageFont = _pil()
-
-    if preferred:
-        direct = Path(os.path.expanduser(preferred))
-        if direct.is_file():
-            return direct
-        try:
-            loaded = ImageFont.truetype(preferred, 20)
-            return Path(getattr(loaded, "path", preferred))
-        except OSError:
-            pass  # fall through to the search, but remember what was asked for
-
-    for name in PERSIAN_FONTS:
-        try:
-            loaded = ImageFont.truetype(name, 20)
-            return Path(getattr(loaded, "path", name))
-        except OSError:
-            continue
-
-    wanted = {name.lower() for name in PERSIAN_FONTS}
-    for path in _candidate_paths():
-        if path.name.lower() in wanted:
-            return path
-
-    raise ir.MissingDependency(
-        "No Persian-capable font was found on this machine.\n"
-        "Install one and try again — Vazirmatn is the usual choice:\n"
-        "    https://github.com/rastikerdar/vazirmatn/releases\n"
-        "Then pass it explicitly:  --font /path/to/Vazirmatn-Medium.ttf\n"
-        "Tahoma or Noto Naskh Arabic also work if either is already installed."
-    )
-
-
-#: Five codepoints in the Private Use Area. No text font assigns glyphs here,
-#: so whatever a face draws for these IS its "I do not have this character"
-#: mark — its `.notdef` box, or nothing at all.
-_DEFINITELY_MISSING = "\ue000\ue001\ue002\ue003\ue004"
-
-
-def _supports_persian(font_path: Path) -> bool:
-    """Whether this face really has Persian letters, or boxes where they go.
-
-    Decided by COVERAGE, not by ink. The old test counted dark pixels and
-    accepted anything between a floor and a ceiling — which a Latin-only face
-    passes easily, because five `.notdef` boxes put down MORE ink than the word
-    does. Measured: a Latin-only face drew 680 px for `چگونه` where Vazirmatn
-    draws 540, so the font that cannot write Persian scored higher than the one
-    that can, and `doctor` called the machine ready.
-
-    What separates them is that a face without the letters draws the SAME mark
-    for every character it lacks. Render the word, render five private-use
-    codepoints, compare: identical means tofu.
-    """
-    Image, ImageDraw, ImageFont = _pil()
-    try:
-        font = ImageFont.truetype(str(font_path), 32)
-    except OSError:
-        return False
-
-    def drawn(text: str) -> bytes | None:
-        canvas = Image.new("L", (240, 60), 255)
-        draw = ImageDraw.Draw(canvas)
-        try:
-            draw.text((4, 4), text, font=font, fill=0)
-        except Exception:
-            return None
-        return canvas.tobytes()
-
-    persian = drawn("چگونه")
-    blank = drawn("")
-    if persian is None or blank is None or persian == blank:
-        return False
-    missing = drawn(_DEFINITELY_MISSING)
-    return missing is None or persian != missing
 
 
 # --------------------------------------------------------------------------- #
@@ -326,33 +87,94 @@ def interior_mask(clean_rgb, region: dict[str, Any], page_size: tuple[int, int])
     )
 
 
-def _row_widths(mask, np) -> tuple[list[int], list[int]]:
-    """Per row: the widest continuous run of interior, and where it starts."""
+def _row_widths(mask, np) -> list[int]:
+    """Per row: the widest continuous run of interior.
+
+    Used for ONE question — how wide is the shape at this height — which is
+    what tells a balloon's body from its tail. Placement does not come from
+    here; a line spans many rows, and `_band_span` answers for the band.
+    """
     widths: list[int] = []
-    starts: list[int] = []
     for row in mask:
         columns = np.flatnonzero(row)
         if columns.size == 0:
             widths.append(0)
-            starts.append(0)
             continue
-        # Longest run of consecutive interior columns in this row.
         breaks = np.flatnonzero(np.diff(columns) > 1)
         segments = np.split(columns, breaks + 1)
         best = max(segments, key=len)
         widths.append(int(best[-1] - best[0] + 1))
-        starts.append(int(best[0]))
-    return widths, starts
+    return widths
+
+
+def _band_span(mask, np):
+    """``span(first_row, last_row) -> (left column, width)`` for a band of rows.
+
+    A line of text is one block of ink lying across every row of its band, so
+    the columns it may use are the columns that are interior in **every** one
+    of those rows. That is not what was asked before. Before, the width came
+    from the narrowest row's own longest run and the position came from the
+    middle row's, and on any shape whose rows do not line up — a leaning side,
+    a tail, a hole, a row split into two runs by a balloon's divider — those
+    are different columns. A line was then measured against one span and
+    centred on another, so it could be declared to fit and still be drawn over
+    the outline.
+
+    Keeping only the longest run per row lost the rest of the row as well:
+    a row split in two contributed one run, and which one depended on a pixel.
+    The intersection uses the whole row and never has to choose.
+
+    A prefix sum down the columns makes each band a subtraction, so asking
+    forty times per size stays cheap.
+    """
+    height, width = mask.shape
+    counts = np.zeros((height + 1, width), np.int32)
+    # `> 0`, because a mask arrives as 0/255 as often as it arrives as booleans
+    # and a sum of 255s compares against nothing useful.
+    np.cumsum((mask > 0).astype(np.int32), axis=0, out=counts[1:])
+    cache: dict[tuple[int, int], tuple[int, int]] = {}
+
+    def span(first: int, last: int) -> tuple[int, int]:
+        first, last = max(0, int(first)), min(height, int(last))
+        if last <= first:
+            return 0, 0
+        key = (first, last)
+        if key not in cache:
+            shared = np.flatnonzero((counts[last] - counts[first]) == last - first)
+            if shared.size == 0:
+                cache[key] = (0, 0)
+            else:
+                runs = np.split(shared, np.flatnonzero(np.diff(shared) > 1) + 1)
+                best = max(runs, key=len)
+                cache[key] = (int(best[0]), int(best[-1] - best[0] + 1))
+        return cache[key]
+
+    return span
 
 
 # --------------------------------------------------------------------------- #
 # Wrapping
 # --------------------------------------------------------------------------- #
 
-def _tokens(text: str) -> list[str]:
-    """Break points. A ZWNJ joins a word; a space separates two."""
-    collapsed = re.sub(r"[ \t]+", " ", text.replace("\r", "")).strip()
-    return [token for token in collapsed.split(" ") if token]
+def _tokens(text: str) -> list[list[str]]:
+    """Break points, one list per hard line the translation asked for.
+
+    A ZWNJ joins a word; a space separates two; a newline ends a line. The
+    newline used to do none of those three. It is not `[ \t]`, so it was not
+    collapsed, and it is not `" "`, so `split` left it sitting INSIDE a token —
+    which was then measured as one word and handed to Pillow, which draws a
+    string containing a newline as two lines of its own. Those extra lines fall
+    below the band the fitter measured and outside a tight balloon, and nothing
+    upstream had asked for them to be there.
+    """
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    paragraphs = []
+    for line in lines:
+        tokens = [token for token
+                  in re.sub(r"[ \t]+", " ", line).strip().split(" ") if token]
+        if tokens:
+            paragraphs.append(tokens)
+    return paragraphs
 
 
 def stroke_for(size: int) -> int:
@@ -414,10 +236,28 @@ def _body(widths: Sequence[int]) -> tuple[int, int]:
     return best_start, best_length
 
 
-def _wrap(draw, tokens: Sequence[str], font, shaper: Shaper,
+def _wrap(draw, paragraphs: Sequence[Sequence[str]], font, shaper: Shaper,
           width_for_line, stroke_width: int = 0) -> list[str] | None:
-    """Greedy wrap where each line asks how wide *it* is allowed to be."""
+    """Greedy wrap where each line asks how wide *it* is allowed to be.
+
+    Each paragraph starts a new line: a break the translation put there is a
+    decision about the balloon, not whitespace to reflow.
+    """
     lines: list[str] = []
+    for tokens in paragraphs:
+        current = _wrap_one(draw, tokens, font, shaper, width_for_line,
+                            stroke_width, lines)
+        if current is None:
+            return None
+        if current:
+            lines.append(current)
+    return lines or None
+
+
+def _wrap_one(draw, tokens: Sequence[str], font, shaper: Shaper,
+              width_for_line, stroke_width: int, lines: list[str]) -> str | None:
+    """One paragraph, appending its full lines to `lines` and returning the
+    part still open. ``None`` when a word will not fit on a line of its own."""
     current = ""
     for token in tokens:
         available = width_for_line(len(lines))
@@ -448,9 +288,7 @@ def _wrap(draw, tokens: Sequence[str], font, shaper: Shaper,
             # reported as placed.
             return None
         current = token
-    if current:
-        lines.append(current)
-    return lines or None
+    return current
 
 
 def fit_region(
@@ -466,9 +304,10 @@ def fit_region(
     top, bottom = int(rows[0]), int(rows[-1]) + 1
     left, right = int(columns[0]), int(columns[-1]) + 1
     region_mask = mask[top:bottom, left:right]
-    widths, starts = _row_widths(region_mask, np)
-    tokens = _tokens(text)
-    if not tokens:
+    widths = _row_widths(region_mask, np)
+    span = _band_span(region_mask, np)
+    paragraphs = _tokens(text)
+    if not paragraphs:
         return None
 
     body_top, body_height = _body(widths)
@@ -496,10 +335,9 @@ def fit_region(
 
             def width_for_line(index: int, offset=offset, step=step) -> int:
                 start = offset + index * step
-                band = widths[start:start + step]
-                return min(band) if band else 0
+                return span(start, start + step)[1]
 
-            lines = _wrap(draw, tokens, font, shaper, width_for_line,
+            lines = _wrap(draw, paragraphs, font, shaper, width_for_line,
                           stroke_px)
             if lines is None:
                 break
@@ -515,12 +353,10 @@ def fit_region(
         overflow = False
         for index, line in enumerate(lines):
             start = offset + index * step
-            band = widths[start:start + step]
-            band_starts = starts[start:start + step]
-            if not band:
+            band_left, available = span(start, start + step)
+            if available <= 0:
                 overflow = True
                 break
-            available = min(band)
             text_width, text_height = _measure(draw, line, font, shaper,
                                                stroke_px)
             if text_width > available:
@@ -538,7 +374,7 @@ def fit_region(
             if middle - half < 0 or middle + half > (bottom - top):
                 overflow = True
                 break
-            centre_x = left + band_starts[len(band_starts) // 2] + available / 2.0
+            centre_x = left + band_left + available / 2.0
             rendered.append({
                 "text": line,
                 "x": float(centre_x),
@@ -875,7 +711,7 @@ def typeset_document(
         unreliable += result["unreliable"]
         per_page.append({"page": page["id"], **result})
 
-    ir.stamp_stage(doc, "typeset", {
+    stages.stamp_stage(doc, "typeset", {
         "placed": placed, "font": font_path.name, "shaping": shaper.mode,
         "vazir": is_vazir(font_path),
     })

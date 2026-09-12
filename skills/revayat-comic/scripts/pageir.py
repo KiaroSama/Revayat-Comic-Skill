@@ -389,6 +389,24 @@ def region_state(region: dict[str, Any], sfx_policy: str = "keep") -> str:
     return "unresolved"
 
 
+#: What a title decides once and then applies to every chapter. Free text,
+#: written by a person, absent until somebody writes it — like `scene` and
+#: `style_notes`, and for the same reason: an invented policy is a confident
+#: guess about the book handed to a translator as if it had been agreed.
+#:
+#: They are constraints, not context. "-san becomes آقای/خانم" is a decision;
+#: re-taking it per page is how one character ends up addressed three ways.
+TITLE_POLICY_KEYS = ("honorifics", "names", "sfx", "slang", "profanity",
+                     "register")
+
+
+def title_policy(meta: dict[str, Any]) -> dict[str, str]:
+    """The title's standing decisions, empty entries left out."""
+    written = meta.get("title_policy") or {}
+    return {key: str(written[key]).strip() for key in TITLE_POLICY_KEYS
+            if str(written.get(key) or "").strip()}
+
+
 def state_census(doc: dict[str, Any]) -> dict[str, int]:
     policy = doc.get("meta", {}).get("sfx_policy", "keep")
     counts = {state: 0 for state in REGION_STATES}
@@ -651,14 +669,6 @@ def fingerprint(doc: dict[str, Any]) -> str:
     for page in doc.get("pages", []):
         digest.update(page_fingerprint(page).encode("utf-8"))
     return digest.hexdigest()
-
-
-def stamp_stage(doc: dict[str, Any], stage: str, detail: dict[str, Any]) -> None:
-    """Record that a stage ran, with the fingerprint it ran against."""
-    doc.setdefault("stages", {})[stage] = {
-        "fingerprint": fingerprint(doc),
-        **detail,
-    }
 
 
 # --------------------------------------------------------------------------- #

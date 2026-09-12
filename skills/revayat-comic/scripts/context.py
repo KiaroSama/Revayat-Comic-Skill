@@ -269,6 +269,7 @@ def build(doc: dict[str, Any], page_id: str, *,
         "constraints": {
             "glossary": glossary,
             "policy": {
+                **ir.title_policy(meta),
                 "sfx": meta.get("sfx_policy", "keep"),
                 # `reading_direction` is the key the importer writes.
                 # `direction` is never set, so this always said "rtl" and
@@ -281,6 +282,23 @@ def build(doc: dict[str, Any], page_id: str, *,
                 "never merge two balloons or split one across two",
                 "never summarise, omit, soften or add",
                 "a locked glossary term is used as written",
+                # What a translation has to carry, stated as the thing itself
+                # rather than as "be accurate". Every item here is something an
+                # automated translation drops first.
+                "keep the propositions, the negation, the tense and aspect, "
+                "the quantities, the causal links, the intent, the joke and "
+                "the emotional intensity — not the sentence count",
+                # And the three defaults that get applied by stereotype. Each
+                # is a decision the page itself answers.
+                "register comes from how these two people actually speak to "
+                "each other, not from a character's age, rank or gender",
+                "narration is not automatically past tense, and a shout is "
+                "not automatically impolite",
+                # The brief's own separation, because a balloon that will not
+                # fit is a layout problem before it is a wording problem.
+                "if it does not fit: a line break first (a newline in `fa` is "
+                "honoured), and only then a shorter wording that still says "
+                "the same thing — never a summary",
             ],
         },
         "context": {

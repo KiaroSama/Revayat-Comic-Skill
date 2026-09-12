@@ -17,7 +17,14 @@ the reader can see the page and the detector cannot:
 
     kind:    reclassify — the detector called it speech, it is a sign
     speaker: who is talking, for the glossary and for voice consistency
+    propose: a name or term this balloon MENTIONS, for the glossary
     drop:    yes — there is no text here; the detector matched artwork
+
+`speaker` and `propose` are separate because they answer different questions.
+The glossary used to be fed from `speaker` alone, so the only way to get a name
+that is merely talked about — "did you see Anna?" — into the table was to write
+it in `speaker`, which then said the wrong person was talking and carried that
+wrong voice into every later page's context.
 
 Merging refuses rather than guesses. If the page was re-detected after the
 worksheet was written, region ids no longer mean what the worksheet thinks they
@@ -37,10 +44,12 @@ from pathlib import Path
 from typing import Any, Sequence
 
 import pageir as ir
+import stages
 
 HEADER = re.compile(r"^@@\s+(?P<id>\+?[A-Za-z0-9_#-]+)(?:\s+(?P<rest>.*))?$")
 FIELD = re.compile(
-    r"^(?P<name>src|fa|kind|speaker|note|drop|keep|erase|box|polarity)"
+    r"^(?P<name>src|fa|kind|speaker|propose|note|drop|keep|erase|box"
+    r"|polarity)"
     r"\s*:\s?(?P<value>.*)$")
 
 #: `box: x y w h`, in the PAGE's own pixels. `overview.png` is drawn at most
@@ -48,8 +57,11 @@ FIELD = re.compile(
 BOX = re.compile(r"^\s*(\d+)[ ,]+(\d+)[ ,]+(\d+)[ ,]+(\d+)\s*$")
 FINGERPRINT = re.compile(r"^#\s*fingerprint:\s*(?P<value>[0-9a-f]{64})\s*$", re.M)
 
-FIELDS = ("src", "fa", "kind", "speaker", "note", "drop", "keep", "erase", "box",
-          "polarity")
+FIELDS = ("src", "fa", "kind", "speaker", "propose", "note", "drop", "keep",
+          "erase", "box", "polarity")
+
+#: `propose: Anna, the Iron Gate` — a comma in either script separates them.
+PROPOSALS = re.compile(r"[,\u060c]")
 
 _DIRECTION_WORDS = {
     "rtl": "right to left (Japanese order: the rightmost balloon is first)",
@@ -164,6 +176,17 @@ def page_worksheet(doc: dict[str, Any], page: dict[str, Any], fingerprint: str) 
         f"# Reading order: {_DIRECTION_WORDS.get(direction, direction)}",
         f"# Sound effects: {meta.get('sfx_policy', 'keep')}",
         "#",
+    ]
+    # Standing decisions for this title, if somebody has made any. On the page
+    # the reader is looking at, because a policy filed somewhere else is a
+    # policy that gets re-decided per chapter.
+    policy = ir.title_policy(meta)
+    if policy:
+        lines.append("# This title has settled:")
+        for key, value in policy.items():
+            lines.append(f"#   {key}: {value}")
+        lines.append("#")
+    lines += [
         "# Fill in `src:` with what the balloon actually says, and `fa:` with the",
         "# Persian. Keep every `@@` line exactly as it is. A field continues on",
         "# the following lines until the next field or the next `@@`.",
@@ -172,6 +195,9 @@ def page_worksheet(doc: dict[str, Any], page: dict[str, Any], fingerprint: str) 
         "# wrong. You can see the page; it could not.",
         "#   kind:    speech | thought | narration | sfx | sign | unknown",
         "#   speaker: a short stable name, the same one every time",
+        "#   propose: a name or term this balloon MENTIONS but does not say —",
+        "#            `propose: Anna` for \"did you see Anna?\". Several are",
+        "#            separated by commas. This is NOT who is talking.",
         "#   drop:    yes   — there is no text here at all",
         "#   keep:    yes   — there IS text, leave it in the artwork",
         "#   erase:   yes   — remove this and put nothing back (a watermark,",
@@ -209,6 +235,8 @@ def page_worksheet(doc: dict[str, Any], page: dict[str, Any], fingerprint: str) 
         lines.append(f"fa: {region.get('target_text', '')}")
         if region.get("speaker"):
             lines.append(f"speaker: {region['speaker']}")
+        if region.get("proposed"):
+            lines.append(f"propose: {', '.join(region['proposed'])}")
         # Decisions already taken are written back out. An ABSENT field resets
         # them at the next merge, so a rebuilt worksheet silently undid every
         # `drop`, `keep` and `erase` a reader had reviewed — and the notes with
@@ -388,6 +416,8 @@ def _apply(region: dict[str, Any], block: dict[str, str],
     target = block.get("fa", "").strip()
     kind = block.get("kind", "").strip().lower()
     speaker = block.get("speaker", "").strip()
+    proposed = [name.strip() for name
+                in PROPOSALS.split(block.get("propose", "")) if name.strip()]
     note = block.get("note", "").strip()
 
     if kind:
@@ -398,6 +428,11 @@ def _apply(region: dict[str, Any], block: dict[str, str],
             report["reclassified"].append(f"{region['id']} -> {kind}")
     if speaker:
         region["speaker"] = speaker
+    if proposed:
+        # Replaces rather than accumulates, like every other field here: a
+        # worksheet is a picture of the page, and a merge run twice must not
+        # leave the same name in the list twice.
+        region["proposed"] = proposed
     if note:
         # Only once. Merging the same reply twice is an ordinary thing to do —
         # and it appended the note again each time, so a page re-merged three
@@ -675,7 +710,7 @@ def merge_document(
                 ir.write_text(path, FINGERPRINT.sub(
                     f"# fingerprint: {ir.page_fingerprint(page)}", text, count=1))
 
-    ir.stamp_stage(doc, "worksheet", {"merged": report["merged"]})
+    stages.stamp_stage(doc, "worksheet", {"merged": report["merged"]})
     ir.save_doc(doc, doc_path)
 
     blocking = (

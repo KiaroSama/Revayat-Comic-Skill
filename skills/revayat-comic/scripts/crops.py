@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 import pageir as ir
+import stages
 
 #: Enlarge every crop until its shorter side reaches this, so small furigana is
 #: readable rather than a suggestion of a shape.
@@ -266,7 +267,7 @@ def build_document(
             "regions": len(page.get("regions", [])),
         })
 
-    ir.stamp_stage(doc, "crops", {"pages": len(produced)})
+    stages.stamp_stage(doc, "crops", {"pages": len(produced)})
     ir.save_doc(doc, doc_path)
     return {
         "document": str(doc_path),
