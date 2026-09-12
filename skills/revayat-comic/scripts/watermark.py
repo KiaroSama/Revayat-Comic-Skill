@@ -77,8 +77,16 @@ def mark_document(
     label: str = "watermark",
     kind: str = "sign",
     pages: list[str] | None = None,
+    from_overview: bool = False,
 ) -> dict[str, Any]:
-    """Put one erase region at `box` on every page, or on the named ones."""
+    """Put one erase region at `box` on every page, or on the named ones.
+
+    `from_overview` says the numbers were read off `crops/pNNNN/overview.png`,
+    which is drawn at most OVERVIEW_MAX_SIDE across — so on a tall page they are
+    in a smaller space than the page's own and have to be divided back out.
+    Each page is converted by its own recorded factor, because pages in one
+    chapter are not always the same size.
+    """
     doc_path = Path(doc_path)
     doc = ir.load_doc(doc_path)
     if kind not in ir.REGION_KINDS:
@@ -94,7 +102,16 @@ def mark_document(
         if pages and page["id"] not in pages:
             continue
         width, height = page["width"], page["height"]
-        clamped = ir.clamp_bbox(box, width, height)
+        wanted = box
+        if from_overview:
+            scale = page.get("overview_scale")
+            if not scale:
+                refused.append(f"{page['id']}: no overview has been drawn "
+                               f"for this page, so there is no scale to "
+                               f"convert from — run `crops` first")
+                continue
+            wanted = [int(round(value / scale)) for value in box]
+        clamped = ir.clamp_bbox(wanted, width, height)
         if clamped[2] < MIN_SIDE or clamped[3] < MIN_SIDE:
             # The box is off this page entirely. Pages in one chapter are not
             # always the same size — a double spread, a colour insert — and
@@ -175,13 +192,18 @@ def main(argv: list[str] | None = None) -> int:
                     "belongs in the worksheet, as `erase: yes`.")
     parser.add_argument("--doc", required=True)
     parser.add_argument("--box", required=True,
-                        help="x y w h, in the page's own pixels, read off "
+                        help="x y w h in the page's own pixels; add "
+                             "--from-overview if you read them off "
                              "overview.png")
     parser.add_argument("--label", default="watermark",
                         help="names this box, so re-running moves it instead "
                              "of adding a second")
     parser.add_argument("--kind", default="sign",
                         help=f"one of {', '.join(ir.REGION_KINDS)}")
+    parser.add_argument("--from-overview", action="store_true",
+                        help="the box was read off crops/pNNNN/overview.png, "
+                             "which is downscaled on a tall page; convert it "
+                             "to the page's own pixels first")
     parser.add_argument("--pages", default="",
                         help="comma-separated page ids; default is every page")
     args = parser.parse_args(argv)
@@ -192,6 +214,7 @@ def main(argv: list[str] | None = None) -> int:
         label=args.label,
         kind=args.kind,
         pages=[p for p in args.pages.split(",") if p] or None,
+        from_overview=args.from_overview,
     ))
     return 0
 

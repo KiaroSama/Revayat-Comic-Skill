@@ -123,8 +123,10 @@ src: BUMP
 fa: تلپ
 ```
 
-`box:` is `x y w h` in the page's own pixels, read straight off `overview.png`;
-add `polarity: dark` for white lettering on black, and re-run `mask` afterwards.
+`box:` is `x y w h` in the page's own pixels. `overview.png` is downscaled on a
+page longer than 1600 pixels, and the worksheet header prints the factor to
+divide by when it is. Add `polarity: dark` for white lettering on black, and
+re-run `mask` afterwards.
 See `detection.md` for the same mechanism used to split a merged pair.
 
 ## Reconstructing what was under it

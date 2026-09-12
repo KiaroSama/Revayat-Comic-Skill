@@ -66,8 +66,22 @@ revayat-comic mask  --doc work/comic.json     # the new boxes need masks
 revayat-comic clean --doc work/comic.json
 ```
 
-`--box` is `x y w h` in the page's own pixels — read them straight off
-`crops/pNNNN/overview.png`, which is drawn at page scale.
+`--box` is `x y w h` in the page's own pixels.
+
+`crops/pNNNN/overview.png` is the natural place to measure one, but it is
+**downscaled** to fit 1600 pixels on its longest side — so on any page taller
+than that, a box measured on it is in smaller numbers than the page's own. Pass
+`--from-overview` and the command converts it page by page, using the factor
+`crops` recorded for each one:
+
+```bash
+revayat-comic watermark --doc work/comic.json --box "12 1130 185 27" --from-overview
+```
+
+Without that flag the numbers are taken as page pixels, which is right when you
+measured them on the page itself. A 1000x1500 page is under the limit and is
+drawn 1:1, so on a book that size the two are identical — which is exactly how
+this went unnoticed.
 
 Re-running **moves** the box rather than adding a second one; they are
 identified by `--label`, so a wrong box on two hundred pages is fixed by running

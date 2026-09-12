@@ -284,9 +284,11 @@ are missing from the package.
 >   fa: تلپ
 >   ```
 >
->   `box:` is `x y w h` in the page's own pixels, which is what `overview.png`
->   is drawn at, so read the numbers straight off it. Add `polarity: dark` for
->   white lettering on black. Merging allocates the real region id.
+>   `box:` is `x y w h` in the page's own pixels. `overview.png` is drawn at
+>   most 1600 pixels on its longest side, so on a longer page a box measured on
+>   it is NOT in the page's pixels — the worksheet header prints the factor to
+>   divide by whenever that applies. Add `polarity: dark` for white lettering on
+>   black. Merging allocates the real region id.
 
 Check what is left at any time:
 
