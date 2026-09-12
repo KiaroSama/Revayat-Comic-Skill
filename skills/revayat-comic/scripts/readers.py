@@ -23,7 +23,9 @@ from typing import Any, Iterable
 
 import pageir as ir
 
-IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".gif"}
+#: The canonical list lives in `pageir`, so the importer, the cleaner, the
+#: exporter and the gate cannot drift apart about what a page is.
+IMAGE_SUFFIXES = ir.IMAGE_SUFFIXES
 ARCHIVE_SUFFIXES = {".cbz", ".zip"}
 RAR_SUFFIXES = {".cbr", ".rar"}
 

@@ -29,6 +29,7 @@ from typing import Any
 import falint
 import masks as mask_tools
 import pageir as ir
+from pageir import IMAGE_SUFFIXES
 import providers
 
 #: Every finding this module can produce. Keeping the list here rather than
@@ -40,6 +41,7 @@ CODES = {
     "page-size-changed": "error",
     "artwork-modified": "error",
     "untranslated-region": "error",
+    "page-not-rendered": "error",
     "source-script-left": "error",
     "not-persian": "error",
     "text-overflow": "error",
@@ -133,7 +135,10 @@ def compare_outside_mask(original_path: Path, final_path: Path, mask_path: Path 
     outside = delta.copy()
     outside[allowed] = 0
     changed = int((outside > 0).sum())
-    return changed, int(delta.size // 3), int(outside.max())
+    # `delta` was already collapsed across the three channels by the
+    # `max(axis=2)` above, so it is H x W. Dividing by three again made
+    # every reported share three times too large.
+    return changed, int(delta.size), int(outside.max())
 
 
 def surviving_ink(original, cleaned, region: dict[str, Any],
@@ -165,6 +170,29 @@ def surviving_ink(original, cleaned, region: dict[str, Any],
     x, y, w, h = region["mask_box"]
     if w <= 0 or h <= 0:
         return 0.0
+
+    # Did the cleaner do anything at all? Asked first, because every test
+    # below can exit early on a page where nothing happened — which is
+    # exactly the page this question is about. A cleaner that left every
+    # original letter where it was measured 0.000 and the gate passed it.
+    #
+    # Inside the mask the question is not "is there ink" — an inpainted
+    # region legitimately has some — but "is this byte for byte what was
+    # here before", which no real repair ever is.
+    covered = mask > 0
+    if int(covered.sum()) >= 24:
+        was = original[y:y + h, x:x + w].astype(np.int16).mean(axis=2)
+        now = cleaned[y:y + h, x:x + w].astype(np.int16).mean(axis=2)
+        # The balloon's own colour, read from the ORIGINAL just outside the
+        # mask, so this does not depend on the clean having worked.
+        around = was[~covered]
+        paper_before = float(np.median(around if around.size else was))
+        inked = (np.abs(was - paper_before) > 60) & covered
+        under = int(inked.sum())
+        if under >= 12:
+            untouched = int((np.abs(was - now) < 1)[inked].sum())
+            if untouched / under > 0.98:
+                return 1.0
 
     # Where a letter could have been and the mask did not reach.
     consider = (interior[y:y + h, x:x + w] > 0) & (mask == 0)
@@ -331,7 +359,23 @@ def check_document(doc_path: str | Path, *, strict: bool = False) -> dict[str, A
                 f"reading order is missing or repeated on this page: {sorted(orders)[:12]}",
             )
 
+        # Everything below sat behind `if final:`, so a chapter whose pages
+        # had never been rendered skipped every artwork check and answered
+        # `ok: true` — under `--strict` as well — while carrying nine
+        # translated regions and no output at all. Draft work is legitimate;
+        # calling it finished is not.
+        wants_render = any(
+            (region.get("target_text") or "").strip()
+            for region in page.get("regions", [])
+            if not region.get("dropped")
+        )
         final = page.get("final")
+        if wants_render and not (final and (root / final).exists()):
+            findings.add(
+                "page-not-rendered", page["id"],
+                "this page carries Persian that has never been drawn onto "
+                "it; run `typeset` before calling the chapter finished",
+            )
         if final:
             final_path = root / final
             if not final_path.exists():
@@ -431,7 +475,14 @@ def check_document(doc_path: str | Path, *, strict: bool = False) -> dict[str, A
                     f"{leftover} character(s) of the source script are still in "
                     f"the Persian: {target[:40]}",
                 )
-            if target_language == "fa" and not ir.looks_like(target, "fa"):
+            # `…`, `!!!`, `؟` and a numeric-only balloon carry no word in any
+            # script, so there is nothing in them to have translated. They
+            # were filed as `not-persian`, which sends a translator to fix
+            # something already right. Anything with a letter in it is still
+            # judged, so an English sentence left in place is still caught.
+            lexical = sum(counts.values()) > 0
+            if (target_language == "fa" and lexical
+                    and not ir.looks_like(target, "fa")):
                 findings.add("not-persian", region["id"],
                              f"target text is not Persian: {target[:40]}")
 
@@ -518,7 +569,7 @@ def check_package(package: str | Path, doc_path: str | Path) -> dict[str, Any]:
                                  f"corrupt member: {bad}")
                 names = [
                     name for name in archive.namelist()
-                    if Path(name).suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
+                    if Path(name).suffix.lower() in IMAGE_SUFFIXES
                 ]
                 found = len(names)
                 # Order is the whole point of a comic archive, and a reader that
@@ -536,7 +587,7 @@ def check_package(package: str | Path, doc_path: str | Path) -> dict[str, Any]:
     else:
         found = len([
             child for child in package.iterdir()
-            if child.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
+            if child.suffix.lower() in IMAGE_SUFFIXES
         ]) if package.is_dir() else 0
 
     if found != expected:

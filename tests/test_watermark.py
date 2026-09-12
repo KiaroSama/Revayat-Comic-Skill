@@ -154,8 +154,10 @@ def test_an_erased_region_is_not_a_hole_in_the_translation(stamped):
     assert ir.translatable(mark, "keep") is False
 
     findings = qa.check_document(stamped)["findings"]
+    # Keyed `where`, not `region`: this read the wrong key and passed
+    # whatever the gate said.
     blamed = [f for f in findings
-              if f.get("region") == mark["id"] and "untranslated" in f["code"]]
+              if f.get("where") == mark["id"] and "untranslated" in f["code"]]
     assert not blamed, f"the erased mark was reported as a hole: {blamed}"
 
 

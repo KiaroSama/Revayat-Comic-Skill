@@ -31,6 +31,7 @@ from typing import Any, Sequence
 import lettering
 import masks as mask_tools
 import pageir as ir
+from pageir import IMAGE_SUFFIXES
 import providers
 
 #: Standard deviation, in 8-bit levels, below which a background counts as flat.
@@ -192,7 +193,7 @@ def clean_page(
     if external is not None:
         candidate = next(
             (external / f"{page['id']}{suffix}"
-             for suffix in (".png", ".jpg", ".jpeg", ".webp")
+             for suffix in sorted(IMAGE_SUFFIXES)
              if (external / f"{page['id']}{suffix}").exists()),
             None,
         )
