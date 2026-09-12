@@ -29,6 +29,7 @@ back in.
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import re
 import sys
@@ -195,6 +196,18 @@ def page_worksheet(doc: dict[str, Any], page: dict[str, Any], fingerprint: str) 
         lines.append(f"fa: {region.get('target_text', '')}")
         if region.get("speaker"):
             lines.append(f"speaker: {region['speaker']}")
+        # Decisions already taken are written back out. An ABSENT field resets
+        # them at the next merge, so a rebuilt worksheet silently undid every
+        # `drop`, `keep` and `erase` a reader had reviewed — and the notes with
+        # them. A worksheet has to be a faithful picture of the page.
+        if region.get("dropped"):
+            lines.append("drop: yes")
+        if region.get("keep"):
+            lines.append("keep: yes")
+        if region.get("erase"):
+            lines.append("erase: yes")
+        for note in region.get("review", []):
+            lines.append(f"note: {note}")
     return "\n".join(lines) + "\n"
 
 
@@ -235,8 +248,11 @@ def build_document(
         if pages and page["id"] not in pages:
             continue
         if not page.get("regions"):
+            # Written anyway. `@@ +slug` is the one way to recover text the
+            # detector missed entirely, and skipping the sheet made it
+            # unreachable on exactly the page that needed it most. Still
+            # reported under `pages_without_text` so the count stays honest.
             empty.append(page["id"])
-            continue
         target = folder / f"{page['id']}.txt"
         ir.write_text(target, page_worksheet(doc, page, fingerprint))
         written.append(str(target.relative_to(root)) if target.is_relative_to(root)
@@ -350,7 +366,12 @@ def _apply(region: dict[str, Any], block: dict[str, str],
     if speaker:
         region["speaker"] = speaker
     if note:
-        region.setdefault("review", []).append(note)
+        # Only once. Merging the same reply twice is an ordinary thing to do —
+        # and it appended the note again each time, so a page re-merged three
+        # times carried the same sentence three times.
+        notes = region.setdefault("review", [])
+        if note not in notes:
+            notes.append(note)
 
     region["source_text"] = source
     region["dropped"] = False
@@ -466,6 +487,36 @@ def reply_digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
+def _apply_page(page: dict[str, Any], blocks: dict[str, dict[str, str]],
+                report: dict[str, list[str]], policy: str, direction: str,
+                additions: list[str], covered: set[str]) -> int:
+    """One page's reply, applied to `page`. Returns how many regions it filled.
+
+    Separate from `merge_document` so the same work can be done against a copy
+    and thrown away if the reply turns out not to be about this page.
+    """
+    merged = 0
+    for region in page.get("regions", []):
+        if region["id"] in covered:
+            continue
+        block = blocks.get(region["id"])
+        if block is None:
+            report["missing_regions"].append(region["id"])
+            continue
+        if _apply(region, block, report):
+            merged += 1
+        elif not region.get("dropped") and ir.translatable(region, policy):
+            report["empty_translation"].append(region["id"])
+
+    for slug in additions:
+        if _add_region(page, slug[1:] or "added", blocks[slug], report):
+            merged += 1
+    if additions:
+        # A new box changes what comes before what, and it has no mask yet.
+        ir.assign_reading_order(page, direction)
+    return merged
+
+
 def merge_document(
     doc_path: str | Path,
     worksheets: str | Path | None = None,
@@ -507,61 +558,65 @@ def merge_document(
     trouble = ("missing_regions", "unknown_regions", "duplicate_regions",
                "empty_translation", "bad_added_regions",
                "conflicting_actions")
+    list_keys = [key for key, value in report.items() if isinstance(value, list)]
     for page_id, page in by_page.items():
-        if not page.get("regions"):
-            continue
         path = folder / f"{page_id}.done.txt"
         if not path.exists():
             report["missing_outputs"].append(page_id)
             continue
 
         text = ir.read_text(path)
-        before = {key: len(report[key]) for key in trouble}
         stamped = FINGERPRINT.search(text)
         if stamped and stamped.group("value") != fingerprint and not force:
             report["stale_worksheets"].append(page_id)
             continue
 
         blocks = parse_worksheet(text)
-        known = {region["id"] for region in page["regions"]}
+        known = {region["id"] for region in page.get("regions", [])}
+        page_report: dict[str, list[str]] = {key: [] for key in list_keys}
         for region_id, block in blocks.items():
             if int(block.get("_seen", 1)) > 1:
-                report["duplicate_regions"].append(region_id)
+                page_report["duplicate_regions"].append(region_id)
         additions = sorted(key for key in blocks if key.startswith("+"))
-        report["unknown_regions"] += sorted(set(blocks) - known - set(additions))
+        page_report["unknown_regions"] += sorted(set(blocks) - known - set(additions))
 
         # Regions the reader added are addressed by their `+slug` block, not by
         # an `@@ <id>` block of their own, so they are not missing from the sheet.
         slugs = {slug[1:] for slug in additions}
-        covered = {region["id"] for region in page["regions"]
+        covered = {region["id"] for region in page.get("regions", [])
                    if region.get("added_as") in slugs}
 
-        for region in page["regions"]:
-            if region["id"] in covered:
-                continue
-            block = blocks.get(region["id"])
-            if block is None:
-                report["missing_regions"].append(region["id"])
-                continue
-            filled = _apply(region, block, report)
-            if filled:
-                report["merged"] += 1
-            elif not region.get("dropped") and ir.translatable(region, policy):
-                report["empty_translation"].append(region["id"])
+        # Applied to a COPY first. A reply is one answer about one page, and
+        # applying the sound part of a malformed one left the page in a state
+        # nobody wrote: some regions carrying the new reply, the rest carrying
+        # the old, while the report mentioned only the block that was wrong.
+        candidate = copy.deepcopy(page)
+        merged = _apply_page(candidate, blocks, page_report, policy, direction,
+                             additions, covered)
 
-        for slug in additions:
-            if _add_region(page, slug[1:] or "added", blocks[slug], report):
-                report["merged"] += 1
-        # What was consumed, and whether it landed whole. Without this the
-        # only way to ask "is this page merged" was "does it hold any
-        # Persian yet" — which says yes to a page whose reply was edited
-        # afterwards, and yes to one whose reply was only half applied.
-        page["worksheet_digest"] = reply_digest(text)
-        page["worksheet_clean"] = all(
-            len(report[key]) == before[key] for key in trouble)
-        if additions:
-            # A new box changes what comes before what, and it has no mask yet.
-            ir.assign_reading_order(page, direction)
+        # What makes a reply un-appliable, as opposed to merely incomplete: it
+        # answers about a region twice, about a region that is not on the page,
+        # or it asks for two opposite things. `missing_regions` and
+        # `empty_translation` are NOT here — translating part of a page and
+        # coming back to it is the ordinary way this work gets done.
+        refused = (page_report["duplicate_regions"]
+                   + page_report["unknown_regions"]
+                   + page_report["conflicting_actions"])
+        for key, values in page_report.items():
+            report[key] += values
+        if refused:
+            continue
+
+        # What was consumed, and whether it landed whole. Without this the only
+        # way to ask "is this page merged" was "does it hold any Persian yet" —
+        # which says yes to a page whose reply was edited afterwards, and yes to
+        # one whose reply was only half applied.
+        candidate["worksheet_digest"] = reply_digest(text)
+        candidate["worksheet_clean"] = not any(
+            page_report[key] for key in trouble)
+        page.clear()
+        page.update(candidate)
+        report["merged"] += merged
         consumed.append(path)
 
     if report["added"]:
