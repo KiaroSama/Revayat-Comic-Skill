@@ -213,6 +213,12 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r skills/revayat-comic/requirements.txt
 
+      # Deliberately a small rule set — undefined names, unused imports, a
+      # shadowed name, a dead variable. Not style. See ruff.toml for what is
+      # left off and why.
+      - name: Every Python file passes the linter
+        run: python -m ruff check skills/revayat-comic/scripts tests
+
       - name: Every plugin manifest is valid JSON and agrees on version
         run: |
           python - <<'PY'

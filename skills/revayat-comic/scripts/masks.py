@@ -140,7 +140,7 @@ def find_balloon(page_rgb, bbox, polarity: str, page_size: tuple[int, int]):
     finds the paper, and accepted only if it really encloses the box and is
     small enough to be a balloon rather than a panel.
     """
-    cv2, np = _cv2(), _numpy()
+    cv2 = _cv2()
     width, height = page_size
     x, y, w, h = ir.clamp_bbox(bbox, width, height)
     if w < 4 or h < 4:

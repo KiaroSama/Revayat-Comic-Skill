@@ -106,7 +106,13 @@ exception.
 pip install -r skills/revayat-comic/requirements.txt
 python -m pytest tests -q
 python tests/e2e_pipeline.py
+python -m ruff check skills/revayat-comic/scripts tests
 ```
+
+The linter runs a deliberately small rule set — undefined names, unused imports,
+a shadowed name, a variable assigned and never read. Not style. `ruff.toml`
+records what is switched off and why, including three findings that are correct
+code ruff cannot see through.
 
 `tests/e2e_pipeline.py` runs every stage through the real CLI against a
 generated chapter, so a break in the dispatcher, an argument name or a report

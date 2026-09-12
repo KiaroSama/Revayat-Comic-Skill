@@ -65,7 +65,7 @@ def _ink_width(shaper, text: str, *, shape: bool = True) -> tuple[int, int]:
     language arguments only override that detection — so a RAQM baseline would
     come out shaped and the comparison below would prove nothing.
     """
-    from PIL import Image, ImageDraw, ImageFont
+    from PIL import ImageDraw, ImageFont
 
     layout = shaper.layout if shape else ImageFont.Layout.BASIC
     font = ImageFont.truetype(str(typeset.find_font()), 48, layout_engine=layout)
@@ -143,14 +143,14 @@ def test_an_unknown_font_name_falls_back_rather_than_failing():
 # --- Fitting ----------------------------------------------------------------
 
 def _canvas(width=400, height=300):
-    from PIL import Image, ImageDraw
+    from PIL import ImageDraw
 
     image = Image.new("RGB", (width, height), "white")
     return ImageDraw.Draw(image)
 
 
 def _ellipse_mask(width=400, height=300):
-    from PIL import Image, ImageDraw
+    from PIL import ImageDraw
 
     mask = Image.new("L", (width, height), 0)
     ImageDraw.Draw(mask).ellipse([20, 20, width - 20, height - 20], fill=255)

@@ -15,7 +15,6 @@ import falint
 import masks
 import pageir as ir
 import qa
-import typeset
 
 
 
