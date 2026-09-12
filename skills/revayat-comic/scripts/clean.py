@@ -8,7 +8,9 @@ when the region sits on real artwork does it go to an inpainter.
     flat      the region's background is uniform  ->  fill with that colour
     inpaint   there is line art or texture under it  ->  OpenCV Telea
     external  a cleaned page supplied from elsewhere  ->  composited in
-    keep      left alone on purpose (an SFX under the `keep` policy)
+    keep      left alone on purpose (an SFX under a policy that keeps it)
+    refused   the repair this region needs was not available  ->  nothing is
+              touched and the region says what would make it possible
 
 The last step is the one that makes the whole thing safe. Whatever produced the
 repaired pixels, they are composited back through the mask:
@@ -57,6 +59,22 @@ PROVIDER_INSTRUCTIONS = (
 #: A hosted image model on a full page is slow; a stalled one must not hold a
 #: chapter. Past this the classical cleaners run instead.
 PROVIDER_TIMEOUT = 180.0
+
+#: The sound-effect policies that leave the drawing where it is. `translate` is
+#: the only one that takes it away: `bilingual` keeps the original and adds a
+#: Persian gloss beside it, `annotate` keeps it and records the meaning off the
+#: page. Erasing the artwork for either would delete the very thing they promise
+#: to show, and there would be nothing left for the gloss to sit beside.
+KEEP_POLICIES = frozenset({"keep", "bilingual", "annotate"})
+
+#: Said to the reader when the generative repair a solid patch needs is missing
+#: at the point the region is actually repaired — and written into the region,
+#: not only the run's output, because the run's output scrolls away.
+SOLID_REFUSAL = (
+    "free lettering masked as one solid patch, and the repair it needs did not "
+    "arrive: put this page in the --external folder, use a working --provider, "
+    "or rebuild this page's masks with `mask --free-lettering glyphs`"
+)
 
 
 def _cv2():
@@ -173,6 +191,19 @@ def _from_provider(provider, base, page, root, np, report) -> Any:
     return candidate
 
 
+def mask_mode(page: dict[str, Any], document_mode: str) -> str:
+    """Which free-lettering mask **this page** was built with.
+
+    `mask` records one flag for the whole document, so masking a second page
+    with a different `--free-lettering` setting overwrites the first page's
+    answer and the flag then describes neither of them. A page that carries its
+    own answer is believed over the document's; a page that does not falls back
+    to it — and `clean` writes back what it acted on, so a later run for another
+    page cannot rewrite the history of this one.
+    """
+    return page.get("free_lettering_mask") or document_mode
+
+
 def clean_page(
     doc_path: Path,
     page: dict[str, Any],
@@ -181,12 +212,12 @@ def clean_page(
     external: Path | None = None,
     provider: Any = None,
     report: list[dict[str, Any]] | None = None,
-    solid_free_mask: bool = False,
+    document_mode: str = "glyphs",
 ) -> dict[str, Any]:
     np = _numpy()
     root = ir.doc_dir(doc_path)
     report = report if report is not None else []
-    solid_free = solid_free_mask
+    solid_free = mask_mode(page, document_mode) == "solid"
     base = np.asarray(ir.load_image(root / page["image"])).copy()
 
     supplied = None
@@ -213,15 +244,22 @@ def clean_page(
     provider_page = None
     provider_tried = False
 
-    counts = {"flat": 0, "inpaint": 0, "external": 0, "keep": 0, "skipped": 0}
+    counts = {"flat": 0, "inpaint": 0, "external": 0, "keep": 0, "skipped": 0,
+              "refused": 0}
     for region in page.get("regions", []):
         if region.get("dropped") or not region.get("mask"):
             counts["skipped"] += 1
             continue
-        if region.get("keep") or (
-                region["kind"] == "sfx" and policy in {"keep", "annotate"}):
+        # `erase: yes` first, and deliberately so. It is a reader looking at
+        # this one region and saying *remove this, put nothing back* — a
+        # watermark, a site stamp. The SFX policy is a decision about lettering
+        # that belongs to the artwork, and it has nothing to say about a mark
+        # stamped on top of it; letting the policy win here left the stamp on
+        # the page and the document claiming it had been dealt with.
+        if not region.get("erase") and (region.get("keep") or (
+                region["kind"] == "sfx" and policy in KEEP_POLICIES)):
             # The artwork *is* the sound effect. Erasing it to write the same
-            # thing in Persian is a loss, so these two policies leave it drawn.
+            # thing in Persian is a loss, so these policies leave it drawn.
             region["fill"] = "keep"
             counts["keep"] += 1
             continue
@@ -238,7 +276,12 @@ def clean_page(
         # longer exist, and the page ends up with a blank patch where the
         # lettering was. The mask is the same evidence either way, so nothing
         # is lost by asking early.
-        if region["kind"] == "sfx" and policy not in {"keep", "annotate"}:
+        # Not asked of an erasure. The question is whether Persian can be set
+        # the way the original was drawn, and an erasure is not putting anything
+        # back — so an unreadable geometry was refusing to remove a watermark on
+        # the grounds that it could not tell which way the watermark leaned.
+        if (region["kind"] == "sfx" and policy not in KEEP_POLICIES
+                and not region.get("erase")):
             drawn = lettering.measure(
                 mask, np, origin=region.get("mask_box", (0, 0))[:2])
             if drawn is not None:
@@ -278,20 +321,35 @@ def clean_page(
         # colour and painting it back, better than any model and instant, and
         # the provider takes over only where the deterministic tiers stop being
         # enough — a region needing inpainting, or a solid free-lettering patch.
+        solid_patch = solid_free and not region.get("balloon")
+        repaired = None
         if supplied is not None:
             repaired, strategy, colour = supplied[y:y + h, x:x + w], "external", None
-        elif provider is not None and (strategy == "inpaint" or (
-                solid_free and not region.get("balloon"))):
+        elif provider is not None and (strategy == "inpaint" or solid_patch):
             if not provider_tried:
                 provider_tried = True
                 provider_page = _from_provider(provider, base, page, root, np,
                                                report)
-            if provider_page is None:
-                repaired = _repair(window, mask, strategy, colour, np)
-            else:
+            if provider_page is not None:
                 repaired = provider_page[y:y + h, x:x + w]
                 strategy, colour = "external", None
-        else:
+
+        if repaired is None:
+            # THE SAME SAFETY QUESTION, ASKED WHERE IT IS ANSWERED. The refusal
+            # in `clean_document` is decided on a promise: a folder was named,
+            # or a provider was configured. Both can break after it — the folder
+            # may not contain this page, and a provider can fail, time out, or
+            # answer at the wrong size — and the fallback is the one tier a
+            # solid patch must never reach. It has no unmasked pixel to read
+            # from, so it repairs nothing at all and `inpaint` goes into the
+            # document for it: the source lettering ships under the Persian on a
+            # page every gate now believes was cleaned.
+            if solid_patch:
+                region["fill"] = "keep"
+                if SOLID_REFUSAL not in region.setdefault("review", []):
+                    region["review"].append(SOLID_REFUSAL)
+                counts["refused"] += 1
+                continue
             repaired = _repair(window, mask, strategy, colour, np)
 
         base[y:y + h, x:x + w] = _composite(window, repaired, mask, np)
@@ -305,6 +363,9 @@ def clean_page(
     relative = f"clean/{page['id']}.png"
     ir.save_image(Image.fromarray(base), root / relative)
     page["clean"] = relative
+    # On the page, not in `meta`: what governed this page stays true of this
+    # page whatever the next `mask` run writes for another one.
+    page["free_lettering_mask"] = "solid" if solid_free else "glyphs"
     return counts
 
 
@@ -322,10 +383,21 @@ def clean_document(
     if external_dir is not None and not external_dir.is_dir():
         raise FileNotFoundError(f"--external is not a folder: {external_dir}")
     edit_provider = providers.get("image_edit", provider)
-    if (doc["meta"].get("free_lettering_mask") == "solid"
-            and external_dir is None and edit_provider is None):
+
+    document_mode = doc["meta"].get("free_lettering_mask", "glyphs")
+    scope = [page for page in doc["pages"]
+             if page.get("regions") and (not pages or page["id"] in pages)]
+    # Per page, because the document's flag is whatever the *last* `mask` run
+    # wrote. One page masked solid is enough to refuse, and naming it is what
+    # lets a reader fix that page rather than re-mask the chapter.
+    solid_pages = [page["id"] for page in scope
+                   if mask_mode(page, document_mode) == "solid"]
+    if solid_pages and external_dir is None and edit_provider is None:
+        where = ", ".join(solid_pages[:5])
+        if len(solid_pages) > 5:
+            where += f" and {len(solid_pages) - 5} more"
         raise ValueError(
-            "the masks for this document were built with "
+            f"the masks for {where} were built with "
             "`mask --free-lettering solid`, which covers each piece of free "
             "lettering as a whole patch rather than as letter shapes. That is "
             "for a generative cleaner: painting it flat or inpainting it would "
@@ -336,17 +408,14 @@ def clean_document(
         )
 
     provider_report: list[dict[str, Any]] = []
-    totals = {"flat": 0, "inpaint": 0, "external": 0, "keep": 0, "skipped": 0}
+    totals = {"flat": 0, "inpaint": 0, "external": 0, "keep": 0, "skipped": 0,
+              "refused": 0}
     per_page: list[dict[str, Any]] = []
-    for page in doc["pages"]:
-        if pages and page["id"] not in pages:
-            continue
-        if not page.get("regions"):
-            continue
+    for page in scope:
         counts = clean_page(
             doc_path, page, policy=policy, external=external_dir,
             provider=edit_provider, report=provider_report,
-            solid_free_mask=doc["meta"].get("free_lettering_mask") == "solid",
+            document_mode=document_mode,
         )
         for key, value in counts.items():
             totals[key] += value
@@ -363,12 +432,15 @@ def clean_document(
     ir.save_doc(doc, doc_path)
 
     heavy = [entry["page"] for entry in per_page if entry["inpaint"] > entry["flat"]]
+    refused = [entry["page"] for entry in per_page if entry["refused"]]
     return {
         "document": str(doc_path),
         "totals": totals,
         "pages": per_page,
         "provider": provider,
         "provider_calls": provider_report,
+        "refused_pages": refused,
+        "refused_note": SOLID_REFUSAL if refused else None,
         "inpaint_heavy_pages": heavy,
         "note": (
             "On these pages most regions needed inpainting rather than a flat "

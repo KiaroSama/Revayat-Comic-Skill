@@ -27,6 +27,7 @@ import clean
 import lettering
 import masks
 import pageir as ir
+import providers
 import typeset
 
 
@@ -135,6 +136,40 @@ def test_a_gentle_wobble_is_not_an_arc():
     assert lettering.measure(_arc(3), np)["verdict"] != "curved"
 
 
+def _middle_row(layer):
+    """Where the ink sits in the middle column of a bent strip."""
+    alpha = np.asarray(layer)[..., 3]
+    return float(np.flatnonzero(alpha[:, alpha.shape[1] // 2]).mean())
+
+
+def test_an_arc_and_the_same_arc_mirrored_bend_opposite_ways():
+    """Which way it bends is half the measurement.
+
+    `_curvature` returned an absolute sagitta, so an effect arching up and one
+    sagging down came back as the same positive number — and `_bend`, which has
+    always honoured the sign, bent both of them upwards. Two effects curving
+    against each other were replaced by two curving the same way.
+
+    Measured: +0.1184 and -0.1184 for one arc and its mirror, and the middle of
+    the rendered strip lands at row 4.5 for one and 27.5 for the other.
+    """
+    hill = lettering.measure(_arc(34), np)
+    valley = lettering.measure(_arc(-34), np)
+
+    assert hill["verdict"] == valley["verdict"] == "curved"
+    assert hill["curvature"] > 0 > valley["curvature"], \
+        f"the bend direction was lost: {hill['curvature']}, {valley['curvature']}"
+    assert hill["curvature"] == pytest.approx(-valley["curvature"], abs=0.01)
+
+    strip = np.zeros((40, 160, 4), np.uint8)
+    strip[16:24, :] = 255
+    up = _middle_row(lettering._bend(
+        Image.fromarray(strip, "RGBA"), hill["curvature"], np, Image))
+    down = _middle_row(lettering._bend(
+        Image.fromarray(strip, "RGBA"), valley["curvature"], np, Image))
+    assert up < down, f"both arcs bent the same way ({up} against {down})"
+
+
 def test_lettering_that_tapers_is_measured_as_receding():
     style = lettering.measure(_wedge(), np)
     assert style["verdict"] == "warped"
@@ -173,19 +208,20 @@ def test_the_renderer_refuses_a_box_the_words_cannot_fill():
     assert np.asarray(canvas).min() == 255
 
 
-def _sfx_page(doc_path, *, mask, box, text="\u0628\u0648\u0645"):
+def _sfx_page(doc_path, *, mask, box, text="\u0628\u0648\u0645",
+              policy="translate", **fields):
     """Put one sound effect on the page with a REAL local mask at `box`."""
     doc = ir.load_doc(doc_path)
     root = ir.doc_dir(doc_path)
     page = doc["pages"][0]
-    doc["meta"]["sfx_policy"] = "translate"
+    doc["meta"]["sfx_policy"] = policy
     # Only the effect under test. These assertions measure what changed on the
     # page, and the fixture's other regions get typeset too — they landed inside
     # the window and read as the effect having been drawn in the wrong place.
     region = page["regions"][0]
     page["regions"] = [region]
     region.update(kind="sfx", target_text=text, balloon=None,
-                  bbox=[box[0], box[1], box[2], box[3]])
+                  bbox=[box[0], box[1], box[2], box[3]], **fields)
     relative = f"masks/{page['id']}/{region['id']}.png"
     ir.write_bytes(root / relative,
                    masks._encode_png(Image.fromarray(mask, mode="L")))
@@ -554,4 +590,167 @@ def test_a_round_hand_is_not_put_through_the_nib():
     pays nothing."""
     plain = _nib_extent(0.0)
     assert _nib_extent(lettering.MIN_CONTRAST * 0.9) == plain
+
+
+def test_the_nib_carries_the_ink_into_the_pixels_it_widens_into():
+    """A dilated alpha over transparent black is a black fringe.
+
+    A pixel nothing has been drawn on is `(0, 0, 0, 0)` — transparent, and
+    *black* underneath. Growing the coverage alone hands those pixels a visible
+    alpha while leaving them that colour, so a light outline widened by a broad
+    nib gains a dark rim on the side it grew towards.
+
+    Measured on a real render of `بوووم` at size 92 with a 250-level outline:
+    1313 newly covered pixels at a mean of 13.3, of which 1231 landed on
+    mid-grey artwork DARKER than the un-nibbed render, by up to 128 levels.
+    """
+    body = np.zeros((60, 60, 4), np.uint8)
+    body[20:40, 20:40] = (250, 250, 250, 255)      # a light outline on nothing
+    grown = np.asarray(lettering._nib(
+        Image.fromarray(body, "RGBA"), 0.6, 100, np, Image))
+
+    widened = (grown[..., 3] > 0) & (body[..., 3] == 0)
+    assert widened.any(), "the nib widened nothing, so this proves nothing"
+    assert int(grown[..., :3][widened].min()) >= 200, \
+        "the widened edge is transparent black, not the ink it grew from"
+
+
+# --- what `clean` may and may not do to a drawn effect ------------------------
+# The other end of the same question. `lettering` decides whether Persian can be
+# set the way the original was drawn; `clean` decides whether the original is
+# still there to compare against. Both answers are made on the same evidence —
+# the region's mask and the policy — and they have to agree.
+
+def _solid_free_page(doc_path, *, box=(120, 140, 300, 120), doc_mode="solid",
+                     page_mode=None):
+    """One free-lettering region masked the way `--free-lettering solid` does:
+    the whole patch filled, no letter shapes, and no balloon behind it.
+
+    The box is deliberately long rather than square: a square patch has no long
+    axis, `measure` says `unreliable`, and the region is kept before it ever
+    reaches the repair tiers these tests are about.
+    """
+    page, region = _sfx_page(
+        doc_path, mask=np.full((box[3], box[2]), 255, np.uint8), box=box)
+    doc = ir.load_doc(doc_path)
+    doc["meta"]["free_lettering_mask"] = doc_mode
+    if page_mode is not None:
+        doc["pages"][0]["free_lettering_mask"] = page_mode
+    ir.save_doc(doc, doc_path)
+    return page, region
+
+
+def test_a_missing_external_page_is_not_recorded_as_a_repair(detected, tmp_path):
+    """The guard is satisfied by a PROMISE — `--external` was supplied — and the
+    promise breaks one function later, when that page turns out not to be in the
+    folder. The region then fell through to the classical tier, which on a solid
+    patch has no unmasked pixel to read: nothing is repaired, and `inpaint` is
+    written into the document anyway. The original lettering ships under the
+    Persian and every gate says the page was cleaned."""
+    page, _ = _solid_free_page(detected)
+    root = ir.doc_dir(detected)
+    before = np.asarray(ir.load_image(root / page["image"]))
+    folder = tmp_path / "external-pages"       # real, and without THIS page
+    folder.mkdir()
+
+    report = clean.clean_document(detected, external=folder,
+                                  pages=[page["id"]])
+
+    after_doc = ir.load_doc(detected)
+    region = after_doc["pages"][0]["regions"][0]
+    assert region["fill"] == "keep", "a repair that never happened was recorded"
+    assert region.get("review"), "the reader was never told to act"
+    assert report["totals"]["refused"] == 1
+    after = np.asarray(ir.load_image(root / after_doc["pages"][0]["clean"]))
+    assert np.array_equal(after, before), "the artwork was repainted"
+
+
+def test_a_provider_that_fails_is_not_recorded_as_a_repair(detected, monkeypatch):
+    """The same bypass through the other door. A configured provider satisfies
+    the guard before it has answered; when the answer is the wrong size — or an
+    exception, or nothing — the region falls through to exactly the tier the
+    guard exists to keep a solid patch away from."""
+    page, _ = _solid_free_page(detected)
+    monkeypatch.setitem(providers._REGISTRY["image_edit"], "broken",
+                        lambda: providers.FakeImageEdit(fail="wrong_size"))
+
+    report = clean.clean_document(detected, provider="broken",
+                                  pages=[page["id"]])
+
+    assert report["provider_calls"][0]["outcome"] == "wrong_size"
+    region = ir.load_doc(detected)["pages"][0]["regions"][0]
+    assert region["fill"] == "keep", "a repair that never happened was recorded"
+    assert region.get("review"), "the reader was never told to act"
+    assert report["totals"]["refused"] == 1
+
+
+def test_one_pages_mask_mode_is_not_overwritten_by_the_next_page(detected):
+    """`mask --free-lettering solid --pages p0001` followed by an ordinary
+    `mask --pages p0002` leaves ONE document-level flag, reading `glyphs`. The
+    first page's solid patches are then handed to the built-in cleaners the flag
+    exists to keep them away from, and the record describes neither page."""
+    page, _ = _solid_free_page(detected, doc_mode="glyphs", page_mode="solid")
+
+    with pytest.raises(ValueError, match=page["id"]):
+        clean.clean_document(detected, pages=[page["id"]])
+
+
+def test_the_mask_mode_is_recorded_on_the_page_that_was_cleaned(detected):
+    """So the next run's flag cannot rewrite the history of this one."""
+    page, _ = _sfx_page(detected, mask=_bar(-20), box=(120, 140, 300, 120))
+
+    clean.clean_document(detected, pages=[page["id"]])
+
+    assert ir.load_doc(detected)["pages"][0]["free_lettering_mask"] == "glyphs"
+
+
+@pytest.mark.parametrize("policy, retained", [
+    ("keep", True), ("annotate", True), ("bilingual", True),
+    ("translate", False),
+])
+def test_the_four_policies_decide_whether_the_drawn_effect_survives(
+        detected, policy, retained):
+    """`bilingual` and `annotate` both keep the drawing: one adds a Persian
+    gloss beside the original, the other records the meaning off the page.
+    Erasing the artwork is the one thing neither of them may do, and `bilingual`
+    was doing exactly that — it went down the same path as `translate`, so the
+    effect it promises to keep was gone before anything could be set beside it.
+    """
+    page, _ = _sfx_page(detected, mask=_bar(-20), box=(120, 140, 300, 120),
+                        policy=policy)
+    root = ir.doc_dir(detected)
+    before = np.asarray(ir.load_image(root / page["image"]))
+
+    clean.clean_document(detected, pages=[page["id"]])
+
+    after_doc = ir.load_doc(detected)
+    region = after_doc["pages"][0]["regions"][0]
+    assert (region["fill"] == "keep") is retained, \
+        f"`{policy}` recorded fill={region['fill']!r}"
+    if retained:
+        after = np.asarray(ir.load_image(root / after_doc["pages"][0]["clean"]))
+        assert np.array_equal(after, before), \
+            f"`{policy}` repainted artwork it promises to keep"
+
+
+def test_an_explicit_erase_outranks_a_keep_policy_and_needs_no_geometry(detected):
+    """`erase: yes` is a reader looking at a watermark and saying: remove this,
+    put nothing back. Two things were overruling them. The global SFX policy,
+    which is about lettering that belongs to the artwork and has nothing to say
+    about a site stamp; and the geometry gate, which exists to decide whether
+    Persian can be set the way the original was drawn — a question an erasure
+    never asks, since nothing is going back in its place."""
+    blob = np.zeros((150, 150), np.uint8)
+    blob[40:110, 35:115] = 255                # no long axis: `measure` refuses
+    assert lettering.measure(blob, np)["verdict"] == "unreliable"
+    page, _ = _sfx_page(detected, mask=blob, box=(120, 140, 150, 150),
+                        policy="keep", text="", erase=True)
+
+    report = clean.clean_document(detected, pages=[page["id"]])
+
+    region = ir.load_doc(detected)["pages"][0]["regions"][0]
+    assert region["fill"] not in (None, "none", "keep"), \
+        "the erasure the reader asked for never happened"
+    assert ir.region_state(region, "keep") == "erased"
+    assert report["totals"]["keep"] == 0
 
