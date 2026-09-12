@@ -105,7 +105,7 @@ def tools() -> list[dict[str, Any]]:
     client's tool list is how a model learns what exists, and a single opaque
     tool teaches it nothing. The arguments stay a pass-through list, because the
     CLI's own `--help` is the authority on them and a hand-copied JSON schema
-    for fourteen stages would be wrong within a month.
+    for every stage would be wrong within a month.
     """
     listed = [{
         "name": f"revayat_{DOCTOR}",

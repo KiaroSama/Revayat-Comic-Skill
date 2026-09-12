@@ -21,9 +21,9 @@ takes, with stdout captured and parsed back into JSON:
 There is no path through the server that can do something the CLI cannot, and no
 stage changed in order to be reachable. The arguments stay a pass-through list
 on purpose: `--help` on each stage is the authority on them, and a hand-copied
-JSON schema for fourteen stages would be wrong within a month.
+JSON schema for every stage would be wrong within a month.
 
-Fifteen tools — `revayat_doctor` plus one per stage. Their descriptions are read
+One tool per stage, plus `revayat_doctor`. Their descriptions are read
 from each stage module's own docstring, so a tool description cannot drift from
 what the stage does.
 
