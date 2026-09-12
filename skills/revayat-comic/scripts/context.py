@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Any
 
 import pageir as ir
+import worksheet
 
 #: Characters of dialogue the package may carry. Roughly two pages of a talky
 #: chapter, which is where consistency actually lives; past that the marginal
@@ -148,8 +149,33 @@ def _next(doc: dict[str, Any], page_id: str) -> list[dict[str, str]]:
     return out
 
 
+#: A hard limit per informational section, so a chapter with a novel in its
+#: notes cannot quietly become the whole package. Anything cut is named in
+#: `budget.overflowed`. There is no entry for `constraints`: see `build`.
+SECTION_LIMITS = {
+    "scene": 1200,
+    "style_notes": 1200,
+    "series_notes": 1200,
+    "speakers": 2000,
+}
+
+
+def _fit(value, limit: int, name: str, over: list[str]):
+    """One informational section, cut to its own limit and named if cut."""
+    if len(ir.dumps(value)) <= limit:
+        return value
+    over.append(name)
+    if isinstance(value, str):
+        return value[:limit]
+    kept = list(value)
+    while kept and len(ir.dumps(kept)) > limit:
+        kept.pop()
+    return kept
+
+
 def unmerged_before(doc_path: Path, doc: dict[str, Any],
-                    page_id: str) -> list[str]:
+                    page_id: str, *,
+                    worksheets: str | Path | None = None) -> list[str]:
     """Earlier pages whose reply is written but not merged into the document.
 
     This is the whole failure mode of the workflow, made checkable. A page's
@@ -160,18 +186,33 @@ def unmerged_before(doc_path: Path, doc: dict[str, Any],
 
     Returns the offending page ids, nearest first. Empty is the good case.
     """
-    folder = doc_path.parent / "worksheets"
+    folder = Path(worksheets) if worksheets else doc_path.parent / "worksheets"
     if not folder.is_dir():
         return []
     behind: list[str] = []
     for page in doc["pages"][:_index(doc, page_id)]:
-        if not (folder / f"{page['id']}.done.txt").is_file():
+        reply = folder / f"{page['id']}.done.txt"
+        if not reply.is_file():
             continue
-        translated = any(
-            (region.get("target_text") or "").strip()
-            for region in page.get("regions", []) if not region.get("dropped")
-        )
-        if not translated:
+        recorded = page.get("worksheet_digest")
+        if recorded is None:
+            # Merged by a build that did not record what it consumed.
+            # Fall back to the old question rather than declaring every
+            # page of an existing chapter unmerged.
+            translated = any(
+                (region.get("target_text") or "").strip()
+                for region in page.get("regions", [])
+                if not region.get("dropped")
+            )
+            if not translated:
+                behind.append(page["id"])
+            continue
+        # Three failures, one test. The reply was never merged; or it was
+        # merged and then edited, so the page holds last time's Persian;
+        # or it was merged and only partly applied. "Does this page hold
+        # any Persian yet" answered yes to the last two.
+        if (recorded != worksheet.reply_digest(ir.read_text(reply))
+                or not page.get("worksheet_clean", False)):
             behind.append(page["id"])
     return list(reversed(behind))
 
@@ -200,15 +241,39 @@ def build(doc: dict[str, Any], page_id: str, *,
     }
 
     previous, truncated = _previous(doc, page_id, budget)
+    over: list[str] = []
+    # `constraints` is deliberately absent from this: a locked term that
+    # silently vanishes to fit is a name the chapter then spells two ways.
+    # It is reported as over budget instead, and sent whole.
+    scene = _fit(meta.get("scene") or "", SECTION_LIMITS["scene"], "scene", over)
+    style_notes = _fit(meta.get("style_notes") or [],
+                       SECTION_LIMITS["style_notes"], "style_notes", over)
+    series_notes = _fit(meta.get("series_notes") or [],
+                        SECTION_LIMITS["series_notes"], "series_notes", over)
+    speakers = _fit(_speakers(doc, page_id), SECTION_LIMITS["speakers"],
+                    "speakers", over)
     spent = sum(len(row["fa"]) + len(row["src"]) for row in previous)
 
-    return {
+    sizes = {
+        "speakers": len(ir.dumps(speakers)),
+        "translation_memory": len(ir.dumps(previous)),
+        "scene": len(scene),
+        "style_notes": len(ir.dumps(style_notes)),
+        "series_notes": len(ir.dumps(series_notes)),
+        "glossary": len(ir.dumps(glossary)),
+    }
+    constraints_size = sizes["glossary"]
+
+    package = {
         "page": page_id,
         "constraints": {
             "glossary": glossary,
             "policy": {
                 "sfx": meta.get("sfx_policy", "keep"),
-                "direction": meta.get("direction", "rtl"),
+                # `reading_direction` is the key the importer writes.
+                # `direction` is never set, so this always said "rtl" and
+                # a left-to-right book was described backwards.
+                "direction": meta.get("reading_direction", "rtl"),
                 "source_language": meta.get("source_language", "ja"),
             },
             "rules": [
@@ -219,7 +284,7 @@ def build(doc: dict[str, Any], page_id: str, *,
             ],
         },
         "context": {
-            "speakers": _speakers(doc, page_id),
+            "speakers": speakers,
             # The chapter's own recent dialogue *is* the translation memory —
             # source beside target, nearest first. Not a summary of it.
             "translation_memory": previous,
@@ -227,17 +292,30 @@ def build(doc: dict[str, Any], page_id: str, *,
             # Written by a person, absent when nobody wrote one. An invented
             # scene description is a confident guess about the story, handed to
             # a translator as if it were established.
-            "scene": meta.get("scene") or "",
-            "style_notes": meta.get("style_notes") or [],
-            "series_notes": meta.get("series_notes") or [],
+            "scene": scene,
+            "style_notes": style_notes,
+            "series_notes": series_notes,
         },
         "budget": {
             "characters": budget,
             "characters_used": spent,
             "lines": len(previous),
             "truncated": truncated,
+            "section_limits": dict(SECTION_LIMITS),
+            "sections": sizes,
+            "overflowed": over,
+            "constraints_characters": constraints_size,
+            "constraints_over_budget": constraints_size > budget,
+            # Measured with this field still holding a placeholder, so it is
+            # a few characters short of the final string. It is here because
+            # `characters_used` counted the dialogue alone while the glossary
+            # and the notes went in beside it unbounded — an advertised 3000
+            # describing a package of over 200,000.
+            "package_characters": 0,
         },
     }
+    package["budget"]["package_characters"] = len(ir.dumps(package))
+    return package
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -247,6 +325,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--doc", required=True)
     parser.add_argument("--page", required=True)
     parser.add_argument("--budget", type=int, default=CONTEXT_BUDGET)
+    parser.add_argument("--worksheets", default="",
+                        help="where the finished worksheets are, when `worksheet "
+                             "build --out` put them somewhere other than "
+                             "work/worksheets")
     parser.add_argument("--allow-unmerged", action="store_true",
                         help="build the context even though earlier pages are "
                              "translated but not merged; they will be missing "
@@ -261,7 +343,8 @@ def main(argv: list[str] | None = None) -> int:
     # the JSON comes out well-formed and missing the pages that mattered. Refuse
     # by default; `--allow-unmerged` is there for the deliberate case, and says
     # what it costs.
-    behind = unmerged_before(doc_path, doc, args.page)
+    behind = unmerged_before(doc_path, doc, args.page,
+                             worksheets=args.worksheets or None)
     if behind and not args.allow_unmerged:
         raise SystemExit(
             f"{', '.join(behind)} have been translated but not merged, so this "
