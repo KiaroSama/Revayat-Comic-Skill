@@ -15,6 +15,8 @@ would derail the conversation.
 from __future__ import annotations
 
 import json
+import socket
+import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -154,6 +156,78 @@ def test_an_unknown_tool_says_what_there_is():
     assert server.DOCTOR in body["expected"]
 
 
+def test_a_stage_that_exits_with_a_message_is_an_answer_not_a_crash(detected):
+    """`context` refuses to build over an unmerged page by raising
+    `SystemExit(<message>)`, which is the shape `sys.exit` documents and a
+    first-party path this project takes. `int(exit_code.code)` then raised
+    `ValueError` *inside* the `except SystemExit` handler, so it escaped `run`
+    and took the loop down with it. The plain CLI handles the same input."""
+    worksheets = Path(detected).parent / "worksheets"
+    worksheets.mkdir(exist_ok=True)
+    (worksheets / "p0001.done.txt").write_text("a reply nobody merged\n",
+                                               encoding="utf-8")
+    second = ir.load_doc(detected)["pages"][1]["id"]
+
+    replies = _talk(_ask(1, "tools/call", name="revayat_context",
+                         arguments={"args": ["--doc", str(detected),
+                                             "--page", second]}),
+                    _ask(2, "ping"))
+    assert [r["id"] for r in replies] == [1, 2], "the loop did not survive it"
+    body = json.loads(replies[0]["result"]["content"][0]["text"])
+    assert body["ok"] is False and body["exit"] != 0
+    assert "not merged" in body["error"], "the reason was thrown away"
+
+
+def test_a_bad_flag_comes_back_with_the_reason_argparse_gave(capsys):
+    """argparse explains itself on *stderr*, which `run` never captured — so
+    the client was told a stage exited 2 and nothing else, while the sentence
+    that would have told it which flag was wrong went to the terminal."""
+    outcome = server.run("revayat_detect", ["--doc", "nowhere.json",
+                                            "--not-a-flag"])
+    assert outcome["ok"] is False and outcome["exit"] == 2
+    assert "--not-a-flag" in outcome["error"]
+    assert capsys.readouterr().err == "", "argparse's complaint reached stderr"
+
+
+# --- shapes that are not what they claim to be -------------------------------
+# Each of these came in over a real transport and either killed the loop or
+# dropped the connection, because the shape was used before it was checked.
+
+def test_a_message_that_is_not_an_object_cannot_end_the_conversation():
+    """A top-level array or string is valid JSON and not a JSON-RPC message.
+    `message.get` on a list is an `AttributeError` out of `serve_mcp`."""
+    import io
+
+    out = io.StringIO()
+    server.serve_mcp(io.StringIO('[1, 2, 3]\n"hello"\n'
+                                 + json.dumps(_ask(3, "ping")) + "\n"), out)
+    replies = [json.loads(line) for line in out.getvalue().splitlines()]
+    assert [r["error"]["code"] for r in replies[:2]] == [-32600, -32600]
+    assert replies[2]["result"] == {}
+
+
+@pytest.mark.parametrize("params", [[], ["--doc", "x"], "arguments", 7])
+def test_params_that_are_not_an_object_are_refused(params):
+    reply = server.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                           "params": params})
+    assert reply["error"]["code"] == -32602
+
+
+def test_arguments_that_are_not_an_object_are_refused():
+    reply = server.handle(_ask(1, "tools/call", name="revayat_detect",
+                               arguments=["--doc", "work/comic.json"]))
+    assert reply["error"]["code"] == -32602
+
+
+def test_args_given_as_a_string_are_refused_rather_than_spelled_out():
+    """`[str(a) for a in args]` turns `"--doc x"` into fourteen arguments of
+    one letter each, and the stage is handed nonsense it cannot explain."""
+    outcome = server.run("revayat_detect", "--doc work/comic.json")
+    assert outcome["ok"] is False
+    assert "list" in outcome["error"] and "--doc" not in outcome.get("report", "")
+    assert "exit" not in outcome, "the stage ran on a spelled-out string"
+
+
 def test_an_unknown_method_and_a_broken_line_are_both_survivable():
     import io
 
@@ -265,6 +339,94 @@ def test_http_refuses_to_bind_off_loopback():
     password."""
     with pytest.raises(ValueError, match="loopback"):
         server.serve_http(port=0, host="0.0.0.0")
+
+
+def test_an_http_body_that_is_not_an_object_is_a_bounded_error(http_server):
+    """`body.get("args")` on a list raises inside the handler thread, which
+    drops the connection with no answer at all."""
+    base, token = http_server
+    assert _http(base, "/tools/revayat_detect", ["--doc", "x"],
+                 token=token)[0] == 400
+    assert _http(base, "/tools/revayat_detect", "a string", token=token)[0] == 400
+    assert _http(base, "/tools/revayat_detect", 7, token=token)[0] == 400
+    assert _http(base, "/tools", token=token)[0] == 200, "the server stopped"
+
+
+# --- what a caller may send, and for how long --------------------------------
+
+def _raw_post(port: int, token: str, declared: int, body: bytes = b"",
+              read_timeout: float = 3.0) -> str:
+    """A POST written by hand, so the declared length and the bytes actually
+    sent can disagree — which is the whole point of the two tests below."""
+    head = (f"POST /tools/revayat_nope HTTP/1.1\r\n"
+            f"Host: 127.0.0.1:{port}\r\n"
+            f"X-Revayat-Token: {token}\r\n"
+            f"Content-Type: application/json\r\n"
+            f"Content-Length: {declared}\r\n\r\n").encode("ascii")
+    connection = socket.create_connection(("127.0.0.1", port),
+                                          timeout=read_timeout)
+    try:
+        connection.sendall(head + body)
+        return connection.recv(4096).decode("utf-8", "replace")
+    finally:
+        connection.close()
+
+
+def test_an_oversized_body_is_refused_before_it_is_read(http_server):
+    """A stage's arguments are a few hundred bytes. 64 MiB of them was read in
+    full, into memory, and took 28 seconds to say no to."""
+    base, token = http_server
+    port = int(base.rsplit(":", 1)[1])
+    answer = _raw_post(port, token, declared=100 * 1024 * 1024,
+                       body=b'{"args":[]}')
+    assert "413" in answer.splitlines()[0], answer.splitlines()[:1]
+
+
+def test_a_body_that_never_arrives_does_not_hold_a_handler(monkeypatch):
+    """A declared length and no bytes behind it blocked a handler thread on a
+    read with no deadline, for as long as the caller cared to hold it open."""
+    monkeypatch.setattr(server, "READ_TIMEOUT", 0.5)
+    httpd, token = server.serve_http(port=0)
+    try:
+        port = httpd.server_address[1]
+        started = time.monotonic()
+        answer = _raw_post(port, token, declared=64, body=b"", read_timeout=5.0)
+        elapsed = time.monotonic() - started
+        assert elapsed < 3.0, f"the handler waited {elapsed:.1f}s for a body"
+        assert "200" not in answer.splitlines()[:1]
+        assert _http(f"http://127.0.0.1:{port}", "/tools", token=token)[0] == 200
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_the_host_flag_exists_and_still_refuses_off_loopback():
+    """`references/serving.md` tells a reader to use `--host`; argparse had
+    never heard of it, so the documented flag was an error."""
+    with pytest.raises(ValueError, match="loopback"):
+        server.main(["http", "--host", "0.0.0.0", "--port", "0"])
+
+
+def test_the_ipv6_loopback_address_actually_binds():
+    """`::1` sat in the allow-list while the server was `AF_INET`, so the one
+    caller who took that list at its word got `gaierror` instead of a server."""
+    probe = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+    with probe:
+        try:
+            probe.bind(("::1", 0))
+        except OSError as error:
+            pytest.skip(f"no IPv6 loopback on this machine: {error}")
+
+    said: dict[str, str] = {}
+    httpd, token = server.serve_http(port=0, host="::1", announce=said.update)
+    try:
+        port = httpd.server_address[1]
+        assert said["url"] == f"http://[::1]:{port}", "an unbracketed IPv6 URL"
+        status, body = _http(f"http://[::1]:{port}", "/tools", token=token)
+        assert status == 200 and body["tools"]
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
 
 
 def test_the_document_is_untouched_by_being_reachable(detected):

@@ -41,8 +41,10 @@ guarantee without a network, an API key or a credential of any kind.
 from __future__ import annotations
 
 import inspect
+import math
+import numbers
+import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as _Timeout
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol, runtime_checkable
 
@@ -50,6 +52,15 @@ from typing import Any, Callable, Protocol, runtime_checkable
 #: Generous, because a hosted image model on a large page is genuinely slow, and
 #: bounded, because a stage that hangs is worse than a stage that falls back.
 DEFAULT_TIMEOUT = 120.0
+
+#: How many workers a run may have abandoned to timeouts at once. Not a
+#: concurrency limit — a healthy call returns its permit the moment it does —
+#: but a ceiling on the pile. Without one, a stage whose provider has stopped
+#: answering started a fresh thread per region and kept every one of them: 25
+#: sequential timeouts, 25 live workers, and nothing anywhere saying stop.
+MAX_OUTSTANDING_CALLS = 16
+
+_OUTSTANDING = threading.BoundedSemaphore(MAX_OUTSTANDING_CALLS)
 
 #: Every role a provider can fill. The names are the ones the audits asked for.
 ROLES = ("vision", "ocr", "translation", "image_edit", "visual_qa")
@@ -186,7 +197,18 @@ def get(role: str, name: str | None):
         raise ValueError(
             f"no {role} provider named {name!r}. Available: {known}"
         ) from None
-    return factory()
+    try:
+        return factory()
+    except Exception as error:  # noqa: BLE001 - a factory may raise anything
+        # A provider that opens a client or reads a key fails here, and a
+        # missing key is the ordinary case. Raised as it came, it left a
+        # traceback on the CLI and took the MCP loop down with it; as a
+        # `ValueError` it is the same refusal an unknown name already is, and
+        # every caller of a stage already turns that into a result.
+        raise ValueError(
+            f"the {role} provider {name!r} could not be built: "
+            f"{type(error).__name__}: {error}"
+        ) from error
 
 
 def wants(provider, role: str, keyword: str) -> bool:
@@ -217,15 +239,35 @@ def wants(provider, role: str, keyword: str) -> bool:
                for p in parameters.values())
 
 
+def _not_a_confidence(value: Any) -> str:
+    """Why this is not a confidence, or ``""`` if it is one.
+
+    A provider's second tuple element is a number between 0 and 1, and half a
+    check is worse than none: the floor in `apply` is a comparison, so a string
+    raised `TypeError` there, and `NaN < floor` is *False* — a NaN cleared every
+    floor, was applied, and serialised into `comic.json` as a bare `NaN` that no
+    standard JSON parser will read back. That is a corrupted chapter produced by
+    an adapter returning the wrong type.
+    """
+    if isinstance(value, bool) or not isinstance(value, numbers.Real):
+        return "is not a number"
+    if not math.isfinite(value):
+        return "is not finite"
+    if not 0.0 <= value <= 1.0:
+        return "is outside [0, 1]"
+    return ""
+
+
 def call(provider, role: str, *args, timeout: float = DEFAULT_TIMEOUT,
          name: str | None = None, **kwargs) -> Result:
     """Run one provider call and turn every possible outcome into a `Result`.
 
     The timeout is enforced by waiting on a worker thread. Python cannot kill a
     thread, so a hung provider's thread may outlive the call — what is
-    guaranteed is that its answer is never used and the stage is never blocked
-    past `timeout`. That is the honest bound, and it is the reason a provider
-    should be given a network timeout of its own as well.
+    guaranteed is that its answer is never used, the stage is never blocked past
+    `timeout`, the *process* is never held open by it, and no more than
+    `MAX_OUTSTANDING_CALLS` of them can pile up. That is the honest bound, and
+    it is the reason a provider should be given a network timeout of its own.
     """
     label = name or getattr(provider, "name", type(provider).__name__)
     if provider is None:
@@ -238,32 +280,53 @@ def call(provider, role: str, *args, timeout: float = DEFAULT_TIMEOUT,
                       detail=f"{label} has no {_METHODS[role]}() and cannot fill "
                              f"the {role} role")
 
-    started = time.monotonic()
-    # NOT `with ThreadPoolExecutor(...)`. Its __exit__ calls shutdown(wait=True)
-    # and blocks until the worker returns, so a hung provider stalls the stage
-    # for its full run time and the timeout bounds nothing at all. Caught by
-    # `test_a_provider_that_hangs_is_bounded`, which measured 30s against a
-    # 0.25s limit.
-    pool = ThreadPoolExecutor(max_workers=1)
-    try:
-        value = pool.submit(method, *args, **kwargs).result(timeout=timeout)
-    except _Timeout:
-        pool.shutdown(wait=False)
-        return Result(False, "timeout", label, role,
-                      detail=f"no answer within {timeout:g}s",
-                      elapsed=time.monotonic() - started)
-    except Exception as error:  # noqa: BLE001 - a provider may raise anything
-        pool.shutdown(wait=False)
+    if not _OUTSTANDING.acquire(blocking=False):
         return Result(False, "error", label, role,
-                      detail=f"{type(error).__name__}: {error}",
-                      elapsed=time.monotonic() - started)
-    else:
-        pool.shutdown(wait=False)
+                      detail=f"{MAX_OUTSTANDING_CALLS} provider calls are still "
+                             f"running from earlier timeouts, so this one was "
+                             f"not started")
 
+    # A plain daemon thread, NOT a `ThreadPoolExecutor`. Its workers are not
+    # daemons and `shutdown(wait=False)` does not detach a running one, so the
+    # interpreter joined it at exit: a call that timed out in 0.58s against an
+    # 8s provider then held the process open for another 7.5 seconds. A daemon
+    # thread is abandoned when the process is done with it, and the semaphore
+    # above is what keeps the abandoned ones from piling up.
+    outcome: dict[str, Any] = {}
+
+    def _work() -> None:
+        try:
+            outcome["value"] = method(*args, **kwargs)
+        except BaseException as error:  # noqa: BLE001 - anything at all
+            outcome["error"] = error
+        finally:
+            _OUTSTANDING.release()
+
+    started = time.monotonic()
+    worker = threading.Thread(target=_work, name=f"provider-{label}",
+                              daemon=True)
+    worker.start()
+    worker.join(timeout)
     elapsed = time.monotonic() - started
+
+    if worker.is_alive():
+        return Result(False, "timeout", label, role,
+                      detail=f"no answer within {timeout:g}s", elapsed=elapsed)
+    if "error" in outcome:
+        error = outcome["error"]
+        return Result(False, "error", label, role,
+                      detail=f"{type(error).__name__}: {error}", elapsed=elapsed)
+
+    value = outcome["value"]
     confidence = None
     if isinstance(value, tuple) and len(value) == 2:
         value, confidence = value
+        wrong = _not_a_confidence(confidence)
+        if wrong:
+            return Result(False, "error", label, role,
+                          detail=f"{label} returned a confidence of "
+                                 f"{confidence!r}, which {wrong}",
+                          elapsed=elapsed)
     if value is None:
         return Result(False, "refused", label, role,
                       detail="the provider declined to answer",
@@ -323,24 +386,32 @@ def apply(region: dict[str, Any], field_name: str, result: Result, *,
         text = text.strip()
 
     existing = (region.get(field_name) or "").strip()
+    locked = bool(region.get("locked"))
 
-    # **A provider fills a hole; it never replaces content.** That single rule
-    # covers locking, resume and disagreement at once. A value already in the
-    # field came from somewhere — a person, the reading model, or an earlier
-    # provider run — and a second opinion does not get to overwrite any of
-    # those. It gets recorded so somebody can compare.
+    # **A provider fills a hole; it never replaces content, and a locked field
+    # is not a hole.** That single rule covers locking, resume and disagreement
+    # at once. A value already in the field came from somewhere — a person, the
+    # reading model, or an earlier provider run — and a second opinion does not
+    # get to overwrite any of those. It gets recorded so somebody can compare.
     #
     # Without this, rerunning the stage silently replaced its own previous
     # answer, which is the opposite of resumable: two runs of the same command
     # could leave two different documents.
-    if existing:
-        outcome = "locked" if region.get("locked") else "unchanged"
+    #
+    # `locked` is asked here rather than inside the branch below, because a
+    # field a person locked while it was *empty* — an unreadable scribble, a
+    # balloon that is silent — is a decision too, and consulting `locked` only
+    # once there was content to protect made that decision indistinguishable
+    # from one nobody had reached yet. The provider filled it.
+    if existing or locked:
+        outcome = "locked" if locked else "unchanged"
         if text and text != existing:
             provenance.append({**result.as_provenance(),
                                "outcome": "disagreed", "read": text})
-            held = "locked" if region.get("locked") else "existing"
+            held = "locked" if locked else "existing"
+            kept = repr(existing) if existing else "empty"
             note = (f"{result.provider} read this as {text!r}; the {held} "
-                    f"value {existing!r} was kept")
+                    f"value {kept} was kept")
             if note not in region.get("review", []):
                 region.setdefault("review", []).append(note)
             return "needs_review"

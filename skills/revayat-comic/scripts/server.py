@@ -36,6 +36,7 @@ import importlib
 import io
 import json
 import secrets
+import socket
 import sys
 import threading
 from pathlib import Path
@@ -79,6 +80,18 @@ DOCTOR = "doctor"
 #: and nothing raises. A wrong answer that parses is the worst shape a
 #: transport can fail in, so stage runs are serialised here.
 _STDOUT_LOCK = threading.Lock()
+
+#: The most an HTTP request body may be. A stage's arguments are a few hundred
+#: bytes; 64 MiB of them was read into memory in full and took 28 seconds to
+#: refuse, which is a denial of service written as politeness.
+MAX_BODY_BYTES = 1 << 20
+
+#: Seconds an HTTP connection may sit without progress. A declared
+#: `Content-Length` with nothing behind it held a handler thread on a read with
+#: no deadline at all. `socketserver` puts this on the socket and
+#: `BaseHTTPRequestHandler` already turns the timeout into a closed connection,
+#: so this constant is the whole of that fix.
+READ_TIMEOUT = 30.0
 
 
 def _describe(stage: str) -> str:
@@ -134,20 +147,40 @@ def tools() -> list[dict[str, Any]]:
     return listed
 
 
+def _exit_status(code: Any) -> tuple[int, str]:
+    """What a stage's exit means, whatever shape it arrives in.
+
+    This is `sys.exit`'s own convention, which `int(code)` did not implement:
+    `None` is success, an integer is the code, and anything else is a *message*
+    — printed to stderr, with a code of 1. `context` raises
+    `SystemExit(<a paragraph>)` on a first-party path, and `int()` on that
+    paragraph raised `ValueError` *inside* the `except SystemExit` handler,
+    which escaped `run` and took the MCP loop down with it.
+    """
+    if code is None:
+        return 0, ""
+    if isinstance(code, int):
+        return int(code), ""
+    return 1, str(code)
+
+
 def run(name: str, args: list[str] | None = None) -> dict[str, Any]:
     """Call one stage and return what it printed, as data.
 
     Stdout is captured for two reasons at once: it is how a stage returns its
     report, and on the stdio transport it is also the JSON-RPC channel — a stage
-    printing into it would corrupt the stream mid-conversation.
+    printing into it would corrupt the stream mid-conversation. Stderr is
+    captured with it, because that is where a stage explains itself: a client
+    told only that `detect` exited 2 cannot act on it, and argparse's sentence
+    naming the bad flag was going to the terminal nobody is reading.
 
     Failure is a value here, the way it is everywhere else in this project. A
-    missing dependency, a bad path or a stage that exits non-zero all come back
-    as a result with `ok: false` and the reason, so a client is never handed a
-    traceback it cannot act on.
+    missing dependency, a bad path, a bad argument shape or a stage that exits
+    — with a code or with a message — all come back as a result with
+    `ok: false` and the reason, so a client is never handed a traceback it
+    cannot act on.
     """
     stage = name[len("revayat_"):] if name.startswith("revayat_") else name
-    args = [str(a) for a in (args or [])]
 
     if stage == DOCTOR:
         return _doctor()
@@ -156,16 +189,32 @@ def run(name: str, args: list[str] | None = None) -> dict[str, Any]:
                 "error": f"unknown stage {stage!r}",
                 "expected": [DOCTOR, *STAGES]}
 
+    # A string is iterable, so `[str(a) for a in args]` spelled `"--doc x"` out
+    # into one argument per letter and handed the stage nonsense that argparse
+    # could only describe by quoting it back. The shape is the caller's
+    # mistake; saying so costs nothing and running the stage costs a page.
+    if args is None:
+        args = []
+    if isinstance(args, str) or not isinstance(args, (list, tuple)):
+        return {"ok": False, "stage": stage,
+                "error": f"args must be a list of strings, not "
+                         f"{type(args).__name__} — "
+                         f'e.g. ["--doc", "work/comic.json"]'}
+    args = [str(a) for a in args]
+
     module = importlib.import_module(stage_module(stage))
+    reason = ""
     with _STDOUT_LOCK:
-        captured = io.StringIO()
+        captured, complaint = io.StringIO(), io.StringIO()
         try:
-            with contextlib.redirect_stdout(captured):
-                code = int(module.main(args) or 0)
-        except SystemExit as exit_code:
-            # argparse exits on a bad flag rather than raising. That is a normal
-            # answer over a transport, not a reason to take the server down.
-            code = int(exit_code.code or 0)
+            with contextlib.redirect_stdout(captured), \
+                    contextlib.redirect_stderr(complaint):
+                code, reason = _exit_status(module.main(args))
+        except SystemExit as raised:
+            # argparse exits on a bad flag rather than raising, and a stage may
+            # exit with a whole paragraph instead of a number. Both are normal
+            # answers over a transport, not a reason to take the server down.
+            code, reason = _exit_status(raised.code)
         except ir.MissingDependency as error:
             return {"ok": False, "stage": stage, "error": str(error),
                     "kind": "missing-dependency"}
@@ -174,11 +223,15 @@ def run(name: str, args: list[str] | None = None) -> dict[str, Any]:
                     "error": f"{type(error).__name__}: {error}"}
 
         text = captured.getvalue().strip()
+        reason = reason or complaint.getvalue().strip()
     try:
         report = json.loads(text) if text else None
     except json.JSONDecodeError:
         report = {"output": text}
-    return {"ok": code == 0, "stage": stage, "exit": code, "report": report}
+    outcome = {"ok": code == 0, "stage": stage, "exit": code, "report": report}
+    if code != 0 and reason:
+        outcome["error"] = reason
+    return outcome
 
 
 def _doctor() -> dict[str, Any]:
@@ -226,13 +279,30 @@ def handle(message: dict[str, Any]) -> dict[str, Any] | None:
     `None` means the message was a notification — it has no `id` and the
     protocol forbids answering it. Getting that wrong is the usual reason a
     client hangs at startup waiting for a handshake that already finished.
+
+    Every shape is checked before it is used. `[1, 2]` and `"hello"` are valid
+    JSON and are not messages; `params` and `arguments` are objects or they are
+    nothing. Each of those reached this function as written and left it as an
+    `AttributeError`, which on the stdio transport ends the conversation.
     """
+    if not isinstance(message, dict):
+        return _error(None, -32600,
+                      f"a JSON-RPC message is an object, not a "
+                      f"{type(message).__name__}")
+
     method = message.get("method")
     request_id = message.get("id")
-    params = message.get("params") or {}
+    params = message.get("params")
+    if params is None:
+        params = {}
 
     if request_id is None:
         return None
+
+    if not isinstance(params, dict):
+        return _error(request_id, -32602,
+                      f"params must be an object, not a "
+                      f"{type(params).__name__}")
 
     if method == "initialize":
         return _result(request_id, {
@@ -245,8 +315,14 @@ def handle(message: dict[str, Any]) -> dict[str, Any] | None:
     if method == "tools/list":
         return _result(request_id, {"tools": tools()})
     if method == "tools/call":
-        name = params.get("name") or ""
-        outcome = run(name, (params.get("arguments") or {}).get("args"))
+        arguments = params.get("arguments")
+        if arguments is None:
+            arguments = {}
+        if not isinstance(arguments, dict):
+            return _error(request_id, -32602,
+                          f"arguments must be an object, not a "
+                          f"{type(arguments).__name__}")
+        outcome = run(str(params.get("name") or ""), arguments.get("args"))
         return _result(request_id, {
             "content": [{"type": "text", "text": ir.dumps(outcome)}],
             "isError": not outcome.get("ok", False),
@@ -285,12 +361,21 @@ def _handler_class(token: str):
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
         server_version = f"{SERVER_NAME}/{ir.TOOL_VERSION}"
+        #: `socketserver` puts this on the socket, and the read of a body that
+        #: never arrives then raises instead of waiting for ever. Read here, at
+        #: class creation, so a caller can set the module constant first.
+        timeout = READ_TIMEOUT
 
         def _send(self, status: int, payload: dict[str, Any]) -> None:
             body = ir.dumps(payload).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
+            if self.close_connection:
+                # Said out loud when we are refusing a body we did not read:
+                # the bytes behind it would otherwise be parsed as the next
+                # request on a connection this server keeps alive.
+                self.send_header("Connection", "close")
             self.end_headers()
             self.wfile.write(body)
 
@@ -314,12 +399,40 @@ def _handler_class(token: str):
             if not self.path.startswith("/tools/"):
                 return self._send(404, {"ok": False,
                                         "error": "POST /tools/<name>"})
-            length = int(self.headers.get("Content-Length") or 0)
-            raw = self.rfile.read(length).decode("utf-8") if length else ""
+            declared = self.headers.get("Content-Length") or "0"
+            try:
+                length = int(declared)
+            except ValueError:
+                length = -1
+            if not 0 <= length <= MAX_BODY_BYTES:
+                # Refused before a single byte is read, because reading it is
+                # the whole cost: 64 MiB arrived, in memory, over 28 seconds.
+                self.close_connection = True
+                return self._send(413, {
+                    "ok": False,
+                    "error": f"a request body may be at most "
+                             f"{MAX_BODY_BYTES} bytes; this one declared "
+                             f"{declared!r}"})
+            # A read that stalls raises `TimeoutError` on the socket deadline
+            # above, and `BaseHTTPRequestHandler` discards the connection.
+            try:
+                raw = self.rfile.read(length).decode("utf-8") if length else ""
+            except UnicodeDecodeError:
+                return self._send(400, {"ok": False,
+                                        "error": "the body must be UTF-8"})
             try:
                 body = json.loads(raw) if raw else {}
             except json.JSONDecodeError:
                 return self._send(400, {"ok": False, "error": "invalid JSON"})
+            if not isinstance(body, dict):
+                # `body.get("args")` on a list raises inside the handler
+                # thread, and the caller is told nothing at all: the connection
+                # simply drops.
+                return self._send(400, {
+                    "ok": False,
+                    "error": f'the body must be a JSON object, not a '
+                             f'{type(body).__name__} — e.g. '
+                             f'{{"args": ["--doc", "work/comic.json"]}}'})
 
             outcome = run(self.path[len("/tools/"):], body.get("args"))
             self._send(200 if outcome.get("ok") else 400, outcome)
@@ -329,6 +442,11 @@ def _handler_class(token: str):
             request and says nothing a stage report does not."""
 
     return Handler
+
+
+def _authority(host: str, port: int) -> str:
+    """`host:port`, with the brackets a URL needs around an IPv6 address."""
+    return f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
 
 
 def serve_http(port: int = 8765, token: str | None = None,
@@ -347,11 +465,19 @@ def serve_http(port: int = 8765, token: str | None = None,
             f"write files, and it is only safe on loopback"
         )
     token = token or secrets.token_urlsafe(24)
-    httpd = ThreadingHTTPServer((host, port), _handler_class(token))
+
+    class Loopback(ThreadingHTTPServer):
+        # `::1` was in the list above while the family stayed `AF_INET`, so the
+        # one caller who took that list at its word got `gaierror` rather than
+        # a server.
+        address_family = socket.AF_INET6 if ":" in host else socket.AF_INET
+
+    httpd = Loopback((host, port), _handler_class(token))
     if announce is not None:
-        announce({"url": f"http://{host}:{httpd.server_address[1]}",
+        where = _authority(host, httpd.server_address[1])
+        announce({"url": f"http://{where}",
                   "token": token,
-                  "tools": f"http://{host}:{httpd.server_address[1]}/tools"})
+                  "tools": f"http://{where}/tools"})
     # Serving on a thread rather than in the caller, so a test can drive the
     # server it just started and `main` has something to interrupt.
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
@@ -370,6 +496,9 @@ def main(argv: list[str] | None = None) -> int:
     http = sub.add_parser("http", help="loopback HTTP, token in a header")
     http.add_argument("--port", type=int, default=8765,
                       help="0 picks a free one and prints it")
+    http.add_argument("--host", default="127.0.0.1",
+                      help="loopback only: 127.0.0.1, ::1 or localhost. "
+                           "Anything else is refused rather than warned about")
     http.add_argument("--token", default=None,
                       help="use this token instead of a generated one")
     args = parser.parse_args(argv)
@@ -378,7 +507,7 @@ def main(argv: list[str] | None = None) -> int:
         return serve_mcp()
 
     # Everything the server says goes to stderr, so a caller can pipe stdout.
-    httpd, _ = serve_http(port=args.port, token=args.token,
+    httpd, _ = serve_http(port=args.port, token=args.token, host=args.host,
                           announce=lambda where: print(ir.dumps(where),
                                                        file=sys.stderr))
     try:
