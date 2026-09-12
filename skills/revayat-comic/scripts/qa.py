@@ -471,7 +471,10 @@ def check_document(doc_path: str | Path, *, strict: bool = False) -> dict[str, A
 
     import glossary as glossary_module
 
-    drift = glossary_module.check(doc_path)
+    # `limit=None`: the default caps the list for display, and filing from
+    # the capped list reported a chapter with 50 drifting regions as having
+    # 30. The totals are computed from what is filed.
+    drift = glossary_module.check(doc_path, limit=None)
     for item in drift.get("drift", []):
         findings.add("glossary-drift", item["region"],
                      f"{item['term']} should be {item['expected']}")

@@ -18,6 +18,7 @@ was rendered differently, which is the drift that no amount of care prevents.
 from __future__ import annotations
 
 import argparse
+import re
 import json
 import sys
 from collections import Counter
@@ -70,11 +71,24 @@ def scan(doc_path: str | Path) -> dict[str, Any]:
         entry["count"] = count
         entry.setdefault("role", "character")
     for text, count in repeats.items():
-        if count < MIN_OCCURRENCES or text in entries:
+        existing = entries.get(text)
+        if existing is not None:
+            # Refresh it. Speaker counts were updated on every scan and
+            # term counts were not, so a term that had nearly left the
+            # chapter still looked like one of its commonest words. The
+            # reader's own `target`, `locked` and `role` are untouched.
+            existing["count"] = count
+            continue
+        if count < MIN_OCCURRENCES:
             continue
         entry = entries.setdefault(text, _entry(text, role="term",
                                                 first=first_seen.get(text, "")))
         entry["count"] = count
+    for text, entry in entries.items():
+        # A term that no longer appears at all is not in `repeats`, so it
+        # would have kept whichever count it had when it last did.
+        if entry.get("role") == "term" and text not in repeats:
+            entry["count"] = 0
 
     ir.stamp_stage(doc, "glossary", {"entries": len(entries)})
     ir.save_doc(doc, doc_path)
@@ -95,7 +109,26 @@ def scan(doc_path: str | Path) -> dict[str, Any]:
     }
 
 
-def check(doc_path: str | Path) -> dict[str, Any]:
+#: A term written in a script that has word boundaries. `Ann` inside
+#: `Anna` is not an occurrence of `Ann`, and reporting it sends a
+#: translator to correct something that was already right.
+_BOUNDED_TERM = re.compile(r"^[A-Za-z][A-Za-z\u2019'-]*$")
+
+
+def _mentions(term: str, source: str) -> bool:
+    """Whether `source` really uses `term`.
+
+    Substring for everything else, deliberately. Japanese has no spaces,
+    so a word-boundary test never matches a CJK term at all and every one
+    of them would quietly stop being enforced; Persian inflects by
+    attaching, so the same applies there.
+    """
+    if _BOUNDED_TERM.match(term):
+        return re.search(rf"\b{re.escape(term)}\b", source) is not None
+    return term in source
+
+
+def check(doc_path: str | Path, *, limit: int | None = 30) -> dict[str, Any]:
     doc = ir.load_doc(Path(doc_path))
     entries = doc.get("glossary", {}).get("entries", {})
     locked = {
@@ -118,7 +151,7 @@ def check(doc_path: str | Path) -> dict[str, Any]:
         for term, expected in locked.items():
             # Only meaningful where the source term is actually present; a term
             # absent from the balloon cannot have been rendered wrongly in it.
-            if term in source and expected not in target:
+            if _mentions(term, source) and expected not in target:
                 drift.append({
                     "region": region["id"],
                     "term": term,
@@ -128,7 +161,7 @@ def check(doc_path: str | Path) -> dict[str, Any]:
     return {
         "ok": not drift,
         "locked": len(locked),
-        "drift": drift[:30],
+        "drift": drift if limit is None else drift[:limit],
         "drift_count": len(drift),
     }
 

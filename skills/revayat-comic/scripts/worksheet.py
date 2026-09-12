@@ -60,26 +60,72 @@ _DIRECTION_WORDS = {
 # Writing
 # --------------------------------------------------------------------------- #
 
-def _glossary_table(doc: dict[str, Any], limit: int = 40) -> list[str]:
-    entries = doc.get("glossary", {}).get("entries", {})
-    locked = [
-        (source, entry) for source, entry in entries.items()
-        if entry.get("target")
-    ][:limit]
-    if not locked:
-        return []
+def _rows(pairs: list[tuple[str, dict[str, Any]]]) -> list[str]:
+    """One line per entry, wide enough for the longest of them.
+
+    Nothing is clipped. The columns used to be a fixed 21 characters, so a
+    long name was printed as most of itself — a binding spelling that was
+    not the spelling, which is worse than no table at all.
+    """
+    source_width = max(len(source) for source, _ in pairs)
+    target_width = max(len(entry.get("target", "")) for _, entry in pairs)
     lines = [
-        "# Names and terms — these are binding. Use exactly the Persian given.",
-        "#",
-        "#   source                 Persian                role",
-        "#   ---------------------  ---------------------  ------------------",
+        f"#   {'source':<{source_width}}  {'Persian':<{target_width}}  role",
+        f"#   {'-' * source_width}  {'-' * target_width}  {'-' * 18}",
     ]
-    for source, entry in locked:
+    for source, entry in pairs:
         lines.append(
-            f"#   {source[:21]:<21}  {entry['target'][:21]:<21}  "
-            f"{entry.get('role', '')[:18]}"
+            f"#   {source:<{source_width}}  "
+            f"{entry.get('target', ''):<{target_width}}  "
+            f"{entry.get('role', '')}"
         )
-    lines.append("#")
+    return lines
+
+
+def _glossary_table(doc: dict[str, Any], limit: int = 40) -> list[str]:
+    """The names table, with the binding rows separated from the guesses.
+
+    Everything with a `target` used to be printed under a heading saying it
+    was binding, including the entries the scan proposed and nobody had
+    approved. A translator told a guess is binding spells the rest of the
+    chapter to match it. And the whole thing stopped at 40 rows with
+    nothing said, so enough guesses pushed the one approved term off the
+    end — which is why the cap now falls on the guesses only.
+    """
+    entries = doc.get("glossary", {}).get("entries", {})
+    with_target = [(source, entry) for source, entry in entries.items()
+                   if entry.get("target")]
+    binding = [pair for pair in with_target if pair[1].get("locked")]
+    suggested = [pair for pair in with_target if not pair[1].get("locked")]
+    if not with_target:
+        return []
+
+    lines: list[str] = []
+    if binding:
+        lines += [
+            "# Names and terms — these are binding. Use exactly the "
+            "Persian given.",
+            "#",
+        ]
+        lines += _rows(binding)
+        lines.append("#")
+
+    room = max(0, limit - len(binding))
+    shown = suggested[:room]
+    if shown:
+        lines += [
+            "# Proposed by the scan and not binding — nobody has approved "
+            "these.",
+            "# Use one if it is right; if it is wrong, just translate "
+            "normally.",
+            "#",
+        ]
+        lines += _rows(shown)
+        lines.append("#")
+    hidden = len(suggested) - len(shown)
+    if hidden:
+        lines.append(f"#   … and {hidden} more suggestion(s) not shown.")
+        lines.append("#")
     return lines
 
 

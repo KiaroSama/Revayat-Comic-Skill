@@ -295,3 +295,138 @@ def test_an_interrupted_dir_export_leaves_the_previous_one_intact(
         export.export_document(finished, out, fmt="dir")
     assert {p.name: p.read_bytes() for p in out.iterdir()} == good, (
         "a half-written export replaced a complete one")
+
+
+# --- R06: names, presented honestly and matched sensibly ---------------------
+
+def _entries(doc_path, table):
+    doc = ir.load_doc(doc_path)
+    doc["glossary"] = {"entries": table}
+    ir.save_doc(doc, doc_path)
+    return doc
+
+
+def test_unlocked_names_are_not_presented_as_binding(translated):
+    """The table is headed "these are binding. Use exactly the Persian given."
+    and then listed every entry that had a `target` — including the ones nobody
+    had locked, which are the tool's own guesses. A translator told a guess is
+    binding will spell the rest of the chapter to match it."""
+    import worksheet
+
+    _entries(translated, {
+        "ハルカ": {"target": "هاروکا", "locked": True, "role": "character"},
+        "ケンジ": {"target": "کنجی", "locked": False, "role": "character"},
+    })
+    lines = worksheet._glossary_table(ir.load_doc(translated))
+    text = "\n".join(lines)
+
+    assert "هاروکا" in text, "the locked name is missing"
+    if "کنجی" in text:
+        marks = [text.find(word) for word in
+                 ("not binding", "Suggestion", "suggestion")]
+        marks = [index for index in marks if index >= 0]
+        assert marks and min(marks) < text.index("کنجی"), (
+            "an unlocked guess is printed under the binding heading")
+
+
+def test_a_long_name_is_not_clipped(translated):
+    """Names were cut to 21 characters with no ellipsis, so the worksheet asked
+    for a spelling that was not the spelling."""
+    import worksheet
+
+    long_name = "هاروکا-تاچیبانا-شینومیا"
+    assert len(long_name) > 21
+    _entries(translated, {"X": {"target": long_name, "locked": True}})
+    text = "\n".join(worksheet._glossary_table(ir.load_doc(translated)))
+    assert long_name in text, "the binding spelling was truncated"
+
+
+def test_a_locked_name_is_never_pushed_out_by_suggestions(translated):
+    """The table stopped after 40 rows with nothing said about it. Fill it with
+    unlocked guesses and the one term that actually matters falls off the end —
+    silently, so the chapter spells it two ways."""
+    import worksheet
+
+    table = {f"guess{n}": {"target": f"حدس{n}", "locked": False}
+             for n in range(60)}
+    table["ハナ"] = {"target": "هانا", "locked": True, "role": "character"}
+    _entries(translated, table)
+
+    text = "\n".join(worksheet._glossary_table(ir.load_doc(translated)))
+    assert "هانا" in text, "the one locked term was pushed out by guesses"
+    assert "60" in text or "not shown" in text or "more" in text, (
+        "entries were left out with nothing saying so")
+
+
+def test_a_short_latin_name_does_not_match_inside_a_longer_one(translated):
+    """`Ann` inside `Anna` is not an occurrence of `Ann`, and reporting it as
+    drift sends a translator to correct something that is already right."""
+    import glossary
+
+    doc = _entries(translated, {"Ann": {"target": "آن", "locked": True}})
+    region = next(region for _, region in ir.iter_regions(doc))
+    region["source_text"] = "Anna went home"
+    # Deliberately without `آن` anywhere: otherwise the drift test passes
+    # because the expected Persian happens to be a prefix of the real one.
+    region["target_text"] = "او به خانه رفت"
+    ir.save_doc(doc, translated)
+
+    assert glossary.check(translated)["drift"] == []
+
+
+def test_a_cjk_term_still_matches_inside_a_phrase(translated):
+    """The fix for the line above must not be a word boundary: Japanese has no
+    spaces, so `\\b束\\b` never matches anything and every CJK term would stop
+    being enforced."""
+    import glossary
+
+    doc = _entries(translated, {"束": {"target": "دسته", "locked": True}})
+    region = next(region for _, region in ir.iter_regions(doc))
+    region["source_text"] = "束の間の休息"
+    region["target_text"] = "استراحتی کوتاه"
+    ir.save_doc(doc, translated)
+
+    assert glossary.check(translated)["drift"], "a CJK term stopped being enforced"
+
+
+def test_term_counts_are_refreshed_on_a_rescan(translated):
+    """Speaker counts were refreshed and term counts were not, so a term that
+    had almost left the chapter still looked like its most common word."""
+    import glossary
+
+    doc = ir.load_doc(translated)
+    for _, region in ir.iter_regions(doc):
+        region["source_text"] = "やめろ"
+    ir.save_doc(doc, translated)
+    glossary.scan(translated)
+    before = ir.load_doc(translated)["glossary"]["entries"]["やめろ"]["count"]
+    assert before >= 2
+
+    doc = ir.load_doc(translated)
+    for index, (_, region) in enumerate(ir.iter_regions(doc)):
+        if index:
+            region["source_text"] = "べつに"
+    ir.save_doc(doc, translated)
+    glossary.scan(translated)
+
+    after = ir.load_doc(translated)["glossary"]["entries"]["やめろ"]["count"]
+    assert after < before, f"the count stayed at {after} after the text changed"
+
+
+def test_drift_totals_count_every_finding(translated):
+    """`check` caps its list at 30 for display and reports the true total beside
+    it. The gate filed one finding per row of the CAPPED list, so a chapter with
+    50 drifting regions was reported as having 30."""
+    import glossary
+
+    doc = _entries(translated, {"やめろ": {"target": "بس کن", "locked": True}})
+    for _, region in ir.iter_regions(doc):
+        region["source_text"] = "やめろ"
+        region["target_text"] = "چیز دیگری"
+    ir.save_doc(doc, translated)
+
+    result = glossary.check(translated)
+    report = qa.check_document(translated)
+    filed = report["by_code"].get("glossary-drift", 0)
+    assert filed == result["drift_count"], (
+        f"filed {filed} of {result['drift_count']} drifting regions")
