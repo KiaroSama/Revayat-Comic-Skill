@@ -483,3 +483,130 @@ def test_the_work_folder_inside_the_source_is_refused(tmp_path):
         readers.import_source(source, source / "work",
                               source_language="ja", direction="rtl")
     assert len(list(source.glob("*.png"))) == 2
+
+
+# --- R02: an import may not silently drop what the page shows ----------------
+
+def _page_image(work):
+    from PIL import Image
+    return Image.open(sorted((work / "pages").iterdir())[0]).convert("RGB")
+
+
+def test_a_pdf_page_with_text_over_the_art_is_rendered_whole(tmp_path):
+    """The single-image shortcut asks `get_images()`, which counts images and
+    knows nothing about text. A page that is one scan plus a line of typeset
+    dialogue passed the check and imported as the scan alone — the dialogue
+    simply was not in the file any more, and nothing said so."""
+    pymupdf = pytest.importorskip("pymupdf")
+
+    source = tmp_path / "overlay.pdf"
+    document = pymupdf.open()
+    page = document.new_page(width=500, height=700)
+    page.insert_image(pymupdf.Rect(0, 0, 500, 700),
+                      stream=page_bytes(manga_page(500, 700)))
+    page.insert_text((60, 360), "SPOILER TEXT", fontsize=44, color=(1, 0, 0))
+    document.save(str(source))
+    document.close()
+
+    work = tmp_path / "work"
+    readers.import_source(source, work, dpi=72)
+    pixels = _page_image(work).load()
+    width, height = _page_image(work).size
+    red = sum(1 for y in range(height) for x in range(width)
+              if pixels[x, y][0] - pixels[x, y][2] > 80)
+    assert red > 200, "the red overlay text is not in the imported page"
+
+
+def test_a_pdf_page_with_a_drawing_over_the_art_is_rendered_whole(tmp_path):
+    """Same hole, vector side: a redaction bar or a speech tail drawn as a path
+    is not an image either."""
+    pymupdf = pytest.importorskip("pymupdf")
+
+    source = tmp_path / "drawn.pdf"
+    document = pymupdf.open()
+    page = document.new_page(width=500, height=700)
+    page.insert_image(pymupdf.Rect(0, 0, 500, 700),
+                      stream=page_bytes(manga_page(500, 700)))
+    page.draw_rect(pymupdf.Rect(80, 300, 420, 400), color=(1, 0, 0),
+                   fill=(1, 0, 0))
+    document.save(str(source))
+    document.close()
+
+    work = tmp_path / "work"
+    readers.import_source(source, work, dpi=72)
+    image = _page_image(work)
+    pixels = image.load()
+    red = sum(1 for y in range(image.size[1]) for x in range(image.size[0])
+              if pixels[x, y][0] - pixels[x, y][2] > 80)
+    assert red > 2000, "the drawn rectangle is not in the imported page"
+
+
+def test_a_rotated_pdf_page_is_imported_the_way_it_is_displayed(tmp_path):
+    """`/Rotate 90` is part of how the page looks. Taking the embedded bytes
+    ignores it, so a landscape spread imported as a portrait page and every
+    balloon box computed afterwards was against the wrong axis."""
+    pymupdf = pytest.importorskip("pymupdf")
+
+    source = tmp_path / "rotated.pdf"
+    document = pymupdf.open()
+    page = document.new_page(width=500, height=700)
+    page.insert_image(pymupdf.Rect(0, 0, 500, 700),
+                      stream=page_bytes(manga_page(500, 700)))
+    page.set_rotation(90)
+    document.save(str(source))
+    document.close()
+
+    with pymupdf.open(str(source)) as opened:
+        shown = opened[0].rect
+    assert shown.width > shown.height, "the fixture is not landscape"
+
+    work = tmp_path / "work"
+    readers.import_source(source, work, dpi=72)
+    width, height = _page_image(work).size
+    assert width > height, f"imported {width}x{height} for a landscape page"
+
+
+def test_a_plain_scan_page_still_keeps_its_original_bytes(tmp_path):
+    """The other half: the shortcut has to survive. A page that really is one
+    scan and nothing else must not start being re-rendered, because that
+    resamples artwork that was already at its native resolution."""
+    pymupdf = pytest.importorskip("pymupdf")
+
+    art = page_bytes(manga_page(500, 700))
+    source = tmp_path / "plain.pdf"
+    document = pymupdf.open()
+    page = document.new_page(width=500, height=700)
+    page.insert_image(pymupdf.Rect(0, 0, 500, 700), stream=art)
+    document.save(str(source))
+    document.close()
+
+    with pymupdf.open(str(source)) as opened:
+        taken = readers._single_embedded_image(opened, opened[0])
+    assert taken is not None, "the shortcut stopped working on a plain scan"
+
+    work = tmp_path / "work"
+    readers.import_source(source, work, dpi=72)
+    assert sorted((work / "pages").iterdir())[0].read_bytes() == taken
+
+
+def test_two_archive_members_with_one_name_are_refused(tmp_path):
+    """A ZIP may hold two different members under the same name, and reading by
+    name gives whichever came last — so one page was replaced by a copy of
+    another and the count still looked right. There is no way to know which
+    order was meant, so say so rather than pick."""
+    import io
+    import zipfile
+
+    first = page_bytes(manga_page(400, 600))
+    second = page_bytes(manga_page(400, 600, dark_balloon=True))
+    assert first != second
+
+    archive_path = tmp_path / "dupes.cbz"
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("page.png", first)
+        archive.writestr("page.png", second)
+    archive_path.write_bytes(buffer.getvalue())
+
+    with pytest.raises(ValueError, match="twice|duplicate"):
+        readers.import_source(archive_path, tmp_path / "work")
