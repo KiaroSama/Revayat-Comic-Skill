@@ -68,6 +68,14 @@ STAGES = (
 #: merely exists.
 DOCTOR = "doctor"
 
+#: Held across the stdout capture in `run()`. `contextlib.redirect_stdout`
+#: replaces the process-global `sys.stdout`, and the HTTP transport is a
+#: `ThreadingHTTPServer` — a thread per request. Two stages capturing at once
+#: each restore the other's stdout, so a caller receives someone else's report
+#: and nothing raises. A wrong answer that parses is the worst shape a
+#: transport can fail in, so stage runs are serialised here.
+_STDOUT_LOCK = threading.Lock()
+
 
 def _describe(stage: str) -> str:
     """One line about a stage, taken from the module that implements it.
@@ -145,22 +153,23 @@ def run(name: str, args: list[str] | None = None) -> dict[str, Any]:
                 "expected": [DOCTOR, *STAGES]}
 
     module = importlib.import_module(stage_module(stage))
-    captured = io.StringIO()
-    try:
-        with contextlib.redirect_stdout(captured):
-            code = int(module.main(args) or 0)
-    except SystemExit as exit_code:
-        # argparse exits on a bad flag rather than raising. That is a normal
-        # answer over a transport, not a reason to take the server down.
-        code = int(exit_code.code or 0)
-    except ir.MissingDependency as error:
-        return {"ok": False, "stage": stage, "error": str(error),
-                "kind": "missing-dependency"}
-    except (FileNotFoundError, ValueError) as error:
-        return {"ok": False, "stage": stage,
-                "error": f"{type(error).__name__}: {error}"}
+    with _STDOUT_LOCK:
+        captured = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(captured):
+                code = int(module.main(args) or 0)
+        except SystemExit as exit_code:
+            # argparse exits on a bad flag rather than raising. That is a normal
+            # answer over a transport, not a reason to take the server down.
+            code = int(exit_code.code or 0)
+        except ir.MissingDependency as error:
+            return {"ok": False, "stage": stage, "error": str(error),
+                    "kind": "missing-dependency"}
+        except (FileNotFoundError, ValueError) as error:
+            return {"ok": False, "stage": stage,
+                    "error": f"{type(error).__name__}: {error}"}
 
-    text = captured.getvalue().strip()
+        text = captured.getvalue().strip()
     try:
         report = json.loads(text) if text else None
     except json.JSONDecodeError:
