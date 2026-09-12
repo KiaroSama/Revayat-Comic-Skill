@@ -357,3 +357,86 @@ def test_a_run_on_a_fallback_face_says_so(translated, monkeypatch):
     report = typeset.typeset_document(translated)
     assert report["vazir"] is False
     assert "Vazir" in report["font_note"]
+
+
+# --- R10: the authorisation may not come from the drawing --------------------
+
+def _writable(doc_path):
+    page = ir.load_doc(doc_path)["pages"][0]
+    return np.asarray(
+        ir.load_image(ir.doc_dir(doc_path) / page["writable"]).convert("L")) > 0
+
+
+def _retypeset(doc_path, text):
+    import typeset as typeset_module
+
+    doc = ir.load_doc(doc_path)
+    for _, region in ir.iter_regions(doc):
+        if not region.get("dropped"):
+            region["target_text"] = text
+            region["typeset"] = {}
+    ir.save_doc(doc, doc_path)
+    typeset_module.typeset_document(doc_path)
+    return _writable(doc_path)
+
+
+def test_the_authorised_area_does_not_depend_on_what_was_drawn(translated):
+    """THE ONE THAT MATTERS IN THIS FILE.
+
+    `writable.png` is what the gate compares the finished page against, and it
+    was built by drawing the text and then burning every bounding box that came
+    out into the mask. That makes the preservation proof circular: whatever the
+    typesetter painted became, by definition, the area it was allowed to paint.
+    An overflow could not fail, because the evidence was written afterwards by
+    the thing on trial.
+
+    So: set a short line and a long one into the same page and the authorised
+    area must not move. It is the balloons that authorise, not the ink."""
+    import clean
+
+    clean.clean_document(translated)
+    small = _retypeset(translated, "بله")
+    large = _retypeset(translated, "بله بله بله بله بله بله بله بله بله بله")
+
+    grew = int((large & ~small).sum())
+    assert grew == 0, f"the authorised area grew by {grew} px because more was drawn"
+
+
+def test_text_pushed_off_the_balloon_is_caught_rather_than_authorised(
+        translated, monkeypatch):
+    """The same defect from the other side: shove the lines off the balloon and
+    the gate has to notice. It could not before — the mask followed them."""
+    import clean
+    import qa
+    import typeset as typeset_module
+
+    clean.clean_document(translated)
+    real = typeset_module.fit_region
+
+    def shoved(*args, **kwargs):
+        fitted = real(*args, **kwargs)
+        if fitted:
+            for line in fitted.get("lines", []):
+                line["y"] = int(line["y"]) + 260
+        return fitted
+
+    monkeypatch.setattr(typeset_module, "fit_region", shoved)
+    typeset_module.typeset_document(translated)
+
+    report = qa.check_document(translated)
+    assert "artwork-modified" in report["by_code"], (
+        "the gate accepted text drawn 260 px off its balloon")
+
+
+def test_an_ordinary_page_still_passes_the_gate(translated):
+    """The guard has to stay usable: real Persian set in real balloons must not
+    start tripping the artwork check."""
+    import clean
+    import qa
+    import typeset as typeset_module
+
+    clean.clean_document(translated)
+    typeset_module.typeset_document(translated)
+
+    report = qa.check_document(translated)
+    assert "artwork-modified" not in report["by_code"], report["findings"][:3]
