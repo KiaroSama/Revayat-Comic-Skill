@@ -101,12 +101,18 @@ def test_ocr_survives_an_engine_that_hangs(detected, monkeypatch):
     """A stalled engine must cost its timeout and then get out of the way."""
     import ocr
 
+    # One page, not the whole chapter. Every region waits out its own timeout,
+    # so running all three pages proved the same thing fifteen times over and
+    # cost three seconds of the suite to do it.
+    page = ir.load_doc(detected)["pages"][0]["id"]
     name = _fake_ocr(monkeypatch, fail="hang")
-    report = ocr.read_document(detected, provider=name, timeout=0.2)
+    report = ocr.read_document(detected, provider=name, timeout=0.2,
+                               pages=[page])
     assert report["totals"]["failed"] > 0
     doc = ir.load_doc(detected)
     for _, region in ir.iter_regions(doc):
-        assert region["provenance"][-1]["status"] == "timeout"
+        if region["id"].startswith(page):
+            assert region["provenance"][-1]["status"] == "timeout"
 
 
 def test_the_ocr_stage_records_which_engine_ran(detected, monkeypatch):
@@ -206,14 +212,18 @@ def test_a_timed_out_region_is_read_on_the_next_run(detected, monkeypatch):
     it up rather than skipping it forever."""
     import ocr
 
+    # Both runs scoped to one page, for the same reason as the hang test above,
+    # and to the SAME page so the resume count is comparable.
+    page = ir.load_doc(detected)["pages"][0]["id"]
     monkeypatch.setitem(providers._REGISTRY["ocr"], "flaky",
                         lambda: providers.FakeOCR(fail="hang"))
-    first = ocr.read_document(detected, provider="flaky", timeout=0.2)
+    first = ocr.read_document(detected, provider="flaky", timeout=0.2,
+                              pages=[page])
     assert first["totals"]["failed"] > 0
 
     monkeypatch.setitem(providers._REGISTRY["ocr"], "flaky",
                         lambda: providers.FakeOCR(text="やめろ", confidence=0.9))
-    second = ocr.read_document(detected, provider="flaky")
+    second = ocr.read_document(detected, provider="flaky", pages=[page])
     assert second["totals"]["applied"] == first["totals"]["failed"]
 
 

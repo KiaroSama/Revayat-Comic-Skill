@@ -607,10 +607,16 @@ def typeset_page(
         if region.get("dropped") or not (region.get("target_text") or "").strip():
             continue
         if region.get("balloon"):
+            # `inset=0` deliberately, unlike `clean`. The inset is a CLEANING
+            # conservatism — do not repaint the balloon's own outline — not a
+            # statement about where text may go. Measured on a real Japanese
+            # page: six pixels of one glyph's anti-aliased edge landed on the
+            # outline it was set against, every one of them within two pixels
+            # of the inset interior. The balloon is still the boundary; text
+            # shoved off it entirely is still caught.
             interior = mask_tools.balloon_interior(
                 before_draw, region["balloon"],
-                region.get("polarity", "light"), size,
-                inset=mask_tools.OUTLINE_INSET,
+                region.get("polarity", "light"), size, inset=0.0,
             )
             writable = np.maximum(writable, np.asarray(interior, np.uint8))
         elif region.get("mask_box"):
