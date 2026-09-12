@@ -440,3 +440,170 @@ def test_dropping_a_region_that_was_kept_takes_the_keep_off():
     region, _ = _apply({"fa": "\u062a\u0631\u0633"}, keep=True)
     assert "keep" not in region
     assert ir.region_state(region, "translate") == "translated"
+
+
+# --- R04: a worksheet must not lose a decision -------------------------------
+
+def _sheets(doc_path):
+    return ir.doc_dir(doc_path) / "worksheets"
+
+
+def _add_fields(text, region_id, *fields):
+    """Extra field lines inside a region's EXISTING block.
+
+    Appending a second `@@ <id>` block instead would make the reply answer
+    about that region twice, which is a duplicate and now refused — correctly,
+    but it is not what these tests are about.
+    """
+    out = []
+    for line in text.splitlines():
+        out.append(line)
+        if line.startswith(f"@@ {region_id} "):
+            out.extend(fields)
+    return "\n".join(out) + "\n"
+
+
+def _page_of(doc_path, page_id):
+    """Just one page, for comparing what a refused reply left behind."""
+    doc = ir.load_doc(doc_path)
+    return ir.dumps(next(p for p in doc["pages"] if p["id"] == page_id))
+
+
+def _finish(doc_path, page_id, body=None):
+    """Copy a page's worksheet to its `.done.txt`, optionally replacing it."""
+    folder = _sheets(doc_path)
+    text = body if body is not None else ir.read_text(folder / f"{page_id}.txt")
+    ir.write_text(folder / f"{page_id}.done.txt", text)
+    return text
+
+
+def test_a_page_the_detector_found_nothing_on_still_gets_a_worksheet(detected):
+    """Both `build` and `merge` skipped a page with no regions, so the one
+    recovery the protocol offers — `@@ +slug` for text the detector missed —
+    could not be used on exactly the page that needed it most. A page where
+    detection failed completely was simply unreachable."""
+    doc = ir.load_doc(detected)
+    blank = doc["pages"][1]
+    blank["regions"] = []
+    ir.save_doc(doc, detected)
+
+    report = worksheet.build_document(detected)
+    assert (_sheets(detected) / f"{blank['id']}.txt").exists(), (
+        f"no worksheet for a page with no detections: {report}")
+
+    _finish(detected, doc["pages"][0]["id"])
+    _finish(detected, doc["pages"][2]["id"])
+    _finish(detected, blank["id"],
+            ir.read_text(_sheets(detected) / f"{blank['id']}.txt")
+            + "\n@@ +missed speech horizontal\nbox: 100 100 300 120\n"
+              "src: やめろ\nfa: بس کن\n")
+
+    merged = worksheet.merge_document(detected)
+    assert merged["added"], f"the added region was not merged: {merged}"
+    assert ir.load_doc(detected)["pages"][1]["regions"], "the page is still empty"
+
+
+def test_a_rebuilt_worksheet_carries_the_decisions_back(detected):
+    """`build` writes `src`, `fa` and `speaker` and nothing else, so a rebuild
+    after a merge dropped every `drop`, `keep`, `erase` and `note` — and because
+    an absent field RESETS those on the next merge, rebuilding silently undid
+    reviewed decisions. A worksheet has to round-trip."""
+    worksheet.build_document(detected)
+    doc = ir.load_doc(detected)
+    page = doc["pages"][0]
+    first, second, third = [region["id"] for region in page["regions"]][:3]
+
+    sheet = ir.read_text(_sheets(detected) / f"{page['id']}.txt")
+    sheet = _add_fields(sheet, first, "drop: yes")
+    sheet = _add_fields(sheet, second, "keep: yes")
+    sheet = _add_fields(sheet, third, "erase: yes")
+    _finish(detected, page["id"], sheet)
+    for other in doc["pages"][1:]:
+        _finish(detected, other["id"])
+    worksheet.merge_document(detected)
+
+    doc = ir.load_doc(detected)
+    page = doc["pages"][0]
+    assert ir.find_region(doc, first).get("dropped") is True
+    assert ir.find_region(doc, second)["keep"] is True
+    assert ir.find_region(doc, third)["erase"] is True
+
+    rebuilt = worksheet.page_worksheet(doc, page, ir.fingerprint(doc))
+    assert "drop: yes" in rebuilt, "a dropped region came back as ordinary"
+    assert "keep: yes" in rebuilt, "a kept region came back as ordinary"
+    assert "erase: yes" in rebuilt, "an erased region came back as ordinary"
+
+
+def test_merging_the_same_reply_twice_changes_nothing(detected):
+    """A merge that is not idempotent punishes the ordinary act of running it
+    again: the review note was appended a second time, so a page re-merged three
+    times carried the same sentence three times."""
+    worksheet.build_document(detected)
+    doc = ir.load_doc(detected)
+    page = doc["pages"][0]
+    region_id = page["regions"][0]["id"]
+
+    _finish(detected, page["id"], _add_fields(
+        ir.read_text(_sheets(detected) / f"{page['id']}.txt"), region_id,
+        "src: やめろ", "fa: بس کن", "note: check the speaker on this one"))
+    for other in doc["pages"][1:]:
+        _finish(detected, other["id"])
+
+    worksheet.merge_document(detected)
+    once = ir.dumps(ir.load_doc(detected))
+    worksheet.merge_document(detected)
+    twice = ir.dumps(ir.load_doc(detected))
+
+    notes = ir.find_region(ir.load_doc(detected), region_id).get("review", [])
+    assert notes.count("check the speaker on this one") == 1, notes
+    assert once == twice, "merging the same reply twice changed the document"
+
+
+def test_a_reply_with_a_duplicate_block_does_not_half_apply(detected):
+    """A page reply is one answer about one page. When part of it is malformed,
+    applying the rest leaves the page in a state nobody wrote: some regions
+    carry the new reply, the others carry the old one, and the report only says
+    a block was duplicated."""
+    worksheet.build_document(detected)
+    doc = ir.load_doc(detected)
+    page = doc["pages"][0]
+    first, second = [region["id"] for region in page["regions"]][:2]
+    # This page only: the other two pages have sound replies and merge normally,
+    # which is exactly what should happen.
+    before = _page_of(detected, page["id"])
+
+    sheet = _add_fields(ir.read_text(_sheets(detected) / f"{page['id']}.txt"),
+                        first, "src: A", "fa: الف")
+    # A second block for `second`, which is the duplicate under test.
+    _finish(detected, page["id"], sheet
+            + f"\n@@ {second} speech horizontal\nsrc: C\nfa: ج\n")
+    for other in doc["pages"][1:]:
+        _finish(detected, other["id"])
+
+    report = worksheet.merge_document(detected)
+    assert report["duplicate_regions"], "the fixture did not duplicate a block"
+    assert _page_of(detected, page["id"]) == before, (
+        "a reply with a duplicate block was partly applied anyway")
+
+
+def test_a_reply_with_contradictory_actions_does_not_half_apply(detected):
+    """`keep: yes` and `erase: yes` on one region are opposite instructions.
+    They are already reported — but the rest of the page was applied around
+    them, so the document moved on a reply nobody would have sent."""
+    worksheet.build_document(detected)
+    doc = ir.load_doc(detected)
+    page = doc["pages"][0]
+    first, second = [region["id"] for region in page["regions"]][:2]
+    before = _page_of(detected, page["id"])
+
+    sheet = _add_fields(ir.read_text(_sheets(detected) / f"{page['id']}.txt"),
+                        first, "src: A", "fa: الف")
+    sheet = _add_fields(sheet, second, "keep: yes", "erase: yes")
+    _finish(detected, page["id"], sheet)
+    for other in doc["pages"][1:]:
+        _finish(detected, other["id"])
+
+    report = worksheet.merge_document(detected)
+    assert report["conflicting_actions"], "the fixture did not conflict"
+    assert _page_of(detected, page["id"]) == before, (
+        "a contradictory reply was partly applied anyway")
