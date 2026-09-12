@@ -55,7 +55,13 @@ def test_a_verb_prefix_gets_one_too():
 
 
 def test_chained_suffixes_settle():
-    assert fix("بزرگ تر ین") == f"بزرگ{ZWNJ}تر ین"
+    """A chain needs more than one pass: joining the first pair creates the
+    next. This used to use `بزرگ تر ین`, which is no longer joined for us —
+    `تر` is also the adjective "wet", so that join is reported instead. The
+    requirement is unchanged and the plural family still shows it."""
+    once = fix("کتاب ها ی")
+    assert once.startswith(f"کتاب{ZWNJ}ها")
+    assert fix(once) == once, "the chain did not settle in one call"
 
 
 def test_zwnj_can_be_switched_off():
@@ -170,3 +176,87 @@ def test_a_trailing_ellipsis_still_closes_up():
     """The other half: nothing follows it, so the space before it is a typo."""
     assert falint.fix_text("سلام ...") == "سلام…"
     assert falint.fix_text("خوبم ، ممنون") == "خوبم، ممنون"
+
+
+# --- R07: normalisation may not change what the sentence says ----------------
+
+def test_a_separate_word_is_not_glued_into_a_suffix():
+    """THE ONE THAT MATTERS. `تر` is both the comparative suffix and the
+    ordinary adjective "wet". Gluing it turns "my hair got wet" into "my hair,
+    more so, got" — a translation tool that silently rewrites the sentence is
+    worse than one that leaves a typo. It is reported instead."""
+    sentence = "موهایم تر شد."
+    assert fix(sentence) == sentence
+    assert any(issue["code"] == "zwnj-review"
+               for issue in falint.lint_text(sentence))
+
+
+def test_an_independent_mi_is_not_glued_to_the_next_word():
+    """`می` is the verbal prefix and also the noun "wine"."""
+    sentence = "می ناب بنوش."
+    assert fix(sentence) == sentence
+    assert any(issue["code"] == "zwnj-review"
+               for issue in falint.lint_text(sentence))
+
+
+def test_the_joins_that_cannot_be_ambiguous_still_happen():
+    """Narrowing this must not switch the feature off. `نمی` is not a word on
+    its own, and neither are the long possessive forms, so those are safe."""
+    assert fix("نمی روم") == f"نمی{ZWNJ}روم"
+    assert fix("کتاب هایم") == f"کتاب{ZWNJ}هایم"
+    assert fix("کتاب هایشان") == f"کتاب{ZWNJ}هایشان"
+
+
+@pytest.mark.parametrize("opaque", [
+    "https://example.com/كتاب",
+    "https://example.com/٤٢/page",
+    "https://example.com/s?q=٤٢",
+    "كتاب@example.com",
+    'https://example.com/a"b"c',
+    "https://example.com/wide\u0640path",
+])
+def test_an_opaque_span_keeps_its_exact_bytes(opaque):
+    """Character folding, digit conversion and quote pairing all ran BEFORE the
+    protection, so a URL came out rewritten: Arabic kaf folded to Persian kaf,
+    Arabic-Indic digits turned Persian, straight quotes turned into guillemets,
+    tatweel deleted. A rewritten URL is a dead link."""
+    out = fix(f"اینجا را ببینید: {opaque} ممنون.")
+    assert opaque in out, f"{opaque!r} was rewritten to {out!r}"
+
+
+def test_a_nul_in_the_input_cannot_corrupt_the_masking():
+    """The protection used `\x00<index>\x00` as its sentinel, so input holding
+    that shape was unmasked into somebody else's text — or crashed."""
+    # The requirement is that nothing is duplicated, swapped or raised — not
+    # a particular rendering of a stray digit.
+    first = falint.fix_text("\x000\x00 hello سلام")
+    assert first.count("hello") == 1, first
+    assert "سلام" in first and "\x00" not in first
+
+    second = falint.fix_text("alpha beta \x000\x00")
+    assert second.count("alpha") == 1 and second.count("beta") == 1, second
+
+    third = falint.fix_text("سلام \x000\x00 خوبی")
+    assert "سلام" in third and "خوبی" in third, third
+
+
+@pytest.mark.parametrize("sample", [
+    "قیمت 1,200 تومان است.",
+    "او ۵; بعد رفت",
+    "۹۹?ای وای",
+    "کتاب ها ی من",
+    "سلام… «خوبی؟» — بله!!!!",
+    "او 3 بار گفت: نه، نه، نه.",
+])
+def test_normalisation_settles_in_one_pass(sample):
+    """`fix_text` says it is idempotent. It was not: converting `1,200` made the
+    comma Persian-adjacent, so a SECOND run turned it into `۱،۲۰۰`. Anything
+    that keeps moving has no stable answer to store."""
+    once = falint.fix_text(sample)
+    assert falint.fix_text(once) == once, f"{sample!r} kept changing"
+
+
+def test_digits_in_a_latin_sentence_are_left_alone():
+    """`Vol. 2, ch. 3` is not Persian and its numerals are not Persian either."""
+    assert fix("Vol. 2, ch. 3") == "Vol. 2, ch. 3"
+    assert fix("او 3 بار گفت") == "او ۳ بار گفت"
