@@ -424,8 +424,14 @@ def test_text_pushed_off_the_balloon_is_caught_rather_than_authorised(
     typeset_module.typeset_document(translated)
 
     report = qa.check_document(translated)
-    assert "artwork-modified" in report["by_code"], (
-        "the gate accepted text drawn 260 px off its balloon")
+    # Reported as `text-overflow`, not `artwork-modified`, and that is the
+    # better outcome: the ink that landed outside is taken back off the page
+    # before it is saved, so the words are refused rather than shipped over the
+    # artwork. What must never happen is silence.
+    assert report["by_code"], "the gate accepted text drawn 260 px off its balloon"
+    assert "text-overflow" in report["by_code"] or "artwork-modified" in report["by_code"]
+    assert report["stats"]["artwork_pixels_changed"] == 0, (
+        "the overflowing ink was left on the artwork")
 
 
 def test_an_ordinary_page_still_passes_the_gate(translated):
