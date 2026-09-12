@@ -56,17 +56,42 @@ _PROTECTED = re.compile(
     """
 )
 
+# The plural and possessive family, joined automatically. `<noun> ها` is the
+# plural in every register that appears in comic dialogue; the interjection
+# `ها` does not sit immediately after a noun with a space before it.
 _ZWNJ_SUFFIXES = (
-    "ها", "های", "هایی", "هایم", "هایت", "هایش", "هایمان", "هایتان", "هایشان",
-    "تر", "تری", "ترین",
+    "هایشان", "هایتان", "هایمان", "هایی", "هایم", "هایت", "هایش", "های", "ها",
 )
-_ZWNJ_PREFIXES = ("می", "نمی")
+#: `نمی` is not a Persian word by itself, so this one can never be wrong.
+_ZWNJ_PREFIXES = ("نمی",)
+
+# `تر` is both the comparative suffix and the adjective "wet". `موهایم تر شد`
+# means "my hair got wet"; joined, it says something else entirely. Nothing
+# short of a lexicon separates the two, so the join is REPORTED and not
+# applied — a tool that quietly rewrites a sentence is worse than one that
+# leaves a typo.
+_AMBIGUOUS_SUFFIXES = ("ترین", "تری", "تر")
+
+#: `می` is the verbal prefix and also the noun "wine". The prefix attaches to
+#: a conjugated verb, and a Persian verb carries a personal ending, so a
+#: following word that ends in one is joined and anything else is reported.
+#: `می روم` joins; `می ناب` ("fine wine") does not.
+_VERB_ENDING = "مویدنهٔ"
 
 _SUFFIX_SPACE = re.compile(
     rf"([{PERSIAN_LETTER}]{{2,}}) +({'|'.join(_ZWNJ_SUFFIXES)})\b"
 )
 _PREFIX_SPACE = re.compile(
     rf"\b({'|'.join(_ZWNJ_PREFIXES)}) +([{PERSIAN_LETTER}]{{2,}})"
+)
+#: `می` followed by something that conjugates. Applied.
+_MI_VERB = re.compile(
+    rf"\b(می) +([{PERSIAN_LETTER}]{{2,}}[{_VERB_ENDING}])\b"
+)
+#: What is left over for a reader to decide.
+_AMBIGUOUS_JOIN = re.compile(
+    rf"[{PERSIAN_LETTER}]{{2,}} +(?:{'|'.join(_AMBIGUOUS_SUFFIXES)})\b"
+    rf"|\bمی +(?![{PERSIAN_LETTER}]{{2,}}[{_VERB_ENDING}]\b)[{PERSIAN_LETTER}]{{2,}}"
 )
 
 _PERSIAN_PUNCT = "،؛؟!:.»…"
@@ -105,21 +130,17 @@ class Options:
         self.punctuation = punctuation
 
 
-def _mask(text: str) -> tuple[str, list[str]]:
-    keep: list[str] = []
+#: C0 controls except tab. A NUL never belongs in dialogue, and it used to be
+#: the protection's own sentinel: a line holding `\x00<digits>\x00` was
+#: unmasked into somebody else's URL, or raised IndexError on a leading one.
+_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 
-    def swap(match: re.Match[str]) -> str:
-        keep.append(match.group(0))
-        return f"\x00{len(keep) - 1}\x00"
-
-    return _PROTECTED.sub(swap, text), keep
-
-
-def _unmask(text: str, keep: list[str]) -> str:
-    return re.sub(r"\x00(\d+)\x00", lambda m: keep[int(m.group(1))], text)
+#: Persian, for deciding whether a bare numeral on this line is Persian too.
+_HAS_PERSIAN = re.compile(rf"[{PERSIAN_LETTER}]")
 
 
-def fix_line(text: str, options: Options) -> str:
+def _fix_segment(text: str, options: Options, persian_line: bool) -> str:
+    """Everything that may rewrite characters. Never sees a protected span."""
     for source, target in _CHAR_MAP.items():
         text = text.replace(source, target)
     for source, target in _ARABIC_INDIC.items():
@@ -127,36 +148,70 @@ def fix_line(text: str, options: Options) -> str:
 
     if options.quotes:
         text = _QUOTE_PAIR.sub(lambda m: f"«{m.group(1)}»", text)
-
-    masked, keep = _mask(text)
-
     if options.ellipsis:
-        masked = _ELLIPSIS.sub("…", masked)
+        text = _ELLIPSIS.sub("…", text)
+
+    # Before the punctuation rules, not after. Those rules look BEHIND for a
+    # Persian digit, so converting afterwards left `۱,۲۰۰` on the first run and
+    # `۱،۲۰۰` on the second — a function that says it is idempotent and is not.
+    if options.digits == "persian" and persian_line:
+        # `Vol. 2, ch. 3` is not a Persian sentence and its numerals are not
+        # Persian numerals. Latin words are protected; the bare digits between
+        # them were not, and came out in Persian inside English text.
+        text = _DIGIT_RUN.sub(
+            lambda m: "".join(_LATIN_TO_PERSIAN_DIGIT[d] for d in m.group(0)),
+            text,
+        )
+
     if options.punctuation:
-        masked = _COMMA.sub("،", masked)
-        masked = _SEMICOLON.sub("؛", masked)
-        masked = _QUESTION.sub("؟", masked)
-        masked = _SPACE_BEFORE_PUNCT.sub(r"\1", masked)
-        masked = _MISSING_SPACE_AFTER.sub(r"\1 ", masked)
-        masked = _GUILLEMET_INNER.sub(lambda m: m.group(0).strip(), masked)
+        text = _COMMA.sub("،", text)
+        text = _SEMICOLON.sub("؛", text)
+        text = _QUESTION.sub("؟", text)
+        text = _SPACE_BEFORE_PUNCT.sub(r"\1", text)
+        text = _MISSING_SPACE_AFTER.sub(r"\1 ", text)
+        text = _GUILLEMET_INNER.sub(lambda m: m.group(0).strip(), text)
         # Shouting is part of comic dialogue; three marks is emphatic, seven is
         # a typo, and a balloon has no room for either way of finding out.
-        masked = _EMPHATIC.sub(r"\1\1\1", masked)
+        text = _EMPHATIC.sub(r"\1\1\1", text)
     if options.zwnj:
         # "کتاب ها ی" style chains need more than one pass to settle.
         for _ in range(3):
-            replaced = _SUFFIX_SPACE.sub(rf"\1{ZWNJ}\2", masked)
+            replaced = _SUFFIX_SPACE.sub(rf"\1{ZWNJ}\2", text)
             replaced = _PREFIX_SPACE.sub(rf"\1{ZWNJ}\2", replaced)
-            if replaced == masked:
+            replaced = _MI_VERB.sub(rf"\1{ZWNJ}\2", replaced)
+            if replaced == text:
                 break
-            masked = replaced
-    if options.digits == "persian":
-        masked = _DIGIT_RUN.sub(
-            lambda m: "".join(_LATIN_TO_PERSIAN_DIGIT[d] for d in m.group(0)), masked
-        )
+            text = replaced
 
-    masked = _MULTI_SPACE.sub(" ", masked)
-    return _unmask(masked, keep).strip()
+    return _MULTI_SPACE.sub(" ", text)
+
+
+def _fix_once(text: str, options: Options) -> str:
+    persian_line = bool(_HAS_PERSIAN.search(text))
+    pieces: list[str] = []
+    last = 0
+    for match in _PROTECTED.finditer(text):
+        pieces.append(_fix_segment(text[last:match.start()], options, persian_line))
+        # A URL, an email address or a Latin word, byte for byte. Folding an
+        # Arabic kaf, converting a digit or pairing a quote inside one of these
+        # produces a dead link that still looks like a link.
+        pieces.append(match.group(0))
+        last = match.end()
+    pieces.append(_fix_segment(text[last:], options, persian_line))
+    return "".join(pieces)
+
+
+def fix_line(text: str, options: Options) -> str:
+    text = _CONTROL.sub("", text)
+    # Run to a fixed point rather than reasoning about every pair of rules. One
+    # rule feeding another is exactly how this stopped being idempotent, and a
+    # stored value that still moves has no settled answer to store.
+    for _ in range(3):
+        once = _fix_once(text, options)
+        if once == text:
+            break
+        text = once
+    return text.strip()
 
 
 def fix_text(text: str, options: Options | None = None) -> str:
@@ -193,6 +248,11 @@ def lint_text(text: str) -> list[dict[str, str]]:
         note("latin-quotes", "Latin quotation marks in Persian dialogue")
     if _DOUBLE_PUNCT.search(text):
         note("double-punctuation", "repeated punctuation mark")
+    ambiguous = _AMBIGUOUS_JOIN.search(text)
+    if ambiguous:
+        note("zwnj-review",
+             f"`{ambiguous.group(0)}` may want a ZWNJ, or may be two words "
+             "— only a reader can tell; not changed automatically")
 
     counts = ir.script_counts(text)
     total = sum(counts.values())
