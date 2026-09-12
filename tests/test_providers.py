@@ -159,7 +159,6 @@ def test_a_provider_that_rewrites_every_pixel_changes_none_outside_the_mask(
     by arithmetic the provider does not participate in.
     """
     _needs_the_provider(monkeypatch)
-    doc = ir.load_doc(translated)
     root = ir.doc_dir(translated)
 
     report = clean.clean_document(translated, provider="fake-image-edit")
@@ -695,7 +694,6 @@ def test_page_two_sees_page_one_only_after_it_is_merged(detected):
     file. After it, page 1's exact source and target are there.
     """
     import context
-    import glossary
     import worksheet
 
     worksheet.build_document(detected)
@@ -766,8 +764,6 @@ def test_the_documented_default_is_the_order_the_tests_prove():
     code silently. This is the cheapest possible guard against that: the default
     path is sequential, and any batching is marked as the trade it is.
     """
-    from pathlib import Path
-
     skill = Path(__file__).resolve().parents[1] / "skills" / "revayat-comic" / "SKILL.md"
     text = skill.read_text(encoding="utf-8")
     step5 = text[text.index("## Step 5"):text.index("## Step 6")]

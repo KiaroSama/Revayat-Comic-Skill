@@ -31,6 +31,12 @@ than approximately right.
 
 ## Install
 
+**Python 3.10 or newer.** The scripts use `X | Y` type unions throughout, so on
+3.9 the import fails with a syntax error rather than a useful message. CI tests
+3.10 and 3.13 on Linux, macOS and Windows. (3.10 reaches end of life on
+2026-10-04; it stays supported here for now, and the floor will rise to 3.11
+after that.)
+
 ```bash
 git clone https://github.com/KiaroSama/Revayat-Comic-Skill.git
 cd Revayat-Comic-Skill
@@ -272,7 +278,13 @@ only its masked pixels are ever used.
 pip install -r skills/revayat-comic/requirements.txt
 python -m pytest tests -q
 python tests/e2e_pipeline.py
+python -m ruff check skills/revayat-comic/scripts tests
 ```
+
+Python 3.10 or newer. The linter runs a small rule set — undefined names,
+unused imports, shadowed names, dead variables — not style; `ruff.toml` says
+what is off and why. Dependencies are audited weekly against the advisory
+database by `.github/workflows/dependency-audit.yml`.
 
 Fixtures are generated, not committed. There are no comic pages in this
 repository: they bloat it and the content is usually someone else's. A CI check

@@ -1,0 +1,36 @@
+# Linting for the pipeline scripts and their tests.
+#
+# The rule set is deliberately small, and the reason is not modesty: a gate
+# nobody can pass gets switched off within a month. The families below find real
+# defects rather than disagreements about style — undefined names, unused
+# imports, a name shadowed by a second import, a variable assigned and never
+# read. Every one of those is a place the code says something the author did
+# not mean.
+
+# The oldest interpreter CI tests against. Keep in step with the matrix in
+# .github/workflows/ci.yml and the floor stated in requirements.txt.
+target-version = "py310"
+
+exclude = [".revayat-venv", "work*", "out", "graphify-out", "plans"]
+
+[lint]
+# Ruff's own default selection, written out rather than inherited, so that a
+# future ruff release changing its defaults cannot silently widen or narrow
+# what CI enforces.
+select = ["E4", "E7", "E9", "F"]
+
+# Not enabled, on purpose:
+#
+#   E501 (line length) — the long lines here are all in test docstrings and
+#   assertion messages, where breaking them would hurt what they say.
+#
+#   SIM115, PLE2515, PLW1510 — each flags something deliberate in this
+#   codebase: `NamedTemporaryFile` in `pageir.py` *is* used inside a `with`
+#   (ruff cannot see it across the assignment), the zero-width space at
+#   `falint.py:41` is a key in the character-normalisation map rather than a
+#   typo, and `subprocess.run` in `tests/e2e_pipeline.py` has its `returncode`
+#   checked on the next line. Leaving these families off is cleaner than
+#   scattering `noqa` comments over correct code.
+#
+#   Formatting rules and `ruff format` — several comment blocks and tables in
+#   this repository are aligned by hand and carry meaning in their layout.
