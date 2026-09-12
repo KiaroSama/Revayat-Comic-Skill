@@ -38,14 +38,15 @@ import pageir as ir
 
 HEADER = re.compile(r"^@@\s+(?P<id>\+?[A-Za-z0-9_#-]+)(?:\s+(?P<rest>.*))?$")
 FIELD = re.compile(
-    r"^(?P<name>src|fa|kind|speaker|note|drop|keep|box|polarity)\s*:\s?(?P<value>.*)$")
+    r"^(?P<name>src|fa|kind|speaker|note|drop|keep|erase|box|polarity)"
+    r"\s*:\s?(?P<value>.*)$")
 
 #: `box: x y w h`, in the page's own pixels — the same pixels `overview.png`
 #: is drawn at, so a reader can take the numbers straight off it.
 BOX = re.compile(r"^\s*(\d+)[ ,]+(\d+)[ ,]+(\d+)[ ,]+(\d+)\s*$")
 FINGERPRINT = re.compile(r"^#\s*fingerprint:\s*(?P<value>[0-9a-f]{64})\s*$", re.M)
 
-FIELDS = ("src", "fa", "kind", "speaker", "note", "drop", "keep", "box",
+FIELDS = ("src", "fa", "kind", "speaker", "note", "drop", "keep", "erase", "box",
           "polarity")
 
 _DIRECTION_WORDS = {
@@ -113,6 +114,9 @@ def page_worksheet(doc: dict[str, Any], page: dict[str, Any], fingerprint: str) 
         "#   speaker: a short stable name, the same one every time",
         "#   drop:    yes   — there is no text here at all",
         "#   keep:    yes   — there IS text, leave it in the artwork",
+        "#   erase:   yes   — remove this and put nothing back (a watermark,",
+        "#                    a site stamp, a scan credit). Only for marks you",
+        "#                    have the right to remove.",
         "#",
         "# Something the detector missed entirely? Add it. Free lettering is",
         "# the weak case, adjacent balloons sometimes come back as one region,",
@@ -270,6 +274,20 @@ def _apply(region: dict[str, Any], block: dict[str, str],
     else:
         region.pop("keep", None)
 
+    # Ink the reader wants gone with nothing put in its place — a watermark, a
+    # site stamp, a scan credit. The three existing answers all say something
+    # else: `drop` claims there is no ink there, `keep` leaves it drawn, and a
+    # `fa:` line puts Persian over it. None of them is "remove this".
+    erased = block.get("erase", "").strip().lower() in {"yes", "true", "1"}
+    if erased and kept:
+        report["conflicting_actions"].append(
+            f"{region['id']}: both `keep: yes` and `erase: yes`")
+        erased = False
+    if erased:
+        region["erase"] = True
+    else:
+        region.pop("erase", None)
+
     source = block.get("src", "").strip()
     target = block.get("fa", "").strip()
     kind = block.get("kind", "").strip().lower()
@@ -300,6 +318,18 @@ def _apply(region: dict[str, Any], block: dict[str, str],
         # renumber it away.
         region["locked"] = True
         report["kept"].append(region["id"])
+        return True
+
+    if erased:
+        region["target_text"] = ""
+        region["typeset"] = {}
+        # Deliberately NOT `fill = "none"`. That is what `keep` sets to tell the
+        # cleaner to leave the pixels alone, and it is the opposite of what this
+        # asks for: an erase region goes through the ordinary tier ladder —
+        # flat fill, classical inpaint, then a provider — like any other masked
+        # region. Leaving `fill` unset is what lets `clean` pick.
+        region["locked"] = True
+        report["erased"].append(region["id"])
         return True
 
     region["target_text"] = target
@@ -415,6 +445,8 @@ def merge_document(
         "stale_worksheets": [],
         "added": [],
         "bad_added_regions": [],
+        "erased": [],
+        "conflicting_actions": [],
     }
 
     by_page = {page["id"]: page for page in doc["pages"]}

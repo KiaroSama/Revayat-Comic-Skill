@@ -126,6 +126,8 @@ $PY $SKILL/scripts/revayat-comic.py worksheet build --doc work/comic.json
 $PY $SKILL/scripts/revayat-comic.py worksheet merge --doc work/comic.json
 $PY $SKILL/scripts/revayat-comic.py glossary scan --doc work/comic.json
 $PY $SKILL/scripts/revayat-comic.py falint fix --doc work/comic.json
+#   … واترمارکی که در همهٔ صفحه‌ها یک‌جاست؟ علامتش بزنید، بعد mask را دوباره اجرا کنید …
+#   $PY $SKILL/scripts/revayat-comic.py watermark --doc work/comic.json --box "12 1840 300 44"
 $PY $SKILL/scripts/revayat-comic.py clean   --doc work/comic.json
 $PY $SKILL/scripts/revayat-comic.py typeset --doc work/comic.json
 $PY $SKILL/scripts/revayat-comic.py qa check --doc work/comic.json
@@ -220,6 +222,7 @@ out = original × (1 − alpha) + repaired × alpha        where alpha ≤ mask
 - [`references/detection.md`](skills/revayat-comic/references/detection.md) — آستانه‌ها، صفحه‌های دشوار، اصلاح یک ناحیه
 - [`references/artwork-preservation.md`](skills/revayat-comic/references/artwork-preservation.md) — ماسک‌ها، لایه‌های پاک‌سازی، و آنچه QA اثبات می‌کند
 - [`references/sound-effects.md`](skills/revayat-comic/references/sound-effects.md) — چهار سیاست و انتخاب میانشان
+- [`references/watermarks.md`](skills/revayat-comic/references/watermarks.md) — حذف واترمارک، و اینکه آیا حذفش با شماست
 - [`references/ocr.md`](skills/revayat-comic/references/ocr.md) — خواندن با چشم خود، و اینکه کِی یک مدل کمک می‌کند
 - [`references/serving.md`](skills/revayat-comic/references/serving.md) — MCP و HTTP روی loopback، برای میزبانی که نمی‌تواند این CLI را اجرا کند
 - [`references/troubleshooting.md`](skills/revayat-comic/references/troubleshooting.md) — خطاهایی که بیشتر با آن‌ها روبه‌رو می‌شوید

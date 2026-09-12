@@ -317,6 +317,10 @@ def translatable(region: dict[str, Any], sfx_policy: str = "keep") -> bool:
         # — using `drop` for this made the census classify real text as a false
         # detection, which is the one thing the census exists to rule out.
         return False
+    if region.get("erase"):
+        # Marked for removal with nothing put back — a watermark, a site stamp.
+        # It is not a hole in the translation, so QA must not report one.
+        return False
     if region["kind"] == "sfx":
         return sfx_policy in {"translate", "bilingual", "annotate"}
     return True
@@ -331,6 +335,7 @@ def translatable(region: dict[str, Any], sfx_policy: str = "keep") -> bool:
 REGION_STATES = (
     "translated",               # carries Persian
     "kept_by_policy",           # deliberately left as drawn — an SFX under `keep`
+    "erased",                   # removed on purpose, with nothing put back
     "dropped_false_detection",  # the reader said there is no text here
     "needs_review",             # seen, not resolved: overflow, or a noted doubt
     "unresolved",               # none of the above — always a QA error
@@ -341,6 +346,16 @@ def region_state(region: dict[str, Any], sfx_policy: str = "keep") -> str:
     """The one terminal state this region reached. Never guesses in favour."""
     if region.get("dropped"):
         return "dropped_false_detection"
+
+    if region.get("erase"):
+        # Erasure is only finished when the cleaner actually acted. `fill` is
+        # `keep` when it declined — a solid free-lettering mask with no
+        # provider, say — and reporting `erased` off the reader's intent alone
+        # would claim a watermark is gone while it is still on the page. That
+        # is exactly the "quietly disappeared" failure this census exists to
+        # rule out, pointed the other way.
+        return "erased" if region.get("fill") not in (None, "none", "keep") \
+            else "needs_review"
 
     typeset = region.get("typeset") or {}
     if typeset.get("status") in {"overflow", "unreliable"}:

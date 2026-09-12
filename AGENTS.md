@@ -42,6 +42,7 @@ tests/              pytest; fixtures are generated, never committed
 | `glossary.py` | names and terms, and the drift check |
 | `falint.py` | Persian typography, mechanically |
 | `clean.py` | tiered repair and the mask-bounded composite |
+| `watermark.py` | one box marked for erasure on every page, for a mark that does not move |
 | `typeset.py` | shaping, balloon-shaped fitting, rendering |
 | `qa.py` | the gate, including the pixel-preservation proof |
 | `export.py` | CBZ, PDF, folder |
