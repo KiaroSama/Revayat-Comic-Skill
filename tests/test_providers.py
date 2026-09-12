@@ -827,3 +827,145 @@ def test_the_lock_lifts_once_the_page_is_merged(detected):
     _translate_page(detected, first, {})
     assert context.unmerged_before(detected, ir.load_doc(detected), second) == []
     assert context.main(["--doc", str(detected), "--page", second]) == 0
+
+
+# --- R05: the context package must be true and bounded -----------------------
+
+def _reply(doc_path, page_id, *, folder=None, text=None):
+    """Write a finished worksheet for one page."""
+    import worksheet
+
+    root = ir.doc_dir(doc_path)
+    folder = Path(folder) if folder else root / "worksheets"
+    sheet = folder / f"{page_id}.txt"
+    body = text if text is not None else ir.read_text(sheet)
+    ir.write_text(folder / f"{page_id}.done.txt", body)
+    return worksheet
+
+
+def test_the_reading_direction_reaches_the_translator(translated):
+    """The importer writes `reading_direction`; the package read `direction`,
+    which is never set, so every chapter was announced as right-to-left. A
+    left-to-right webtoon handed to a translator as RTL gets its balloons
+    described in the wrong order."""
+    import context
+
+    doc = ir.load_doc(translated)
+    doc["meta"]["reading_direction"] = "ltr"
+    ir.save_doc(doc, translated)
+
+    package = context.build(ir.load_doc(translated), doc["pages"][0]["id"])
+    assert package["constraints"]["policy"]["direction"] == "ltr"
+
+
+def test_a_revised_reply_is_reported_as_unmerged(translated):
+    """The guard asked "does this page have any Persian yet". Once a reply had
+    been merged once, editing it and NOT merging again left the page looking
+    finished, and the next page's context quietly used the stale text."""
+    import context
+    import worksheet
+
+    doc_path = translated
+    worksheet.build_document(doc_path)
+    doc = ir.load_doc(doc_path)
+    first, second = doc["pages"][0]["id"], doc["pages"][1]["id"]
+    root = ir.doc_dir(doc_path)
+
+    for page_id in (first, second):
+        _reply(doc_path, page_id)
+    worksheet.merge_document(doc_path)
+    doc = ir.load_doc(doc_path)
+    assert context.unmerged_before(doc_path, doc, second) == []
+
+    sheet = root / "worksheets" / f"{first}.done.txt"
+    ir.write_text(sheet, ir.read_text(sheet) + "\nnote: rethought this one\n")
+    assert context.unmerged_before(doc_path, ir.load_doc(doc_path), second) == [first]
+
+
+def test_a_reply_that_only_partly_applied_is_reported_as_unmerged(translated):
+    """A reply carrying an id that is not on the page is not a merged page; it
+    is a page whose reader answered something else. Some regions landed, so the
+    old "has any Persian" test said it was done."""
+    import context
+    import worksheet
+
+    doc_path = translated
+    worksheet.build_document(doc_path)
+    doc = ir.load_doc(doc_path)
+    first, second = doc["pages"][0]["id"], doc["pages"][1]["id"]
+    root = ir.doc_dir(doc_path)
+
+    _reply(doc_path, second)
+    sheet = ir.read_text(root / "worksheets" / f"{first}.txt")
+    _reply(doc_path, first,
+           text=sheet + "\n@@ p9999r001 speech horizontal\nfa: از کجا آمد؟\n")
+
+    report = worksheet.merge_document(doc_path)
+    assert report["unknown_regions"], "the fixture did not produce a bad id"
+    assert context.unmerged_before(doc_path, ir.load_doc(doc_path), second) == [first]
+
+
+def test_a_custom_worksheet_folder_is_honoured_by_the_guard(detected, tmp_path):
+    """`worksheet build --out` puts the sheets somewhere else and `merge` takes
+    the same argument, but the guard only ever looked in the default folder — so
+    with a custom folder it reported "nothing unmerged" every time.
+
+    Run against a chapter with no Persian in it yet, so the only thing that can
+    make the guard speak is finding the reply."""
+    import context
+    import worksheet
+
+    elsewhere = tmp_path / "my-sheets"
+    worksheet.build_document(detected, elsewhere)
+    doc = ir.load_doc(detected)
+    first, second = doc["pages"][0]["id"], doc["pages"][1]["id"]
+    ir.write_text(elsewhere / f"{first}.done.txt",
+                  ir.read_text(elsewhere / f"{first}.txt"))
+
+    assert context.unmerged_before(detected, doc, second) == [], (
+        "the default folder holds no reply, so there is nothing to report there")
+    assert context.unmerged_before(detected, doc, second,
+                                   worksheets=elsewhere) == [first]
+
+
+def test_the_package_reports_its_real_size(translated):
+    """`budget.characters_used` counted the dialogue and nothing else, while the
+    glossary, the speakers and the notes went in unbounded beside it. The
+    advertised 3000 characters described a package of over 200,000."""
+    import context
+
+    doc = ir.load_doc(translated)
+    doc["meta"]["scene"] = "س" * 4000
+    doc["meta"]["style_notes"] = ["ی" * 4000]
+    doc["meta"]["series_notes"] = ["ز" * 4000]
+    doc["glossary"] = {"entries": {
+        f"term{n}": {"target": "ت" * 60, "locked": True} for n in range(200)
+    }}
+    ir.save_doc(doc, translated)
+
+    package = context.build(ir.load_doc(translated), doc["pages"][1]["id"],
+                            budget=3000)
+    budget = package["budget"]
+    real = len(ir.dumps(package))
+
+    assert "package_characters" in budget, "the real size is not reported"
+    assert abs(budget["package_characters"] - real) <= len(str(real)) * 4
+    assert budget["sections"], "the per-section sizes are not reported"
+
+
+def test_a_locked_term_is_never_dropped_to_fit(translated):
+    """Truncating a canonical constraint is the one thing the budget may not
+    do: a locked term that silently vanishes is a name the chapter then spells
+    two ways."""
+    import context
+
+    doc = ir.load_doc(translated)
+    doc["glossary"] = {"entries": {
+        f"term{n}": {"target": "ت" * 80, "locked": True} for n in range(300)
+    }}
+    ir.save_doc(doc, translated)
+
+    package = context.build(ir.load_doc(translated), doc["pages"][1]["id"],
+                            budget=1)
+    assert len(package["constraints"]["glossary"]) == 300
+    assert package["budget"].get("constraints_over_budget") is True

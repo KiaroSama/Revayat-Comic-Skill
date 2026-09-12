@@ -29,6 +29,7 @@ back in.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import re
 import sys
 from pathlib import Path
@@ -414,6 +415,11 @@ def _add_region(page: dict[str, Any], slug: str, block: dict[str, str],
     return bool((region.get("target_text") or "").strip())
 
 
+def reply_digest(text: str) -> str:
+    """A stable name for one finished worksheet's contents."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
 def merge_document(
     doc_path: str | Path,
     worksheets: str | Path | None = None,
@@ -451,6 +457,10 @@ def merge_document(
 
     by_page = {page["id"]: page for page in doc["pages"]}
     consumed: list[Path] = []
+    #: Which report lists mean "this page's reply did not fully land".
+    trouble = ("missing_regions", "unknown_regions", "duplicate_regions",
+               "empty_translation", "bad_added_regions",
+               "conflicting_actions")
     for page_id, page in by_page.items():
         if not page.get("regions"):
             continue
@@ -460,6 +470,7 @@ def merge_document(
             continue
 
         text = ir.read_text(path)
+        before = {key: len(report[key]) for key in trouble}
         stamped = FINGERPRINT.search(text)
         if stamped and stamped.group("value") != fingerprint and not force:
             report["stale_worksheets"].append(page_id)
@@ -495,6 +506,13 @@ def merge_document(
         for slug in additions:
             if _add_region(page, slug[1:] or "added", blocks[slug], report):
                 report["merged"] += 1
+        # What was consumed, and whether it landed whole. Without this the
+        # only way to ask "is this page merged" was "does it hold any
+        # Persian yet" — which says yes to a page whose reply was edited
+        # afterwards, and yes to one whose reply was only half applied.
+        page["worksheet_digest"] = reply_digest(text)
+        page["worksheet_clean"] = all(
+            len(report[key]) == before[key] for key in trouble)
         if additions:
             # A new box changes what comes before what, and it has no mask yet.
             ir.assign_reading_order(page, direction)
