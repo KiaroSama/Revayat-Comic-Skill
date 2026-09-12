@@ -8,6 +8,7 @@
 /.cline/
 /CLAUDE.local.md
 /graphify-out/
+/.codebase-memory/
 # Advisor output: audit findings and executor handoff plans. Working notes
 # about this repository rather than part of the skill anyone installs.
 /plans/
