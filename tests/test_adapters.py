@@ -350,3 +350,117 @@ def test_pointing_it_somewhere_makes_it_usable(monkeypatch, endpoint):
     report = adapters.register_all()
     assert adapters.HostedTranslation.name in report["installed"]
     assert adapters.HostedImageEdit.name in report["installed"]
+
+
+# --- R14: the key may not follow a redirect, and a body has a size -----------
+
+class _Redirector:
+    """Two loopback servers: the first sends you to the second.
+
+    Both on 127.0.0.1, so nothing leaves the machine. The second records every
+    header it is given, which is how we see whether the key travelled.
+    """
+
+    def __init__(self, status=302):
+        self.seen = []
+        recorder = self
+
+        class Second(BaseHTTPRequestHandler):
+            def do_GET(self):
+                recorder.seen.append(dict(self.headers))
+                self._answer()
+
+            def do_POST(self):
+                recorder.seen.append(dict(self.headers))
+                self._answer()
+
+            def _answer(self):
+                body = ('{"choices": [{"message": {"content": "بله"}}]}'
+                        ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        self.second = ThreadingHTTPServer(("127.0.0.1", 0), Second)
+        self.second_port = self.second.server_address[1]
+        target = f"http://127.0.0.1:{self.second_port}/v1/chat/completions"
+
+        class First(BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.send_response(status)
+                self.send_header("Location", target)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        self.first = ThreadingHTTPServer(("127.0.0.1", 0), First)
+        self.first_port = self.first.server_address[1]
+
+    def __enter__(self):
+        import threading
+
+        for server in (self.first, self.second):
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+        return self
+
+    def __exit__(self, *exc):
+        for server in (self.first, self.second):
+            server.shutdown()
+            server.server_close()
+
+
+def test_the_key_does_not_follow_a_redirect_to_another_origin(monkeypatch):
+    """`_may_carry_a_key` was asked once, about the URL we chose. urllib then
+    follows 301/302/303 on its own and re-sends the headers, so a redirect
+    handed the bearer token to an address nothing had checked."""
+    with _Redirector() as pair:
+        monkeypatch.setenv(adapters.API_BASE, f"http://127.0.0.1:{pair.first_port}/v1")
+        monkeypatch.setenv(adapters.API_KEY, "sk-not-a-real-key")
+        monkeypatch.setenv(adapters.TRANSLATION_MODEL, "a-model")
+
+        with pytest.raises(Exception):
+            adapters.HostedTranslation().translate("\u3084\u3081\u308d", context={})
+
+        leaked = [headers for headers in pair.seen
+                  if "Authorization" in headers]
+        assert not leaked, "the key was re-sent to the redirect target"
+
+
+def test_a_response_body_is_bounded(monkeypatch):
+    """`response.read()` had no limit, so a hostile or broken endpoint could
+    hand back gigabytes and the process would take all of it."""
+    import threading
+
+    payload = b'{"choices": [{"message": {"content": "' + b'x' * (3 * 1024 * 1024) + b'"}}]}'
+
+    class Flood(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Flood)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        monkeypatch.setenv(adapters.API_BASE,
+                           f"http://127.0.0.1:{server.server_address[1]}/v1")
+        monkeypatch.setenv(adapters.TRANSLATION_MODEL, "a-model")
+        monkeypatch.setattr(adapters, "MAX_RESPONSE_BYTES", 64 * 1024)
+
+        with pytest.raises(Exception, match="too large|bytes"):
+            adapters.HostedTranslation().translate("\u3084\u3081\u308d", context={})
+    finally:
+        server.shutdown()
+        server.server_close()
