@@ -158,7 +158,12 @@ def doctor() -> dict[str, object]:
     # means the typesetter would draw disconnected letters in the wrong order,
     # which is worse than refusing, because it looks like output.
     can_shape = persian.get("raqm") or persian.get("fallback_installed")
-    ready = not missing and bool(persian.get("font")) and bool(can_shape)
+    # `font_draws_persian` was computed, reported, and then never consulted, so
+    # a machine whose only face renders Persian as boxes answered `ready: true`
+    # and exited 0. A font that cannot write the language is not a font for this.
+    draws = persian.get("font_draws_persian")
+    ready = (not missing and bool(persian.get("font")) and bool(can_shape)
+             and draws is not False)
     return {
         "python": sys.version.split()[0],
         "required": required,
