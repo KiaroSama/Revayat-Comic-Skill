@@ -150,6 +150,52 @@ def _may_carry_a_key(url: str) -> bool:
         return False
 
 
+#: The largest answer worth reading. `response.read()` had no limit at all, so
+#: a broken or hostile endpoint could hand back gigabytes and this process would
+#: take every byte: a 64 MiB reply measured 299 MiB of peak allocation. No real
+#: answer from a chat or image endpoint approaches this.
+MAX_RESPONSE_BYTES = 64 * 1024 * 1024
+
+
+def _origin(url: str) -> tuple[str, str, int | None]:
+    import urllib.parse
+
+    parts = urllib.parse.urlsplit(url)
+    return (parts.scheme, (parts.hostname or "").lower(), parts.port)
+
+
+def _redirect_guard():
+    """A redirect handler that asks the scheme question again at every hop.
+
+    `_may_carry_a_key` is consulted once, about the URL we chose. urllib then
+    follows 301, 302 and 303 by itself and re-sends the headers, so a redirect
+    to another origin — or an https -> http downgrade — handed the bearer token
+    to an address nothing had ever checked. Both were reproduced on loopback.
+
+    Refusing rather than quietly stripping the header: a request that silently
+    loses its credential comes back as a confusing 401, and the operator should
+    know their endpoint is redirecting them somewhere else.
+    """
+    import urllib.parse
+    import urllib.request
+
+    class _Guard(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            if req.has_header("Authorization"):
+                target = urllib.parse.urljoin(req.full_url, newurl)
+                if _origin(target) != _origin(req.full_url):
+                    host = urllib.parse.urlsplit(target).hostname or target
+                    raise RuntimeError(
+                        f"refusing to follow a redirect to {host}: the request "
+                        f"carries {API_KEY} and that is a different origin from "
+                        f"the one {API_BASE} names. Point {API_BASE} straight at "
+                        f"the endpoint that answers."
+                    )
+            return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+    return urllib.request.build_opener(_Guard)
+
+
 def _post(path: str, payload: dict, timeout: float = 90.0) -> dict:
     import json
     import os
@@ -177,8 +223,18 @@ def _post(path: str, payload: dict, timeout: float = 90.0) -> dict:
     request = urllib.request.Request(
         endpoint, data=json.dumps(payload).encode("utf-8"),
         headers=headers, method="POST")
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
+    opener = _redirect_guard()
+    with opener.open(request, timeout=timeout) as response:
+        # One byte over the limit is enough to know it is over the limit; there
+        # is no reason to hold the rest in memory to find out.
+        body = response.read(MAX_RESPONSE_BYTES + 1)
+    if len(body) > MAX_RESPONSE_BYTES:
+        raise RuntimeError(
+            f"the endpoint answered with more than {MAX_RESPONSE_BYTES} bytes. "
+            "That is not a translation or a page; check what "
+            f"{API_BASE} is pointing at."
+        )
+    return json.loads(body.decode("utf-8"))
 
 
 class HostedTranslation:
