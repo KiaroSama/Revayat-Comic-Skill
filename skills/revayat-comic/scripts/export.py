@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 import pageir as ir
+from pageir import IMAGE_SUFFIXES
 
 FORMATS = ("cbz", "pdf", "dir")
 
@@ -207,7 +208,7 @@ def _export_dir(doc: dict[str, Any], root: Path, out: Path,
     strangers = sorted(
         child.name for child in out.iterdir()
         if child.is_file()
-        and child.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
+        and child.suffix.lower() in IMAGE_SUFFIXES
         and child.name not in planned
     )
     if strangers:

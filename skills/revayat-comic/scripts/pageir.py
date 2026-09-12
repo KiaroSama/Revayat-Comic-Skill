@@ -29,6 +29,13 @@ import tempfile
 from pathlib import Path
 from typing import Any, Iterator, Sequence
 
+#: What counts as a page image, for every stage. This lived in five places
+#: and only the importer's copy listed BMP, TIFF and GIF — so a BMP chapter
+#: imported cleanly and was then invisible to the gate, which found 0 pages
+#: in a package holding 2 and reported `archive-page-count`.
+IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".webp", ".bmp",
+                            ".tif", ".tiff", ".gif"})
+
 SCHEMA_VERSION = 1
 TOOL_NAME = "revayat-comic"
 TOOL_VERSION = "1.0.0"

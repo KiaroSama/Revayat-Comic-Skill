@@ -512,3 +512,115 @@ def test_an_unreviewed_low_confidence_region_still_warns(finished):
 
     assert "low-confidence-region" in _codes_for(
         qa.check_document(finished, strict=True), region["id"])
+
+
+# --- R11: the gate has to establish readiness, not just find nothing ---------
+
+def test_persian_with_no_rendered_page_does_not_pass(finished):
+    """Every artwork check sat behind `if final:`, and the per-region check only
+    fired on a `typeset` record that existed. Delete the renders and a chapter
+    with nine translated regions and nothing drawn reported `ok: true` — with
+    `--strict` as well."""
+    root = ir.doc_dir(finished)
+    doc = ir.load_doc(finished)
+    for page in doc["pages"]:
+        if page.get("final"):
+            (root / page["final"]).unlink()
+        page.pop("final", None)
+        page.pop("writable", None)
+        for region in page.get("regions", []):
+            region.pop("typeset", None)
+    ir.save_doc(doc, finished)
+
+    report = qa.check_document(finished)
+    assert not report["ok"], "a chapter with nothing rendered passed the gate"
+    assert "page-not-rendered" in report["by_code"]
+
+
+def test_the_changed_pixel_share_is_out_of_the_real_page(finished):
+    """`delta` has already been collapsed across the three channels, so
+    `delta.size // 3` is a third of the page and every reported share came out
+    three times too big."""
+    root = ir.doc_dir(finished)
+    page = ir.load_doc(finished)["pages"][0]
+    changed, total, _ = qa.compare_outside_mask(
+        root / page["image"], root / page["final"],
+        root / page["writable"] if page.get("writable") else None)
+    assert total == page["width"] * page["height"], (
+        f"denominator {total} for a {page['width']}x{page['height']} page")
+
+
+def test_a_cleaner_that_did_nothing_is_caught(translated):
+    """The surviving-ink survey looked only OUTSIDE the authorised mask, so a
+    cleaner that left every original letter exactly where it was measured 0.000
+    and the gate said the page was fine."""
+    import shutil
+
+    import clean
+    import typeset
+
+    clean.clean_document(translated)
+    root = ir.doc_dir(translated)
+    doc = ir.load_doc(translated)
+    # The cleaned page, replaced by the untouched original: a perfect no-op.
+    for page in doc["pages"]:
+        shutil.copyfile(root / page["image"], root / page["clean"])
+    ir.save_doc(doc, translated)
+    typeset.typeset_document(translated)
+
+    report = qa.check_document(translated)
+    assert "source-text-survived" in report["by_code"], (
+        "a cleaner that did nothing at all passed the surviving-ink check")
+
+
+def test_a_bubble_of_punctuation_is_not_reported_as_untranslated(translated):
+    """`…`, `!!!` and a numeric-only balloon are legitimately left as they are:
+    there is no word in them to translate. They were filed as `not-persian`,
+    which sends a translator to fix something that is already right."""
+    doc = ir.load_doc(translated)
+    regions = [region for _, region in ir.iter_regions(doc)
+               if region["kind"] in {"speech", "thought", "narration"}][:3]
+    for region, text in zip(regions, ["…", "!!!", "123"]):
+        region["source_text"] = text
+        region["target_text"] = text
+    ir.save_doc(doc, translated)
+
+    report = qa.check_document(translated)
+    # `findings.add(code, where, detail)` — the key is `where`. Reading
+    # `region` here made the assertion true whatever the gate reported.
+    blamed = [item for item in report["findings"]
+              if item.get("code") == "not-persian"
+              and item.get("where") in {r["id"] for r in regions}]
+    assert not blamed, f"punctuation reported as not Persian: {blamed}"
+
+
+def test_real_untranslated_text_is_still_rejected(translated):
+    """The allowance above must not become a hole: a balloon left in English is
+    still untranslated."""
+    doc = ir.load_doc(translated)
+    # Not simply the first region: that one is a sound effect, and the SFX
+    # policy sends it down another branch before this check is reached.
+    region = next(region for _, region in ir.iter_regions(doc)
+                  if region["kind"] in {"speech", "thought", "narration"})
+    region["source_text"] = "Stop right there"
+    region["target_text"] = "Stop right there"
+    ir.save_doc(doc, translated)
+
+    report = qa.check_document(translated)
+    assert any(item.get("where") == region["id"]
+               and item.get("code") in {"not-persian", "untranslated-region"}
+               for item in report["findings"]), report["findings"][:4]
+
+
+def test_the_accepted_image_formats_are_defined_once(tmp_path):
+    """Import accepted `.bmp .tif .tiff .gif` and every other list in the tree
+    accepted four formats, so a BMP chapter imported cleanly and was then
+    invisible to the gate: `found=0`, `archive-page-count`."""
+    import clean as clean_module
+    import export as export_module
+    import readers
+
+    shared = set(readers.IMAGE_SUFFIXES)
+    assert set(qa.IMAGE_SUFFIXES) == shared
+    assert set(export_module.IMAGE_SUFFIXES) == shared
+    assert set(clean_module.IMAGE_SUFFIXES) == shared

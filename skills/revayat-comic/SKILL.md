@@ -424,6 +424,7 @@ $PY $SKILL_DIR/scripts/revayat-comic.py qa check --doc $WORK/comic.json
 | `source-modified` | an original page file was edited after import | restore it, or re-import |
 | `page-missing` / `page-size-changed` | an output is gone or resized | re-run the stage that makes it |
 | `untranslated-region` | a region has no Persian | translate it, or `drop: yes` |
+| `page-not-rendered` | the page carries Persian that was never drawn onto it | run `typeset`; it is a draft until you do |
 | `source-script-left` | Japanese, Korean or Chinese survives inside the Persian | re-do that region |
 | `not-persian` | the target text is not Persian at all | re-do that region |
 | `text-overflow` | it does not fit at the minimum size | shorten the translation |
