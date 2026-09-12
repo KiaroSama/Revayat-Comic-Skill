@@ -11,6 +11,9 @@ _outside_the_mask`. Everything else in this file supports it.
 
 from __future__ import annotations
 
+import json
+import threading
+import time
 from pathlib import Path
 
 import numpy as np
@@ -130,6 +133,182 @@ def test_a_failed_call_still_leaves_a_trace():
     assert providers.apply(region, "source_text", result) == "failed"
     assert region["provenance"][-1]["status"] == "error"
     assert not region.get("source_text")
+
+
+# --- the return contract -----------------------------------------------------
+# A provider is somebody else's code, and the `(payload, confidence)` tuple it
+# may return is a contract. Checking only that it is a 2-tuple is what lets a
+# document be corrupted: the floor in `apply` is a comparison, `NaN < floor` is
+# False, so a NaN confidence cleared every floor, was applied, and serialised
+# into comic.json as a bare `NaN` that no standard JSON parser will read back.
+
+class _Confidence:
+    """Returns a fixed reading with whatever second element it was built with."""
+
+    name = "out-of-contract"
+
+    def __init__(self, confidence):
+        self.confidence = confidence
+
+    def read(self, crop_path: str, language: str):
+        return "やめろ", self.confidence
+
+
+@pytest.mark.parametrize("confidence", [
+    "0.92",              # a string: raised TypeError out of `apply`
+    float("nan"),        # cleared every floor, and corrupted the document
+    float("inf"),
+    float("-inf"),
+    5.0,                 # no range check at all
+    -1.0,
+    b"binary",           # a second payload mistaken for a confidence
+])
+def test_a_confidence_outside_the_contract_is_a_failed_call(confidence):
+    result = providers.call(_Confidence(confidence), "ocr", "x.png", "ja")
+    assert result.ok is False and result.status == "error"
+    assert "confidence" in result.detail
+    # And `apply` — where a string confidence used to raise TypeError on
+    # `result.confidence < min_confidence` — takes it as an ordinary failure.
+    region = _region()
+    assert providers.apply(region, "source_text", result,
+                           min_confidence=0.6) == "failed"
+    assert not region["source_text"]
+
+
+def test_a_confidence_at_either_end_of_the_range_is_still_accepted():
+    """The check is a contract, not a tightening: 0 and 1 are real answers."""
+    for confidence in (0.0, 0.5, 1.0):
+        result = providers.call(_Confidence(confidence), "ocr", "x.png", "ja")
+        assert result.ok is True and result.confidence == confidence
+
+
+def test_no_provider_answer_can_put_a_bare_nan_in_the_document():
+    """THE WORST ONE, because it is not a failed stage — it is a chapter that
+    will not load again. `NaN < min_confidence` is False, so the floor let it
+    through, `apply` wrote it, and `ir.dumps` emitted a bare `NaN`."""
+    def strict(token):
+        raise AssertionError(f"comic.json would carry a bare {token}")
+
+    region = _region()
+    result = providers.call(_Confidence(float("nan")), "ocr", "x.png", "ja")
+    providers.apply(region, "source_text", result, min_confidence=0.6)
+    json.loads(ir.dumps(region), parse_constant=strict)
+
+
+def test_a_field_locked_while_empty_is_still_locked():
+    """`locked` was only consulted once a field already had content, so a
+    region a person deliberately left empty — an unreadable scribble, a balloon
+    that is silent — read as one nobody had reached yet, and was overwritten."""
+    region = _region(locked=True)
+    assert region["source_text"] == ""
+    result = providers.call(providers.FakeOCR(text="やめろ"), "ocr", "x.png", "ja")
+    assert providers.apply(region, "source_text", result) == "needs_review"
+    assert region["source_text"] == "", "a deliberate empty was overwritten"
+    assert region["provenance"][-1]["outcome"] == "disagreed"
+    assert any("read this as" in note for note in region["review"])
+
+
+def test_an_empty_field_nobody_locked_is_still_filled():
+    """The other half of the same rule: it is about `locked`, not about empty."""
+    region = _region()
+    result = providers.call(providers.FakeOCR(text="やめろ"), "ocr", "x.png", "ja")
+    assert providers.apply(region, "source_text", result) == "applied"
+    assert region["source_text"] == "やめろ"
+
+
+def test_a_factory_that_cannot_build_is_a_refusal_not_a_traceback(monkeypatch):
+    """A provider that needs a key and has not got one raised out of `get`, out
+    of the CLI, and out of the MCP loop with it. Construction failure is a
+    failure like any other: the same `ValueError` an unknown name already
+    raises, which every caller of a stage already turns into a result."""
+    def needs_a_key():
+        raise RuntimeError("REVAYAT_KEY is not set")
+
+    monkeypatch.setitem(providers._REGISTRY["ocr"], "hosted", needs_a_key)
+    with pytest.raises(ValueError, match="hosted") as raised:
+        providers.get("ocr", "hosted")
+    assert "REVAYAT_KEY is not set" in str(raised.value)
+
+
+_TIMED_OUT_CALL = '''\
+import sys
+import time
+
+sys.path.insert(0, sys.argv[1])
+import providers
+
+
+class Slow:
+    name = "slow"
+
+    def read(self, crop_path, language):
+        time.sleep(5)
+        return "too late", 0.9
+
+
+result = providers.call(Slow(), "ocr", "x.png", "ja", timeout=0.25)
+assert result.status == "timeout", result
+print("returned")
+'''
+
+
+def test_a_timed_out_call_does_not_hold_the_process_open(tmp_path):
+    """Measured on a subprocess on purpose: the call itself always returned on
+    time. What did not return was the *process* — a `ThreadPoolExecutor`'s
+    workers are not daemons and `shutdown(wait=False)` does not detach them, so
+    the interpreter joined a provider nobody was waiting for any more."""
+    import subprocess
+    import sys
+
+    child = tmp_path / "timed_out_call.py"
+    child.write_text(_TIMED_OUT_CALL, encoding="utf-8")
+    scripts = str(Path(providers.__file__).resolve().parent)
+
+    started = time.monotonic()
+    done = subprocess.run([sys.executable, str(child), scripts],
+                          capture_output=True, text=True, timeout=60)
+    elapsed = time.monotonic() - started
+
+    assert done.returncode == 0, done.stderr
+    assert "returned" in done.stdout
+    assert elapsed < 2.5, (f"a call that timed out in 0.25s held the process "
+                           f"open for {elapsed:.2f}s")
+
+
+def test_outstanding_calls_are_capped():
+    """A timed-out call leaves its worker running; that is the honest bound.
+    What must not happen is an unbounded pile of them — 25 sequential timeouts
+    left 25 live workers, and nothing anywhere said stop."""
+    release = threading.Event()
+
+    class Blocked:
+        name = "blocked"
+
+        def read(self, crop_path, language):
+            release.wait(30)
+            return "late", 0.5
+
+    try:
+        results = [
+            providers.call(Blocked(), "ocr", "x.png", "ja", timeout=0.05)
+            for _ in range(providers.MAX_OUTSTANDING_CALLS + 2)
+        ]
+        refused = [r for r in results if r.status == "error"]
+        assert refused, "nothing was refused; outstanding calls are unbounded"
+        assert all("still running" in r.detail for r in refused)
+        assert (sum(r.status == "timeout" for r in results)
+                <= providers.MAX_OUTSTANDING_CALLS)
+        assert all(r.ok is False for r in results)
+    finally:
+        release.set()
+
+    # And the bound is not a ratchet: a permit comes back when its worker does.
+    deadline = time.monotonic() + 5.0
+    later = providers.call(providers.FakeOCR(), "ocr", "x.png", "ja", timeout=1.0)
+    while not later.ok and time.monotonic() < deadline:
+        later = providers.call(providers.FakeOCR(), "ocr", "x.png", "ja",
+                               timeout=1.0)
+    assert later.ok, f"the cap never recovered: {later.detail}"
 
 
 # --- the guarantee -----------------------------------------------------------
