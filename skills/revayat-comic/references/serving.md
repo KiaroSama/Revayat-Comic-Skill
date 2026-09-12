@@ -49,6 +49,20 @@ model looking at the crop sheets, and that model is the one driving this server,
 not something the server can call. What these tools give it is the other fifteen
 stages without a shell.
 
+## One stage at a time
+
+**Stage runs are serialised inside the server, so concurrent tool calls queue
+rather than overlap.** That is not a performance choice waiting to be undone: a
+stage returns its report by printing to stdout, the capture replaces the
+process-global `sys.stdout`, and the HTTP transport is a `ThreadingHTTPServer`.
+Two stages capturing at once each restore the other's stdout, and the caller
+receives someone else's report with nothing raising — a wrong answer that parses
+is the worst shape a transport can fail in.
+
+In practice the queue costs little: these stages are CPU-bound image work that
+would contend anyway. If you ever need real parallelism, the fix is to stop
+using process-global stdout as the return channel, not to remove the lock.
+
 ## Security
 
 Both transports run pipeline stages with the server process's file access.
