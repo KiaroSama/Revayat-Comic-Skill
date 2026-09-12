@@ -555,13 +555,46 @@ def typeset_page(
         # `_restore` needs the untouched page, not the cleaned one.
         region["_page_image"] = page["image"]
     clean_rgb = np.asarray(canvas)
+    # An explicit copy, kept as the reference for "did this line land where
+    # it was allowed to". `canvas` is drawn on in place below.
+    before_draw = np.array(canvas)
     draw = ImageDraw.Draw(canvas)
     size = (page["width"], page["height"])
 
+    # What this page is ALLOWED to have changed. It is built here, from the
+    # geometry a person or the detector approved, and it is never widened
+    # afterwards.
+    #
+    # It used to start as the lettering mask and then absorb the bounding box
+    # of every line that was actually drawn. That made the preservation proof
+    # circular: whatever the typesetter painted became, by definition, the
+    # area it had been allowed to paint, so an overflow could not fail the
+    # gate. Measured on a page whose text was shoved 260 px off its balloon,
+    # the authorised area grew from 60,051 px to 531,746 — about a third of
+    # the page — and `qa` reported no error at all.
+    #
+    # The balloon interior is the right authority rather than the lettering
+    # mask: Persian set into a repainted balloon legitimately covers paper
+    # the source glyphs never touched, and that paper is inside the balloon.
     writable = np.zeros((page["height"], page["width"]), np.uint8)
     union = page.get("mask")
     if union:
         writable = np.maximum(writable, mask_tools.load_mask(root / union))
+    for region in page.get("regions", []):
+        if region.get("dropped") or not (region.get("target_text") or "").strip():
+            continue
+        if region.get("balloon"):
+            interior = mask_tools.balloon_interior(
+                before_draw, region["balloon"],
+                region.get("polarity", "light"), size,
+                inset=mask_tools.OUTLINE_INSET,
+            )
+            writable = np.maximum(writable, np.asarray(interior, np.uint8))
+        elif region.get("mask_box"):
+            # Free lettering has no balloon, so the authorised area is the
+            # box the region was masked at — approved geometry either way.
+            bx, by, bw, bh = region["mask_box"]
+            writable[by:by + bh, bx:bx + bw] = 255
 
     placed = 0
     overflow: list[str] = []
@@ -686,12 +719,25 @@ def typeset_page(
                 "shaping": shaper.mode,
             }
 
-        for x0, y0, x1, y1 in painted:
-            pad = 2
-            x0, y0 = max(0, x0 - pad), max(0, y0 - pad)
-            x1 = min(page["width"], x1 + pad)
-            y1 = min(page["height"], y1 + pad)
-            writable[y0:y1, x0:x1] = 255
+        # The check that replaces the old widening. Compare the pixels that
+        # actually changed against the area this region was authorised for,
+        # and say so when ink landed outside it. A bounding box would be too
+        # crude: the corners of a box around a line of Persian sit outside
+        # the balloon on a curve, while the ink itself does not.
+        if painted:
+            x0 = max(0, min(box[0] for box in painted))
+            y0 = max(0, min(box[1] for box in painted))
+            x1 = min(page["width"], max(box[2] for box in painted))
+            y1 = min(page["height"], max(box[3] for box in painted))
+            if x1 > x0 and y1 > y0:
+                after = np.asarray(canvas)[y0:y1, x0:x1]
+                changed = (before_draw[y0:y1, x0:x1] != after).any(axis=2)
+                stray = int((changed & (writable[y0:y1, x0:x1] == 0)).sum())
+                if stray:
+                    record["status"] = "overflow"
+                    record["outside_authorised"] = stray
+                    if region["id"] not in overflow:
+                        overflow.append(region["id"])
 
         region["typeset"] = record
         placed += 1
