@@ -607,3 +607,68 @@ def test_a_reply_with_contradictory_actions_does_not_half_apply(detected):
     assert report["conflicting_actions"], "the fixture did not conflict"
     assert _page_of(detected, page["id"]) == before, (
         "a contradictory reply was partly applied anyway")
+
+
+# --- R03: staleness is a fact about one page ---------------------------------
+
+def test_a_change_on_one_page_does_not_stale_another_pages_worksheet(detected):
+    """The stamp was a hash of the WHOLE document, so re-detecting page 1 — or
+    merely adding a region to it — told the reader that page 2's finished
+    translation was stale and had to be done again. Nothing about page 2 had
+    moved. Staleness is a fact about one page and has to be stamped per page."""
+    worksheet.build_document(detected)
+    doc = ir.load_doc(detected)
+    second = doc["pages"][1]["id"]
+
+    # A finished reply for page 2, written before anything changes.
+    _finish(detected, second)
+
+    # Page 1 changes: a region is reclassified, which is an ordinary correction.
+    doc = ir.load_doc(detected)
+    doc["pages"][0]["regions"][0]["kind"] = "narration"
+    ir.save_doc(doc, detected)
+
+    report = worksheet.build_document(detected)
+    assert report.get("refused") != "stale-worksheets", (
+        f"page 2's reply was declared stale by a change on page 1: {report}")
+
+    merged = worksheet.merge_document(detected)
+    assert second not in merged["stale_worksheets"], merged["stale_worksheets"]
+
+
+def test_a_reply_written_against_this_page_s_old_regions_is_still_refused(detected):
+    """The guard that matters must survive the change: a reply written before
+    THIS page was re-detected refers to region ids that have moved, and merging
+    it attaches dialogue to the wrong balloons."""
+    worksheet.build_document(detected)
+    doc = ir.load_doc(detected)
+    page = doc["pages"][0]
+    _finish(detected, page["id"])
+
+    # This page is re-detected: its own regions move.
+    doc = ir.load_doc(detected)
+    doc["pages"][0]["regions"][0]["bbox"] = [5, 5, 40, 40]
+    ir.save_doc(doc, detected)
+
+    merged = worksheet.merge_document(detected)
+    assert page["id"] in merged["stale_worksheets"], (
+        "a reply written against this page's old regions was merged anyway")
+
+
+def test_a_worksheet_stamped_by_an_older_build_is_still_readable(detected):
+    """Worksheets already on disk carry the document-wide stamp. Changing the
+    scheme must not declare a reader's finished work stale on the spot."""
+    worksheet.build_document(detected)
+    doc = ir.load_doc(detected)
+    page = doc["pages"][0]
+    old_stamp = ir.fingerprint(doc)
+
+    text = ir.read_text(_sheets(detected) / f"{page['id']}.txt")
+    text = worksheet.FINGERPRINT.sub(f"# fingerprint: {old_stamp}", text, count=1)
+    _finish(detected, page["id"], text)
+    for other in doc["pages"][1:]:
+        _finish(detected, other["id"])
+
+    merged = worksheet.merge_document(detected)
+    assert not merged["stale_worksheets"], (
+        f"an older stamp was treated as stale: {merged['stale_worksheets']}")

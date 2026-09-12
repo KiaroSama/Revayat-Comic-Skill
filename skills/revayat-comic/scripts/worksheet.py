@@ -138,6 +138,8 @@ def page_worksheet(doc: dict[str, Any], page: dict[str, Any], fingerprint: str) 
     lines = [
         f"# {meta.get('title') or 'comic'} — page {page['id']} "
         f"({page['index'] + 1} of {len(doc['pages'])})",
+        # This PAGE's fingerprint. A document-wide one made a correction on
+        # any page declare every other page's finished reply stale.
         f"# fingerprint: {fingerprint}",
         "#",
         "# Look at these before writing anything:",
@@ -211,6 +213,25 @@ def page_worksheet(doc: dict[str, Any], page: dict[str, Any], fingerprint: str) 
     return "\n".join(lines) + "\n"
 
 
+def _is_stale(reply: Path, pages: dict[str, dict[str, Any]],
+              document_stamp: str) -> bool:
+    """Whether a finished worksheet was written against different regions.
+
+    Compared against the page it belongs to. A stamp equal to the document-wide
+    hash is accepted as well: worksheets already on disk carry that, and telling
+    a reader their finished work is stale because the scheme changed underneath
+    them would be the same defect wearing a different hat.
+    """
+    stamped = FINGERPRINT.search(ir.read_text(reply))
+    if not stamped:
+        return False
+    value = stamped.group("value")
+    if value == document_stamp:
+        return False
+    page = pages.get(reply.name.split(".", 1)[0])
+    return page is None or value != ir.page_fingerprint(page)
+
+
 def build_document(
     doc_path: str | Path,
     out: str | Path | None = None,
@@ -223,13 +244,11 @@ def build_document(
     root = ir.doc_dir(doc_path)
     folder = Path(out) if out else root / "worksheets"
     fingerprint = ir.fingerprint(doc)
+    by_id = {page["id"]: page for page in doc["pages"]}
 
     existing = sorted(folder.glob("*.done.txt")) if folder.exists() else []
-    stale = [
-        path.name for path in existing
-        if (match := FINGERPRINT.search(ir.read_text(path)))
-        and match.group("value") != fingerprint
-    ]
+    stale = [path.name for path in existing
+             if _is_stale(path, by_id, fingerprint)]
     if stale and not force:
         return {
             "refused": "stale-worksheets",
@@ -254,7 +273,8 @@ def build_document(
             # reported under `pages_without_text` so the count stays honest.
             empty.append(page["id"])
         target = folder / f"{page['id']}.txt"
-        ir.write_text(target, page_worksheet(doc, page, fingerprint))
+        ir.write_text(target, page_worksheet(doc, page,
+                                             ir.page_fingerprint(page)))
         written.append(str(target.relative_to(root)) if target.is_relative_to(root)
                        else str(target))
 
@@ -262,6 +282,8 @@ def build_document(
         "worksheets": written,
         "count": len(written),
         "pages_without_text": empty,
+        "page_fingerprints": {page["id"]: ir.page_fingerprint(page)
+                              for page in doc["pages"]},
         "fingerprint": fingerprint,
         "next": "Translate each one to <page>.done.txt, then run `worksheet merge`.",
     }
@@ -527,7 +549,9 @@ def merge_document(
     doc = ir.load_doc(doc_path)
     root = ir.doc_dir(doc_path)
     folder = Path(worksheets) if worksheets else root / "worksheets"
-    fingerprint = ir.fingerprint(doc)
+    # Kept only so a worksheet stamped by an older build is still recognised;
+    # staleness itself is decided per page. See `_is_stale`.
+    document_stamp = ir.fingerprint(doc)
     policy = doc["meta"].get("sfx_policy", "keep")
     direction = doc["meta"].get("reading_direction", "rtl")
 
@@ -566,8 +590,7 @@ def merge_document(
             continue
 
         text = ir.read_text(path)
-        stamped = FINGERPRINT.search(text)
-        if stamped and stamped.group("value") != fingerprint and not force:
+        if _is_stale(path, by_page, document_stamp) and not force:
             report["stale_worksheets"].append(page_id)
             continue
 
@@ -620,16 +643,19 @@ def merge_document(
         consumed.append(path)
 
     if report["added"]:
-        # Adding a region changes the document fingerprint, which would make
-        # every worksheet just merged look stale to the *next* merge — the
-        # reader would be told to re-translate work they had only added to.
-        # Re-stamp what was consumed, so the loop stays closed.
-        fresh = ir.fingerprint(doc)
+        # Adding a region changes THAT page's fingerprint, which would make the
+        # worksheet just merged look stale to the *next* merge — the reader
+        # would be told to re-translate work they had only added to. Re-stamp
+        # what was consumed, so the loop stays closed. A page nobody added to
+        # keeps the stamp it already had.
         for path in consumed:
+            page = by_page.get(path.name.split(".", 1)[0])
+            if page is None:
+                continue
             text = ir.read_text(path)
             if FINGERPRINT.search(text):
                 ir.write_text(path, FINGERPRINT.sub(
-                    f"# fingerprint: {fresh}", text, count=1))
+                    f"# fingerprint: {ir.page_fingerprint(page)}", text, count=1))
 
     ir.stamp_stage(doc, "worksheet", {"merged": report["merged"]})
     ir.save_doc(doc, doc_path)
