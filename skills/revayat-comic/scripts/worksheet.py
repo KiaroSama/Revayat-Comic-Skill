@@ -639,6 +639,13 @@ def merge_document(
         for key, values in page_report.items():
             report[key] += values
         if refused:
+            # The reply was read and did not land. Recording THAT — rather than
+            # leaving the page with no record at all — is what lets the context
+            # guard answer "this page is not merged". Without it the guard falls
+            # back to "does the page hold any Persian yet", which says yes on
+            # the strength of an earlier run's text.
+            page["worksheet_digest"] = reply_digest(text)
+            page["worksheet_clean"] = False
             continue
 
         # What was consumed, and whether it landed whole. Without this the only

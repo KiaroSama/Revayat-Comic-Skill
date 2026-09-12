@@ -463,10 +463,17 @@ def _add_fields(text, region_id, *fields):
     return "\n".join(out) + "\n"
 
 
-def _page_of(doc_path, page_id):
-    """Just one page, for comparing what a refused reply left behind."""
+def _regions_of(doc_path, page_id):
+    """One page's REGIONS, for comparing what a refused reply left behind.
+
+    The regions, not the whole page: a refusal deliberately records that the
+    reply was read and did not land, so the context guard can say the page is
+    unmerged. That bookkeeping is not content, and asserting over the whole
+    page dict would forbid it.
+    """
     doc = ir.load_doc(doc_path)
-    return ir.dumps(next(p for p in doc["pages"] if p["id"] == page_id))
+    page = next(p for p in doc["pages"] if p["id"] == page_id)
+    return ir.dumps(page["regions"])
 
 
 def _finish(doc_path, page_id, body=None):
@@ -570,7 +577,7 @@ def test_a_reply_with_a_duplicate_block_does_not_half_apply(detected):
     first, second = [region["id"] for region in page["regions"]][:2]
     # This page only: the other two pages have sound replies and merge normally,
     # which is exactly what should happen.
-    before = _page_of(detected, page["id"])
+    before = _regions_of(detected, page["id"])
 
     sheet = _add_fields(ir.read_text(_sheets(detected) / f"{page['id']}.txt"),
                         first, "src: A", "fa: الف")
@@ -582,7 +589,7 @@ def test_a_reply_with_a_duplicate_block_does_not_half_apply(detected):
 
     report = worksheet.merge_document(detected)
     assert report["duplicate_regions"], "the fixture did not duplicate a block"
-    assert _page_of(detected, page["id"]) == before, (
+    assert _regions_of(detected, page["id"]) == before, (
         "a reply with a duplicate block was partly applied anyway")
 
 
@@ -594,7 +601,7 @@ def test_a_reply_with_contradictory_actions_does_not_half_apply(detected):
     doc = ir.load_doc(detected)
     page = doc["pages"][0]
     first, second = [region["id"] for region in page["regions"]][:2]
-    before = _page_of(detected, page["id"])
+    before = _regions_of(detected, page["id"])
 
     sheet = _add_fields(ir.read_text(_sheets(detected) / f"{page['id']}.txt"),
                         first, "src: A", "fa: الف")
@@ -605,7 +612,7 @@ def test_a_reply_with_contradictory_actions_does_not_half_apply(detected):
 
     report = worksheet.merge_document(detected)
     assert report["conflicting_actions"], "the fixture did not conflict"
-    assert _page_of(detected, page["id"]) == before, (
+    assert _regions_of(detected, page["id"]) == before, (
         "a contradictory reply was partly applied anyway")
 
 
