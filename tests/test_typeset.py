@@ -440,3 +440,72 @@ def test_an_ordinary_page_still_passes_the_gate(translated):
 
     report = qa.check_document(translated)
     assert "artwork-modified" not in report["by_code"], report["findings"][:3]
+
+
+# --- R10a/R10b: a font is judged by coverage, not by ink ---------------------
+
+def _a_font_without_persian():
+    """A real font on this machine that has no Persian letters, or None.
+
+    Found rather than vendored: shipping a deliberately broken font to prove a
+    negative is a strange thing to keep in a repository, and every desktop
+    already has several Latin-only faces.
+    """
+    import glob
+    import os
+
+    from PIL import Image, ImageDraw, ImageFont
+
+    roots = [r"C:\Windows\Fonts", "/usr/share/fonts", "/Library/Fonts",
+             "/System/Library/Fonts", os.path.expanduser("~/.fonts")]
+    seen = 0
+    for root in roots:
+        if not os.path.isdir(root):
+            continue
+        for path in sorted(glob.glob(os.path.join(root, "**", "*.ttf"),
+                                     recursive=True)):
+            seen += 1
+            if seen > 150:
+                return None
+            try:
+                font = ImageFont.truetype(path, 32)
+            except OSError:
+                continue
+
+            def drawn(text, font=font):
+                canvas = Image.new("L", (240, 60), 255)
+                ImageDraw.Draw(canvas).text((4, 4), text, font=font, fill=0)
+                return canvas.tobytes()
+
+            try:
+                word = drawn("چگونه")
+                boxes = drawn("\ue000\ue001\ue002\ue003\ue004")
+                empty = drawn("")
+            except Exception:
+                continue
+            if word == boxes and word != empty:
+                return path
+    return None
+
+
+def test_a_font_that_draws_boxes_is_not_accepted_for_persian():
+    """The check counted ink, and five tofu boxes are more ink than the word is.
+    So a Latin-only face passed, `doctor` said the machine was ready, and the
+    volume typeset in rectangles."""
+    from pathlib import Path as _Path
+
+    path = _a_font_without_persian()
+    if path is None:
+        pytest.skip("no Latin-only TTF on this machine to test against")
+    assert typeset._supports_persian(_Path(path)) is False, path
+
+
+def test_a_persian_capable_font_is_still_accepted():
+    """The other half: narrowing this must not reject a face that works."""
+    from pathlib import Path as _Path
+
+    try:
+        font = typeset.find_font()
+    except Exception:
+        pytest.skip("no Persian-capable font installed")
+    assert typeset._supports_persian(_Path(font)) is True

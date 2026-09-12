@@ -253,24 +253,47 @@ def find_font(preferred: str | None = None) -> Path:
     )
 
 
+#: Five codepoints in the Private Use Area. No text font assigns glyphs here,
+#: so whatever a face draws for these IS its "I do not have this character"
+#: mark — its `.notdef` box, or nothing at all.
+_DEFINITELY_MISSING = "\ue000\ue001\ue002\ue003\ue004"
+
+
 def _supports_persian(font_path: Path) -> bool:
-    """Reject a font that renders Persian as empty boxes."""
+    """Whether this face really has Persian letters, or boxes where they go.
+
+    Decided by COVERAGE, not by ink. The old test counted dark pixels and
+    accepted anything between a floor and a ceiling — which a Latin-only face
+    passes easily, because five `.notdef` boxes put down MORE ink than the word
+    does. Measured: a Latin-only face drew 680 px for `چگونه` where Vazirmatn
+    draws 540, so the font that cannot write Persian scored higher than the one
+    that can, and `doctor` called the machine ready.
+
+    What separates them is that a face without the letters draws the SAME mark
+    for every character it lacks. Render the word, render five private-use
+    codepoints, compare: identical means tofu.
+    """
     Image, ImageDraw, ImageFont = _pil()
     try:
         font = ImageFont.truetype(str(font_path), 32)
     except OSError:
         return False
-    canvas = Image.new("L", (200, 60), 255)
-    draw = ImageDraw.Draw(canvas)
-    try:
-        draw.text((4, 4), "چگونه", font=font, fill=0)
-    except Exception:
+
+    def drawn(text: str) -> bytes | None:
+        canvas = Image.new("L", (240, 60), 255)
+        draw = ImageDraw.Draw(canvas)
+        try:
+            draw.text((4, 4), text, font=font, fill=0)
+        except Exception:
+            return None
+        return canvas.tobytes()
+
+    persian = drawn("چگونه")
+    blank = drawn("")
+    if persian is None or blank is None or persian == blank:
         return False
-    np = _numpy()
-    inked = (np.asarray(canvas) < 128).sum()
-    # A face with no Persian coverage draws either nothing or a row of identical
-    # tofu boxes; both are far from the ink a real word puts down.
-    return 40 < int(inked) < 200 * 60 * 0.6
+    missing = drawn(_DEFINITELY_MISSING)
+    return missing is None or persian != missing
 
 
 # --------------------------------------------------------------------------- #
