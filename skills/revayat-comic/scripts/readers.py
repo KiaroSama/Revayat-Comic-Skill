@@ -210,6 +210,20 @@ def _from_zip(path: Path, pages_dir: Path) -> list[Path]:
             for info in archive.infolist()
         ))
         members = _image_members(archive.namelist())
+        # A ZIP may legally hold two different members under one name, and
+        # `archive.open(name)` gives whichever was written last. The page count
+        # still looked right while one page had been replaced by a copy of
+        # another. Nothing in the archive says which order was meant, so this
+        # refuses instead of choosing.
+        repeated = sorted({name for name in members
+                           if members.count(name) > 1})
+        if repeated:
+            raise ValueError(
+                f"{path.name} stores {len(repeated)} page name(s) twice "
+                f"({', '.join(repeated[:4])}). Reading by name would silently "
+                "keep one copy of the last and lose the other. Re-save the "
+                "archive with unique page names."
+            )
         if not members:
             raise ValueError(
                 f"{path.name} contains no images. A CBZ is a ZIP of page "
@@ -340,6 +354,28 @@ def _single_embedded_image(document, page) -> bytes | None:
     # downsampled to the page it was drawn on, which is what it looked like
     # anyway. No new failure, one fewer allocation nothing was guarding.
     if int(images[0][2]) * int(images[0][3]) > MAX_PAGE_PIXELS:
+        return None
+
+    # `get_images` counts IMAGES. A page that is one scan plus a line of typeset
+    # dialogue, a redaction bar, or a drawn speech tail still answers "one
+    # image", and taking those bytes imports the scan with the rest simply gone
+    # — no warning, nothing in the file to notice afterwards. The shortcut is
+    # only honest when the page IS the image and nothing else.
+    if page.get_text("text").strip():
+        return None
+    try:
+        if page.get_drawings():
+            return None
+    except Exception:  # pragma: no cover - malformed content stream
+        return None
+    # `/Rotate` is part of how the page looks. The embedded bytes are not
+    # rotated, so a landscape spread imported as a portrait page and every
+    # balloon measured afterwards was against the wrong axis.
+    if page.rotation:
+        return None
+    # A crop box smaller than the media box means the reader is shown less than
+    # the image holds; extracting gives back the part that was cropped away.
+    if tuple(page.cropbox) != tuple(page.mediabox):
         return None
     try:
         rects = page.get_image_rects(xref)
