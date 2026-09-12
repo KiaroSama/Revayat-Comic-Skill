@@ -412,6 +412,75 @@ def detect_kind(path: Path) -> str:
 # Driver
 # --------------------------------------------------------------------------- #
 
+def _refuse_overlap(source: Path, pages_dir: Path) -> None:
+    """Refuse a source and a destination that sit inside one another.
+
+    `import` replaces `work/pages` wholesale. If the source lives in there it is
+    deleted before it can be read; if `work` sits under the source, a folder
+    import walks into its own output and then deletes it. Neither is recoverable,
+    and neither is worth trying to be clever about — say so and stop.
+    """
+    src = source.expanduser().resolve()
+    dst = pages_dir.expanduser().resolve()
+    if src == dst or dst in src.parents:
+        raise ValueError(
+            f"the source {src} is inside the pages folder this import replaces "
+            f"({dst}). Importing it would delete it. Move the source, or pick a "
+            f"different --out."
+        )
+    if src in dst.parents:
+        raise ValueError(
+            f"the output folder {dst} is inside the source {src}. The import "
+            f"would read its own output and then delete it. Pick a --out that "
+            f"is not under the source."
+        )
+
+
+def _stage_pages(kind: str, path: Path, staging: Path, dpi: int) -> list[Path]:
+    """Read the source into a staging folder, and clean up if it goes wrong.
+
+    Nothing the caller already owns is touched here. A failed read leaves only
+    the staging folder to remove.
+    """
+    if staging.exists():
+        shutil.rmtree(staging)
+    staging.mkdir(parents=True, exist_ok=True)
+    readers = {
+        "cbz": lambda: _from_zip(path, staging),
+        "cbr": lambda: _from_rar(path, staging),
+        "pdf": lambda: _from_pdf(path, staging, dpi),
+        "directory": lambda: _from_directory(path, staging),
+        "image": lambda: _from_image(path, staging),
+    }
+    try:
+        return readers[kind]()
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+
+
+def _commit_pages(staging: Path, pages_dir: Path) -> None:
+    """Swap the validated staging folder into place, keeping a way back.
+
+    The old folder is moved aside rather than deleted first, so a rename that
+    fails — a file still open on Windows, a full disk — can put it back instead
+    of leaving the caller with neither version.
+    """
+    previous = pages_dir.with_name(pages_dir.name + ".previous")
+    shutil.rmtree(previous, ignore_errors=True)
+    moved = False
+    if pages_dir.exists():
+        pages_dir.rename(previous)
+        moved = True
+    try:
+        staging.rename(pages_dir)
+    except BaseException:
+        if moved:
+            previous.rename(pages_dir)
+        raise
+    shutil.rmtree(previous, ignore_errors=True)
+
+
 def import_source(
     source: str | Path,
     out: str | Path,
@@ -429,19 +498,14 @@ def import_source(
 
     work = Path(out).expanduser()
     pages_dir = work / "pages"
-    if pages_dir.exists():
-        shutil.rmtree(pages_dir)
-    pages_dir.mkdir(parents=True, exist_ok=True)
+    # Before anything is removed. This used to run after `pages_dir` had already
+    # been deleted, so importing a folder that lived inside it destroyed the
+    # only copy of the thing being imported.
+    _refuse_overlap(path, pages_dir)
 
     kind = detect_kind(path)
-    readers = {
-        "cbz": lambda: _from_zip(path, pages_dir),
-        "cbr": lambda: _from_rar(path, pages_dir),
-        "pdf": lambda: _from_pdf(path, pages_dir, dpi),
-        "directory": lambda: _from_directory(path, pages_dir),
-        "image": lambda: _from_image(path, pages_dir),
-    }
-    files = readers[kind]()
+    staging = work / ".pages-incoming"
+    files = _stage_pages(kind, path, staging, dpi)
 
     doc = ir.new_doc(
         source_language=source_language,
@@ -458,20 +522,28 @@ def import_source(
     }
 
     sizes: list[tuple[int, int]] = []
-    for index, file in enumerate(files):
-        image = _load_page(file)
-        width, height = image.size
-        sizes.append((width, height))
-        doc["pages"].append(
-            ir.new_page(
-                ir.page_id_for(index),
-                index,
-                f"pages/{file.name}",
-                width,
-                height,
-                ir.sha256_file(file),
+    try:
+        # Every page is opened and hashed while it is still only staged, so a
+        # source that turns out to be unreadable half way through is refused
+        # with the previous chapter still on disk.
+        for index, file in enumerate(files):
+            image = _load_page(file)
+            width, height = image.size
+            sizes.append((width, height))
+            doc["pages"].append(
+                ir.new_page(
+                    ir.page_id_for(index),
+                    index,
+                    f"pages/{file.name}",
+                    width,
+                    height,
+                    ir.sha256_file(file),
+                )
             )
-        )
+        _commit_pages(staging, pages_dir)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
 
     doc_path = work / "comic.json"
     ir.save_doc(doc, doc_path)

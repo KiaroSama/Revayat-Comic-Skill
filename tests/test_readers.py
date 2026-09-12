@@ -344,10 +344,15 @@ def test_a_pdf_with_too_many_pages_is_refused_before_rendering(tmp_path):
     document.save(str(source))
     document.close()
 
+    work = tmp_path / "work"
     with pytest.raises(ValueError, match="pages"):
-        readers.import_source(source, tmp_path / "work")
-    # Rendering even the first page would have left a file behind.
-    assert not any((tmp_path / "work" / "pages").iterdir())
+        readers.import_source(source, work)
+    # Rendering even the first page would have left a file behind. Asserted
+    # against the whole work folder rather than `work/pages`, because import is
+    # transactional now and a refused source never gets a pages folder at all —
+    # a stronger outcome than an empty one, and the point stands either way.
+    written = [child for child in work.rglob("*") if child.is_file()]
+    assert not written, f"a refused PDF still wrote {written}"
 
 
 def test_a_real_chapter_clears_every_new_limit_with_room(tmp_path):
@@ -402,3 +407,79 @@ def test_a_gigapixel_embedded_image_is_rendered_instead_of_extracted():
 
     assert readers._single_embedded_image(object(), _Page()) is None
 
+
+
+# --- R01: import is transactional, and paths may not overlap ------------------
+
+def test_a_failed_import_leaves_the_previous_chapter_intact(tmp_path):
+    """THE ONE THAT MATTERS HERE. `import` used to delete `work/pages` before it
+    had even looked at the new source, so pointing it at a corrupt archive threw
+    away a chapter that was already on disk — possibly hours of translated work
+    whose only surviving copy was those page files."""
+    work = tmp_path / "work"
+    good = tmp_path / "good"
+    good.mkdir()
+    write_pages(good, 2)
+    readers.import_source(good, work, source_language="ja", direction="rtl")
+
+    before = sorted(p.name for p in (work / "pages").iterdir())
+    digests = {p.name: ir.sha256_file(p) for p in (work / "pages").iterdir()}
+    assert len(before) == 2
+
+    broken = tmp_path / "broken.cbz"
+    broken.write_bytes(b"not a zip file")
+    with pytest.raises(Exception):
+        readers.import_source(broken, work, source_language="ja", direction="rtl")
+
+    assert (work / "pages").exists(), "the pages folder itself was destroyed"
+    after = sorted(p.name for p in (work / "pages").iterdir())
+    assert after == before, f"the failed import took the old chapter: {after}"
+    assert {p.name: ir.sha256_file(p) for p in (work / "pages").iterdir()} == digests
+    assert (work / "comic.json").exists(), "the old document went too"
+
+
+def test_a_successful_import_still_replaces_the_old_pages(tmp_path):
+    """The other half of the same guarantee: staging must not leave the previous
+    chapter's pages mixed into the new one."""
+    work = tmp_path / "work"
+    first = tmp_path / "first"
+    first.mkdir()
+    write_pages(first, 3)
+    readers.import_source(first, work, source_language="ja", direction="rtl")
+
+    second = tmp_path / "second"
+    second.mkdir()
+    write_pages(second, 1)
+    readers.import_source(second, work, source_language="ja", direction="rtl")
+
+    assert sorted(p.name for p in (work / "pages").iterdir()) == ["p0001.png"]
+    assert len(ir.load_doc(work / "comic.json")["pages"]) == 1
+    leftovers = [p.name for p in work.iterdir() if p.name.startswith("pages.")]
+    assert not leftovers, f"staging residue survived the import: {leftovers}"
+
+
+def test_a_source_inside_the_work_folder_is_refused(tmp_path):
+    """Importing `work/pages/chapter` deleted the source before reading it: the
+    chapter was gone and there was nothing to import it from. The paths have to
+    be checked before anything is removed."""
+    work = tmp_path / "work"
+    inside = work / "pages" / "chapter"
+    inside.mkdir(parents=True)
+    write_pages(inside, 2)
+
+    with pytest.raises(ValueError, match="inside"):
+        readers.import_source(inside, work, source_language="ja", direction="rtl")
+    assert inside.exists(), "the source folder was destroyed"
+    assert len(list(inside.iterdir())) == 2
+
+
+def test_the_work_folder_inside_the_source_is_refused(tmp_path):
+    """The same collision the other way up: `--out` under the folder being read."""
+    source = tmp_path / "chapter"
+    source.mkdir()
+    write_pages(source, 2)
+
+    with pytest.raises(ValueError, match="inside"):
+        readers.import_source(source, source / "work",
+                              source_language="ja", direction="rtl")
+    assert len(list(source.glob("*.png"))) == 2

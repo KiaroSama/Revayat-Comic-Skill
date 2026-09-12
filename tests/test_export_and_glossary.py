@@ -88,10 +88,19 @@ def test_a_directory_export_is_readable(finished, tmp_path):
 
 
 def test_exporting_into_a_folder_of_other_images_is_refused(finished, tmp_path):
-    """Pointing --out at the working folder's own `pages/` would ship the
-    untranslated originals inside the finished chapter."""
+    """A folder already holding somebody else's images would ship them inside
+    the finished chapter. Pointing --out at the chapter's own `pages/` is the
+    same mistake and is refused earlier, by the dependency guard — see
+    `test_a_dir_export_is_refused_when_its_names_land_on_the_originals`."""
+    crowded = tmp_path / "crowded"
+    crowded.mkdir()
+    (crowded / "holiday-photo.png").write_bytes(
+        (ir.doc_dir(finished) / ir.load_doc(finished)["pages"][0]["image"]
+         ).read_bytes())
+
     with pytest.raises(ValueError, match="already contains"):
-        export.export_document(finished, ir.doc_dir(finished) / "pages")
+        export.export_document(finished, crowded)
+    assert (crowded / "holiday-photo.png").exists()
 
 
 def test_pdf_export_keeps_the_page_count(finished, tmp_path):
@@ -188,3 +197,101 @@ def test_a_term_absent_from_the_balloon_cannot_have_drifted(translated):
     doc["glossary"] = {"entries": {"ケンジ": {"target": "کنجی", "locked": True}}}
     ir.save_doc(doc, translated)
     assert glossary.check(translated)["ok"]
+
+
+# --- R01: an export may never write over what the chapter is made of ---------
+
+@pytest.mark.parametrize("fmt", ["cbz", "pdf", "dir"])
+def test_exporting_over_the_document_itself_is_refused(finished, fmt):
+    """`--out work/comic.json` destroys the chapter while reading it. The
+    explicit `--format` override has to be checked too: guessing the format from
+    the suffix is how this one slips past a suffix-based guard."""
+    with pytest.raises(ValueError, match="chapter is made of|depends on"):
+        export.export_document(finished, finished, fmt=fmt)
+    assert ir.load_doc(finished)["pages"], "the document was damaged anyway"
+
+
+@pytest.mark.parametrize("fmt", ["cbz", "pdf"])
+def test_exporting_over_a_page_the_chapter_depends_on_is_refused(finished, fmt):
+    """Writing an archive on top of an original page is not recoverable: the
+    originals are the one thing the whole preservation guarantee rests on."""
+    root = ir.doc_dir(finished)
+    page = ir.load_doc(finished)["pages"][0]
+    target = root / page["image"]
+    before = target.read_bytes()
+
+    with pytest.raises(ValueError, match="chapter is made of|depends on"):
+        export.export_document(finished, target, fmt=fmt)
+    assert target.read_bytes() == before, "the original page was overwritten"
+
+
+def test_a_dir_export_is_refused_when_its_names_land_on_the_originals(finished):
+    """The hole the existing stranger guard leaves open. That guard only
+    notices files the export will NOT replace; a document whose pages are
+    already named the way the exporter names them (`0001.png` — valid, just not
+    what this importer writes) has every original silently overwritten instead.
+    """
+    root = ir.doc_dir(finished)
+    doc = ir.load_doc(finished)
+    for page in doc["pages"]:
+        old = root / page["image"]
+        new = old.with_name(f"{page['index'] + 1:04d}{old.suffix}")
+        old.rename(new)
+        page["image"] = f"pages/{new.name}"
+    ir.save_doc(doc, finished)
+
+    originals = {p.name: p.read_bytes() for p in (root / "pages").iterdir()}
+    with pytest.raises(ValueError, match="chapter is made of|depends on"):
+        export.export_document(finished, root / "pages", fmt="dir")
+    assert {p.name: p.read_bytes()
+            for p in (root / "pages").iterdir()} == originals
+
+
+def test_a_pdf_export_that_fails_mid_chapter_keeps_the_previous_one(
+        finished, tmp_path, monkeypatch):
+    """A page that cannot be read half way through a chapter must not replace a
+    good package. This one held already — every page is collected before the
+    single save — and it is here so that stays true."""
+    out = tmp_path / "chapter.pdf"
+    export.export_document(finished, out, fmt="pdf")
+    good = out.read_bytes()
+    assert len(good) > 1000
+
+    real = export._page_source
+    calls = {"n": 0}
+
+    def explode(root, page):
+        calls["n"] += 1
+        if calls["n"] > 1:
+            raise OSError("disk full")
+        return real(root, page)
+
+    monkeypatch.setattr(export, "_page_source", explode)
+    with pytest.raises(OSError):
+        export.export_document(finished, out, fmt="pdf")
+    assert out.read_bytes() == good, "a failed export replaced a good package"
+    assert not list(tmp_path.glob("*.part")), "staging residue was left behind"
+
+
+def test_an_interrupted_dir_export_leaves_the_previous_one_intact(
+        finished, tmp_path, monkeypatch):
+    """The same guarantee for a folder export."""
+    out = tmp_path / "chapter"
+    export.export_document(finished, out, fmt="dir")
+    good = {p.name: p.read_bytes() for p in out.iterdir()}
+    assert len(good) > 1
+
+    real = ir.write_bytes
+    calls = {"n": 0}
+
+    def explode(path, payload):
+        calls["n"] += 1
+        if calls["n"] > 1:
+            raise OSError("disk full")
+        return real(path, payload)
+
+    monkeypatch.setattr(ir, "write_bytes", explode)
+    with pytest.raises(OSError):
+        export.export_document(finished, out, fmt="dir")
+    assert {p.name: p.read_bytes() for p in out.iterdir()} == good, (
+        "a half-written export replaced a complete one")

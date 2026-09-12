@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import shutil
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,56 @@ def _page_source(root: Path, page: dict[str, Any]) -> Path:
         if relative and (root / relative).exists():
             return root / relative
     raise FileNotFoundError(f"no image for {page['id']}")
+
+
+def _dependencies(doc: dict[str, Any], root: Path, doc_path: Path) -> set[Path]:
+    """Every file this chapter is made of, resolved through symlinks.
+
+    An export reads these while it writes, so writing onto one of them destroys
+    the chapter mid-flight. Resolved rather than compared as written, because
+    `work/pages/../pages/p0001.png` and a symlink alias name the same bytes.
+    """
+    found = {doc_path.resolve()}
+    for page in doc.get("pages", []):
+        for key in ("image", "clean", "final", "mask", "writable"):
+            relative = page.get(key)
+            if isinstance(relative, str) and relative:
+                candidate = root / relative
+                if candidate.exists():
+                    found.add(candidate.resolve())
+    return found
+
+
+def _refuse_collisions(doc: dict[str, Any], root: Path, doc_path: Path,
+                       out: Path, fmt: str) -> None:
+    """Refuse an output path that lands on something the chapter is made of.
+
+    Checked for every format and after `--format` has been resolved: guessing
+    the format from the suffix is exactly how `--format cbz --out page.png`
+    walks past a suffix-based guard.
+    """
+    owned = _dependencies(doc, root, doc_path)
+    target = out.resolve()
+
+    if target in owned:
+        raise ValueError(
+            f"{out} is a file the chapter is made of. Exporting onto it would "
+            "destroy what the export is reading. Pick a different --out."
+        )
+
+    if fmt == "dir":
+        # A folder export writes `0001.png`, `0002.png`… Those are legal page
+        # names, so a chapter whose own pages are named that way has its
+        # originals overwritten rather than flagged by the stranger check
+        # below, which only looks at files the export will NOT replace.
+        clashing = sorted(str(path) for path in owned if path.parent == target)
+        if clashing:
+            raise ValueError(
+                f"{out} holds {len(clashing)} file(s) the chapter is made of "
+                f"({', '.join(Path(c).name for c in clashing[:4])}…). Exporting "
+                "there would write over the originals. Export to an empty folder."
+            )
+        return
 
 
 def _export_cbz(doc: dict[str, Any], root: Path, out: Path,
@@ -110,9 +161,13 @@ def _export_pdf(doc: dict[str, Any], root: Path, out: Path,
             "title": doc["meta"].get("title", ""),
             "producer": doc["meta"].get("tool", ""),
         })
-        document.save(str(out), garbage=3, deflate=True)
+        # Saved beside the destination and moved into place, so a write that
+        # fails part way cannot replace a good package with a truncated one.
+        staging = out.with_suffix(out.suffix + ".part")
+        document.save(str(staging), garbage=3, deflate=True)
     finally:
         document.close()
+    staging.replace(out)
     return {"format": "pdf", "path": str(out), "pages": len(doc["pages"])}
 
 
@@ -142,12 +197,24 @@ def _export_dir(doc: dict[str, Any], root: Path, out: Path,
             "shipped as part of the chapter. Export to an empty folder."
         )
 
-    for page in doc["pages"]:
-        source = _page_source(root, page)
-        name = f"{page['index'] + 1:04d}{source.suffix.lower()}"
-        payload, name = _encode(source, name, quality)
-        ir.write_bytes(out / name, payload)
-    ir.write_text(out / "ComicInfo.xml", _comic_info(doc))
+    # Written to a staging folder and moved in, so a chapter that fails half
+    # way — an unreadable page, a full disk — leaves the previous export whole
+    # instead of a mixture of two. Moved file by file rather than swapping the
+    # folder, because anything else the operator keeps in there is not ours.
+    staging = out.with_name(out.name + ".part")
+    shutil.rmtree(staging, ignore_errors=True)
+    staging.mkdir(parents=True)
+    try:
+        for page in doc["pages"]:
+            source = _page_source(root, page)
+            name = f"{page['index'] + 1:04d}{source.suffix.lower()}"
+            payload, name = _encode(source, name, quality)
+            ir.write_bytes(staging / name, payload)
+        ir.write_text(staging / "ComicInfo.xml", _comic_info(doc))
+        for child in sorted(staging.iterdir()):
+            child.replace(out / child.name)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
     return {"format": "dir", "path": str(out), "pages": len(doc["pages"])}
 
 
@@ -165,6 +232,7 @@ def export_document(
         fmt = {".cbz": "cbz", ".zip": "cbz", ".pdf": "pdf"}.get(suffix, "dir")
     if fmt not in FORMATS:
         raise ValueError(f"unknown format {fmt!r}; expected one of {FORMATS}")
+    _refuse_collisions(doc, root, doc_path, out, fmt)
 
     writers = {"cbz": _export_cbz, "pdf": _export_pdf, "dir": _export_dir}
     report = writers[fmt](doc, root, out, quality)
