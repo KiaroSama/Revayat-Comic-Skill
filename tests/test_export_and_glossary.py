@@ -41,8 +41,11 @@ def test_the_archive_carries_a_comicinfo(finished, tmp_path):
         info = archive.read("ComicInfo.xml").decode("utf-8")
     assert "<PageCount>3</PageCount>" in info
     assert "<LanguageISO>fa</LanguageISO>" in info
-    # Without this, readers pair every two-page spread back to front.
-    assert "<Manga>Yes</Manga>" in info
+    # Without this, readers pair every two-page spread back to front. The value
+    # has to be `YesAndRightToLeft`: ComicInfo's own documentation says that is
+    # the one that defines the direction, and plain `Yes` only says the book is
+    # a manga. This test asserted `Yes` and so agreed with the defect.
+    assert "<Manga>YesAndRightToLeft</Manga>" in info
 
 
 def test_a_left_to_right_comic_is_not_marked_as_manga(finished, tmp_path):
@@ -430,3 +433,66 @@ def test_drift_totals_count_every_finding(translated):
     filed = report["by_code"].get("glossary-drift", 0)
     assert filed == result["drift_count"], (
         f"filed {filed} of {result['drift_count']} drifting regions")
+
+
+# --- R12: an export must say what it actually shipped ------------------------
+
+def test_the_rtl_tag_is_the_one_that_means_right_to_left(finished, tmp_path):
+    """ComicInfo's `Manga` field defines right-to-left reading only at the value
+    `YesAndRightToLeft`. Plain `Yes` says "this is a manga" and says nothing
+    about direction, so every two-page spread in the book pairs the wrong way."""
+    out = tmp_path / "chapter.cbz"
+    export.export_document(finished, out)
+    with zipfile.ZipFile(out) as archive:
+        info = archive.read("ComicInfo.xml").decode("utf-8")
+    assert "<Manga>YesAndRightToLeft</Manga>" in info
+
+
+def test_a_left_to_right_chapter_is_not_tagged_right_to_left(finished, tmp_path):
+    """The other direction has to keep working."""
+    doc = ir.load_doc(finished)
+    doc["meta"]["reading_direction"] = "ltr"
+    ir.save_doc(doc, finished)
+
+    out = tmp_path / "chapter.cbz"
+    export.export_document(finished, out)
+    with zipfile.ZipFile(out) as archive:
+        info = archive.read("ComicInfo.xml").decode("utf-8")
+    assert "YesAndRightToLeft" not in info
+
+
+def test_publication_export_refuses_a_page_whose_render_is_missing(
+        finished, tmp_path):
+    """A page with Persian in it and no rendered output fell back to the cleaned
+    or even the original image, and was still counted under `typeset_pages`. The
+    chapter shipped with a page of untranslated artwork and the report said it
+    was fine."""
+    root = ir.doc_dir(finished)
+    doc = ir.load_doc(finished)
+    victim = doc["pages"][0]
+    (root / victim["final"]).unlink()
+
+    with pytest.raises(ValueError, match="not been rendered|missing"):
+        export.export_document(finished, tmp_path / "chapter.cbz")
+
+
+def test_a_draft_export_says_page_by_page_what_it_used(finished, tmp_path):
+    """Falling back is allowed when it is asked for and admitted to. A cleaned
+    page is not an unchanged original and the report may not call it one."""
+    root = ir.doc_dir(finished)
+    doc = ir.load_doc(finished)
+    victim = doc["pages"][0]
+    (root / victim["final"]).unlink()
+
+    report = export.export_document(finished, tmp_path / "chapter.cbz",
+                                    draft=True)
+    assert report["sources"][victim["id"]] in {"clean", "image"}
+    assert report["sources"][doc["pages"][1]["id"]] == "final"
+    assert report["typeset_pages"] == len(doc["pages"]) - 1
+
+
+def test_a_finished_chapter_still_exports(finished, tmp_path):
+    """The guard must not fire on the ordinary case."""
+    report = export.export_document(finished, tmp_path / "chapter.cbz")
+    assert report["typeset_pages"] == len(ir.load_doc(finished)["pages"])
+    assert set(report["sources"].values()) == {"final"}
