@@ -148,12 +148,20 @@ def _tokens(text: str) -> list[list[str]]:
     return paragraphs
 
 
-#: What a STYLED effect draws, as a fraction of the type size, taken from the
-#: renderer's own constants: an outline of up to `MAX_STROKE`, widened by one
-#: pixel on the heavy side of a modulated pair, and a shadow offset down and
-#: right by `SHADOW_OFFSET`.
-STYLED_STROKE = 0.22
+#: What a STYLED effect draws, as a fraction of the type size, taken from
+#: `lettering`'s own constants and kept honest by a test that recomputes them
+#: from that module.
+#:
+#: `MAX_STROKE` is the widest outline the styled renderer will ask for, and the
+#: modulated pass then draws it again at `1 + MAX_MODULATION / 2` — the heavy
+#: half of a brush that changes weight along the word. Reserving the outline
+#: without that factor reserved about two thirds of what gets painted.
+STYLED_STROKE = 0.22 * (1.0 + 0.8 / 2.0)
 STYLED_SHADOW = 0.11
+
+#: And what the PLAIN renderer adds when a region is outlined for contrast on a
+#: dark balloon: `size // 12`, about 8%, and no shadow, no modulation, no nib.
+PLAIN_STROKE_DIVISOR = 12
 
 
 def stroke_for(size: int, styled: bool = False) -> int:
@@ -162,9 +170,10 @@ def stroke_for(size: int, styled: bool = False) -> int:
     Asked in ONE place, because the fitter and the renderer disagreeing about
     it is the whole of the bug below — and they did disagree for the styled
     path, which is the one that draws the most. The plain renderer adds
-    `size // 12` on every side, about 8%; a styled effect adds up to 22% plus a
-    shadow, so an 80x50 strip accepted size 35, was drawn with an outline
-    bounding box of (-6, 11, 86, 52), and was clipped by the page.
+    `size // 12` on every side, about 8%; a styled effect adds up to 22%
+    widened by the modulated pass, plus a shadow, so an 80x50 strip accepted
+    size 35, was drawn with an outline bounding box of (-6, 11, 86, 52), and
+    was clipped by the page.
 
     The extra pixel is the heavy half of a modulated stroke, which the renderer
     adds to `stroke_width` and the fitter never knew about.
@@ -172,7 +181,7 @@ def stroke_for(size: int, styled: bool = False) -> int:
     size = int(size)
     if styled:
         return max(1, int(round(size * STYLED_STROKE)) + 1)
-    return max(1, size // 12)
+    return max(1, size // PLAIN_STROKE_DIVISOR)
 
 
 def shadow_for(size: int, styled: bool = False) -> int:
@@ -183,6 +192,37 @@ def shadow_for(size: int, styled: bool = False) -> int:
     answer, and the one that cannot be wrong in the direction that clips.
     """
     return max(1, int(round(int(size) * STYLED_SHADOW))) if styled else 0
+
+
+def envelope_for(size: int, *, outline: bool = False,
+                 styled: bool = False) -> int:
+    """What a renderer puts down beyond the glyphs, at its widest.
+
+    ONE boolean used to decide this and it was the wrong one: both callers pass
+    `stroke=bool(stroke)`, where `stroke` is a COLOUR — "does this text get an
+    outline for contrast" — and the fitter read it as "is this a styled sound
+    effect". So a dialogue balloon on a dark page reserved the whole styled
+    envelope, three times what its plain outline draws, and was set small or
+    refused for want of room it was never going to use; while a styled effect
+    with no outline colour reserved nothing at all and still got a shadow.
+
+    Two questions, both asked here:
+
+    * **outline** — the flat renderer's contrast outline. `size // 12` on every
+      side, no shadow, no modulation.
+    * **styled** — the sound-effect renderer at its heaviest: a shadow, which
+      it draws whether or not the effect is outlined, and the widest modulated
+      outline it will ask for.
+
+    The styled answer is the WORST case. A particular effect draws less than
+    that, and `lettering.strip_envelope` computes what that one will actually
+    draw from its own measured style — which is what the fitter is given, so a
+    delicate effect is not refused the room a heavy one would have needed.
+    """
+    if styled:
+        return (shadow_for(size, styled=True)
+                + (stroke_for(size, styled=True) if outline else 0))
+    return stroke_for(size) if outline else 0
 
 
 def _measure(draw, text: str, font, shaper: Shaper,
@@ -292,7 +332,8 @@ def _wrap_one(draw, tokens: Sequence[str], font, shaper: Shaper,
 
 def fit_region(
     draw, text: str, mask, np, shaper: Shaper, font_path: Path,
-    *, max_size: int, min_size: int, stroke: bool = False,
+    *, max_size: int, min_size: int, outline: bool = False,
+    styled: bool = False, envelope: Any = None,
 ) -> dict[str, Any] | None:
     """Largest size at which `text` sets inside `mask`. ``None`` if it never does."""
     _, _, ImageFont = _pil()
@@ -315,11 +356,13 @@ def fit_region(
 
     for size in range(int(max_size), int(min_size) - 1, -1):
         font = ImageFont.truetype(str(font_path), size, layout_engine=shaper.layout)
-        # What this size will really cost once the outline AND the shadow are
-        # on it. `stroke` means "this is drawn as a styled effect", which is
-        # the path with the heavy outline, the modulation and the shadow.
-        stroke_px = (stroke_for(size, styled=True) + shadow_for(size, styled=True)
-                     if stroke else 0)
+        # What this size will really cost once everything the renderer adds is
+        # on it — which depends on WHICH renderer, and for a styled effect on
+        # the style it measured. `envelope` is that renderer answering for
+        # itself; the booleans are the generic answer for callers that have no
+        # style to consult.
+        stroke_px = (int(envelope(size)) if envelope is not None
+                     else envelope_for(size, outline=outline, styled=styled))
         step = max(1, int(round(size * LINE_SPACING)))
 
         placement: list[int] | None = None

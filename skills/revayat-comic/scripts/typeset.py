@@ -261,6 +261,15 @@ def typeset_page(
         # region can disagree, and only one of them decided whether the original
         # ink is still on the page.
         drawn = region.get("lettering")
+        if drawn is not None and region.get("mask"):
+            # The measurement `clean` recorded, only while it is about the mask
+            # on disk now. Without this, re-masking after cleaning left
+            # `typeset` bending a Persian strip to the slant of lettering that
+            # had been measured inside a different outline.
+            mask_path = root / region["mask"]
+            if not mask_path.is_file() or drawn.get("mask_sha") != \
+                    ir.sha256_file(mask_path):
+                drawn = None
         if drawn is None and stylise and region["kind"] == "sfx" \
                 and region.get("mask"):
             drawn = lettering.measure(
@@ -324,7 +333,7 @@ def typeset_page(
             area = interior_mask(clean_rgb, region, size)
             fitted = fit_region(
                 draw, text, area, np, shaper, font_path,
-                max_size=max_size, min_size=min_size, stroke=bool(stroke),
+                max_size=max_size, min_size=min_size, outline=bool(stroke),
             )
             if fitted is None:
                 overflow.append(region["id"])
@@ -364,10 +373,19 @@ def typeset_page(
         # crude: the corners of a box around a line of Persian sit outside
         # the balloon on a curve, while the ink itself does not.
         if painted:
+            # Asked BEFORE the box is clamped to the page, because clamping is
+            # what hid it: ink drawn past an edge is not on the canvas, so it
+            # never appeared in the comparison and a line whose second half ran
+            # off the sheet was reported `ok` on the strength of the half that
+            # stayed. A render a reader cannot read all of is not a render.
+            clipped = any(box[0] < 0 or box[1] < 0
+                          or box[2] > page["width"] or box[3] > page["height"]
+                          for box in painted)
             x0 = max(0, min(box[0] for box in painted))
             y0 = max(0, min(box[1] for box in painted))
             x1 = min(page["width"], max(box[2] for box in painted))
             y1 = min(page["height"], max(box[3] for box in painted))
+            stray = 0
             if x1 > x0 and y1 > y0:
                 after = np.asarray(canvas)[y0:y1, x0:x1]
                 changed = (before_region[y0:y1, x0:x1] != after).any(axis=2)
@@ -379,23 +397,27 @@ def typeset_page(
                 if allowed is None:
                     allowed = writable
                 stray = int((changed & (allowed[y0:y1, x0:x1] == 0)).sum())
-                if stray:
-                    # Painted, checked, and taken back off again. Noticing the
-                    # overflow after the ink is down is not enough — the ink is
-                    # down, and the gate is right to count it. Restoring the
-                    # rectangle leaves the cleaned page exactly as it was and
-                    # the region honestly marked `overflow`, which is what "the
-                    # words do not fit this balloon" has always meant here: the
-                    # Persian is shortened and merged again, not shipped over
-                    # the artwork.
-                    Image = _pil()[0]
+            if stray or clipped:
+                # Painted, checked, and taken back off again. Noticing the
+                # overflow after the ink is down is not enough — the ink is
+                # down, and the gate is right to count it. Restoring the
+                # rectangle leaves the page exactly as this region found it —
+                # every neighbour that has already drawn still on it — and the
+                # region honestly marked `overflow`, which is what "the words
+                # do not fit this balloon" has always meant here: the Persian
+                # is shortened and merged again, not shipped over the artwork.
+                Image = _pil()[0]
+                if x1 > x0 and y1 > y0:
                     canvas.paste(
                         Image.fromarray(before_region[y0:y1, x0:x1]), (x0, y0))
-                    painted.clear()
-                    record["status"] = "overflow"
+                painted.clear()
+                record["status"] = "overflow"
+                if stray:
                     record["outside_authorised"] = stray
-                    if region["id"] not in overflow:
-                        overflow.append(region["id"])
+                if clipped:
+                    record["clipped_by_page"] = True
+                if region["id"] not in overflow:
+                    overflow.append(region["id"])
 
         region["typeset"] = record
         # Only what is still on the page. A region painted, measured, found to

@@ -255,6 +255,18 @@ def find_font(preferred: str | None = None) -> Path:
 _DEFINITELY_MISSING = "\ue000\ue001\ue002\ue003\ue004"
 
 
+#: What a face has to be able to write before this project will set Persian in
+#: it, in groups so one missing letter cannot hide behind the rest: the Arabic
+#: base alphabet, the four letters that are Persian and not Arabic, the Persian
+#: digits, and the diacritics a translator uses to disambiguate a word.
+_COVERAGE = (
+    "ابتثجحخدذرزسشصضطظعغفقلمنهوي",
+    "پچژگک",
+    "ی۰۱۲۳۴۵۶۷۸۹",
+    "کَکُکِکّ",
+)
+
+
 def _supports_persian(font_path: Path) -> bool:
     """Whether this face really has Persian letters, or boxes where they go.
 
@@ -284,9 +296,29 @@ def _supports_persian(font_path: Path) -> bool:
             return None
         return canvas.tobytes()
 
-    persian = drawn("چگونه")
+    return covers(drawn)
+
+
+def covers(drawn: Any) -> bool:
+    """Whether every group this project needs is really in the face.
+
+    `drawn(text)` renders one string and returns its pixels, or `None`.
+
+    Every group, not one sample word. A face can hold the Arabic letters and
+    lack the four that are Persian and not Arabic — پ چ ژ گ — and the old
+    sample `چگونه` happens to contain two of them, so one word passed a face
+    that could not write half the alphabet. Each group is drawn on its own and
+    compared with the tofu mark, because a face missing ONE group still draws
+    every other group perfectly.
+    """
     blank = drawn("")
-    if persian is None or blank is None or persian == blank:
-        return False
     missing = drawn(_DEFINITELY_MISSING)
-    return missing is None or persian != missing
+    if blank is None:
+        return False
+    for group in _COVERAGE:
+        shown = drawn(group)
+        if shown is None or shown == blank:
+            return False
+        if missing is not None and shown == missing:
+            return False
+    return True
