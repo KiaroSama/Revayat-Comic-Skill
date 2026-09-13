@@ -375,21 +375,37 @@ def call(provider, role: str, *args, timeout: float = DEFAULT_TIMEOUT,
 # --------------------------------------------------------------------------- #
 
 def engine_identity(engine: Any) -> str:
-    """A name for WHICH model is about to answer, with no secret in it.
+    """A name for WHAT is about to answer, with no secret in it.
 
     Two adapters of the same class pointed at different models gave answers of
     different quality, and a resume could not tell them apart: the record said
-    a provider had written the value, and both were that provider. Only
-    non-secret identity fields are read, and nothing is guessed from the
-    object's own attributes beyond the ones named here — a key, a token or a
-    URL with credentials in it must never reach a digest that is written to
-    the document.
+    a provider had written the value, and both were that provider.
+
+    Reading the object's attributes is not enough, and that is the defect this
+    carries. `HostedTranslation` reads its model out of the environment at call
+    time and has no `model` attribute at all, so changing the model left the
+    recorded identity byte for byte the same and every line in the chapter
+    looked like an answer from the new one.
+
+    So an adapter may DESCRIBE the request it is about to make — `descriptor()`
+    returning the effective model, endpoint and prompt version as it will
+    actually be used. Declared by the adapter rather than guessed from here,
+    because only the adapter knows which of its values are configuration and
+    which are credentials: a key, a token or a URL with a password in it must
+    never reach a digest that is written into the document.
     """
-    parts = [type(engine).__name__, str(getattr(engine, "name", "") or "")]
+    fields: dict[str, Any] = {}
     for field_name in ("model", "version", "prompt_version"):
         value = getattr(engine, field_name, None)
         if value is not None:
-            parts.append(f"{field_name}={value}")
+            fields[field_name] = value
+    describe = getattr(engine, "descriptor", None)
+    if callable(describe):
+        described = describe() or {}
+        fields.update({key: value for key, value in described.items()
+                       if value is not None})
+    parts = [type(engine).__name__, str(getattr(engine, "name", "") or "")]
+    parts += [f"{key}={fields[key]}" for key in sorted(fields)]
     return "|".join(part for part in parts if part)
 
 

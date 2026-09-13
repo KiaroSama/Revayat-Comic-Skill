@@ -35,101 +35,6 @@ import pageir as ir
 import providers
 
 
-def _parse_multipart(content_type: str, body: bytes) -> dict[str, bytes]:
-    """The parts of a `multipart/form-data` body, by field name.
-
-    Hand-rolled on purpose: `email`'s parser re-encodes a binary part, and the
-    thing under test here is whether a PNG arrived intact.
-    """
-    boundary = content_type.split("boundary=")[1].strip().encode()
-    parts: dict[str, bytes] = {}
-    for chunk in body.split(b"--" + boundary):
-        if not chunk.strip(b"-\r\n"):
-            continue  # the preamble and the closing `--`
-        head, _, payload = chunk.partition(b"\r\n\r\n")
-        name = head.decode("utf-8", "replace").split('name="')[1].split('"')[0]
-        parts[name] = payload[:-2] if payload.endswith(b"\r\n") else payload
-    return parts
-
-
-class _Endpoint:
-    """An OpenAI-compatible server that answers however a test needs it to."""
-
-    def __init__(self):
-        self.requests: list[dict] = []
-        self.chat = {"choices": [{"message": {"content": "بس کن"}}]}
-        self.image: dict | None = None
-        self.status = 200
-
-    def serve(self):
-        endpoint = self
-
-        class Handler(BaseHTTPRequestHandler):
-            protocol_version = "HTTP/1.1"
-
-            def do_POST(self):  # noqa: N802 - BaseHTTPRequestHandler's name
-                length = int(self.headers.get("Content-Length") or 0)
-                raw = self.rfile.read(length)
-                kind = self.headers.get("Content-Type", "")
-                if self.path.endswith("images/edits"):
-                    # `images/edits` is multipart, and this server now refuses
-                    # anything else. It used to read JSON from every path, and
-                    # that is the whole reason a JSON image request looked like
-                    # it worked for as long as it did: nothing but this handler
-                    # had ever accepted one.
-                    if not kind.startswith("multipart/form-data"):
-                        endpoint.requests.append(
-                            {"path": self.path, "refused": kind})
-                        self.send_response(400)
-                        self.send_header("Content-Length", "0")
-                        self.end_headers()
-                        return
-                    payload = _parse_multipart(kind, raw)
-                else:
-                    payload = json.loads(raw.decode("utf-8"))
-                endpoint.requests.append({
-                    "path": self.path,
-                    "authorization": self.headers.get("Authorization"),
-                    "content_type": kind,
-                    "payload": payload,
-                })
-                if endpoint.status != 200:
-                    self.send_response(endpoint.status)
-                    self.send_header("Content-Length", "0")
-                    self.end_headers()
-                    return
-                answer = (endpoint.image if self.path.endswith("images/edits")
-                          else endpoint.chat)
-                body = json.dumps(answer).encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-
-            def log_message(self, *_args):
-                """No access log: it goes to stderr on every request."""
-
-        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
-        return f"http://127.0.0.1:{self.httpd.server_address[1]}/v1"
-
-
-@pytest.fixture
-def endpoint(monkeypatch):
-    server = _Endpoint()
-    base = server.serve()
-    monkeypatch.setenv(adapters.API_BASE, base)
-    monkeypatch.setenv(adapters.TRANSLATION_MODEL, "a-model")
-    monkeypatch.setenv(adapters.IMAGE_MODEL, "an-image-model")
-    monkeypatch.delenv(adapters.API_KEY, raising=False)
-    try:
-        yield server
-    finally:
-        server.httpd.shutdown()
-        server.httpd.server_close()
-
-
 # --- translation --------------------------------------------------------------
 
 def test_a_hosted_translation_comes_back_through_the_boundary(endpoint):
@@ -551,7 +456,6 @@ class _Redirector:
         self.first_port = self.first.server_address[1]
 
     def __enter__(self):
-        import threading
 
         for server in (self.first, self.second):
             threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -591,7 +495,6 @@ def test_a_response_body_is_bounded(monkeypatch, declares_length):
     purpose — a flood large enough to fill the socket buffers made this test
     race the server's reset and fail on Windows with a connection error
     instead of the refusal it was written to prove."""
-    import threading
 
     limit = 4 * 1024
     payload = (b'{"choices": [{"message": {"content": "'

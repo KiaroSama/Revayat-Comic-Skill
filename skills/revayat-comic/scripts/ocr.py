@@ -120,12 +120,27 @@ def read_document(
             # The previous version called the engine again and let a differing
             # answer overwrite a good one, which made two runs of the same
             # command produce two different documents.
+            #
             # Asked BEFORE the call, and about the crop this run would make —
-            # the skip used to happen before anything consulted the crop name
-            # at all, so a region whose box had moved was resumed against a
-            # reading of a different part of the page.
+            # the skip used to happen before anything consulted the crop at
+            # all, so a region whose box had moved was resumed against a
+            # reading of a different part of the page. The crop is made FIRST
+            # and the identity is taken from its bytes.
+            # A hash of the geometry the crop was named for is a description of
+            # the picture, not the picture: change how the cropper pads or what
+            # it draws and every region resumes against a reading of an image
+            # that no longer exists. Making it costs a local encode, not a
+            # call, and the file is named for its geometry so a second run
+            # reuses it.
+            crop = _crop_path(root, page, region, page_image)
             identity = providers.request_identity(
-                crop=crop_identity(page, region), provider=provider,
+                crop=ir.sha256_file(crop), provider=provider,
+                # WHICH reader, not only which name it was registered under.
+                # The name was the whole record, so pointing the same provider
+                # at another model left every transcription in the chapter
+                # looking like an answer from the new one.
+                engine=providers.engine_identity(engine),
+                eyes=providers.engine_identity(eyes) if eyes else None,
                 language=language, vision=vision,
                 orientation=region.get("orientation") if orientation_aware
                 else None)
@@ -135,7 +150,6 @@ def read_document(
                 page_counts["resumed"] += 1
                 continue
 
-            crop = _crop_path(root, page, region, page_image)
             # Vertical Japanese is the reason this stage exists, and the
             # detector already measured it — so an engine that can use the
             # writing direction is told it rather than left to re-derive it
