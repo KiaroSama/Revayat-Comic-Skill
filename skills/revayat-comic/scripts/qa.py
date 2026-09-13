@@ -59,6 +59,7 @@ CODES = {
     "page-not-cleaned": "error",
     "delivery-mismatch": "error",
     "delivery-unverified": "warning",
+    "archive-unverified": "warning",
     "stage-unverified": "warning",
     "policy-conflict": "warning",
     "annotation-unplaced": "warning",

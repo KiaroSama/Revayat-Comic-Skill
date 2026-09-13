@@ -15,6 +15,7 @@ import pytest
 
 import export
 import pageir as ir
+import writers
 import readers
 
 
@@ -126,7 +127,7 @@ def test_a_folder_export_that_fails_leaves_the_previous_edition_whole(
     export.export_document(finished, out)
     before = _previous_edition(out)
 
-    monkeypatch.setattr(export, "_comic_info",
+    monkeypatch.setattr(writers, "_comic_info",
                         lambda *a, **k: (_ for _ in ()).throw(OSError("no")))
     with pytest.raises(OSError):
         export.export_document(finished, out)

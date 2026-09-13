@@ -625,12 +625,12 @@ def test_the_accepted_image_formats_are_defined_once(tmp_path):
     accepted four formats, so a BMP chapter imported cleanly and was then
     invisible to the gate: `found=0`, `archive-page-count`."""
     import clean as clean_module
-    import export as export_module
     import readers
+    import writers
 
     shared = set(readers.IMAGE_SUFFIXES)
     assert set(qa.IMAGE_SUFFIXES) == shared
-    assert set(export_module.IMAGE_SUFFIXES) == shared
+    assert set(writers.IMAGE_SUFFIXES) == shared
     assert set(clean_module.IMAGE_SUFFIXES) == shared
 
 

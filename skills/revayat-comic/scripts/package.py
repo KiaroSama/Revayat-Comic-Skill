@@ -52,73 +52,90 @@ def _page_size(payload: bytes) -> tuple[tuple[int, int] | None, str]:
 MAX_DECODE_PIXELS = 80_000_000
 
 
-def _manifest_of(doc: dict[str, Any]) -> list[dict[str, Any]]:
-    """What the last export said it wrote, if it said."""
-    return ((doc.get("stages") or {}).get("export") or {}).get("manifest") or []
+#: Refuse a package with more members than this before reading any of them.
+#: A chapter is a few dozen pages; a hundred thousand members is an attack on
+#: the checker, not a comic.
+MAX_MEMBERS = 5_000
+
+#: Per page, uncompressed. Checked against the member's DECLARED size before a
+#: byte is extracted, so a zip bomb is refused rather than decompressed.
+MAX_MEMBER_BYTES = 64 * 1024 * 1024
+
+#: And the whole package, so many just-under-the-limit members cannot add up.
+MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
+
+#: Uncompressed divided by compressed. Ordinary PNG and JPEG pages are close to
+#: 1; a thousandfold is a file built to be expanded, not read.
+MAX_COMPRESSION_RATIO = 200
 
 
-def _check_identity(findings: Findings, where: str,
-                    pages: list[tuple[str, bytes]],
-                    doc: dict[str, Any]) -> None:
-    """Compare the package with the manifest the export wrote.
+def _manifest_of(doc: dict[str, Any], package: Path,
+                 fmt: str) -> tuple[list[dict[str, Any]], str]:
+    """`(manifest, problem)` — what THIS package's export wrote, if it can be
+    known.
 
-    The order check used to sort the names and then ask whether they were
-    sorted, which is true of every list. What it meant to ask is whether
-    sorting them gives the document's reading order — and that can only be
-    answered against a record of which page each name was.
+    There was one manifest, belonging to whichever export ran last. Export a
+    chapter as CBZ and then as PDF and the CBZ was verified against the PDF's
+    rows: different names, different bytes, every page reported wrong.
+
+    Two ways of finding the right one, in order. The destination it was
+    published to, which is exact. Failing that, its FORMAT — a package that has
+    been copied, renamed or handed to somebody is still recognisably the
+    archive edition or the PDF edition, and refusing to check a file because it
+    moved would make the gate useless for the thing people actually do with a
+    package. Two editions of one format and no destination match is genuinely
+    ambiguous, and says so.
     """
-    manifest = _manifest_of(doc)
-    if not manifest:
-        return
-    by_name = {row["name"]: row for row in manifest}
+    stamp = ((doc.get("stages") or {}).get("export") or {})
+    if not stamp:
+        return [], ("this chapter has never been exported, so there is "
+                    "nothing to check the package against")
 
-    # Two identical pages is how a duplicated spread ships: the count is right,
-    # the names are right, and one page of the chapter is simply missing. But a
-    # chapter may legitimately hold two identical pages — a black page, a
-    # repeated panel — so this is only a defect where the export says those two
-    # pages were NOT the same.
-    seen: dict[str, str] = {}
-    for name, payload in pages:
-        digest = ir.sha256_bytes(payload)
-        twin = seen.get(digest)
-        if twin is not None:
-            expected = (by_name.get(name) or {}).get("sha256")
-            other = (by_name.get(twin) or {}).get("sha256")
-            if expected and other and expected != other:
-                findings.add("archive-duplicate-page", where,
-                             f"{name} is byte-identical to {twin}, and the "
-                             f"export wrote two different pages")
-        seen[digest] = name
-    for index, (name, payload) in enumerate(pages):
-        row = by_name.get(name)
-        if row is None:
-            findings.add("archive-invalid", where,
-                         f"{name} is not a page this export wrote")
-            continue
-        if index < len(manifest) and manifest[index]["name"] != name:
-            findings.add("archive-invalid", where,
-                         f"{name} sorts into position {index + 1}; the export "
-                         f"wrote {manifest[index]['name']} there")
-        # Every row, lossy or not. `sha256` is the hash of the bytes the
-        # export WROTE — the re-encoded JPEG, not the PNG it came from — so it
-        # is always comparable, and gating it behind `lossy` left every JPEG
-        # page in every package unverified.
-        if row.get("sha256") and ir.sha256_bytes(payload) != row["sha256"]:
-            findings.add("archive-invalid", where,
-                         f"{name} is not the bytes that were exported")
+    target = str(package.resolve())
+    editions = dict(stamp.get("editions") or {})
+    if not editions and stamp.get("manifest"):
+        # A document stamped before editions were recorded per destination.
+        editions = {str(Path(stamp.get("path") or target).resolve()):
+                    {"format": stamp.get("format") or fmt,
+                     "manifest": stamp["manifest"]}}
+    if target in editions:
+        return (editions[target].get("manifest") or []), ""
+
+    matching = [edition for edition in editions.values()
+                if edition.get("format") == fmt]
+    if len(matching) == 1:
+        return (matching[0].get("manifest") or []), ""
+    if not matching:
+        return [], (f"the document records no {fmt} edition of this chapter, "
+                    f"so this package cannot be checked against what was "
+                    f"written. Export it again")
+    return [], (f"the document records {len(matching)} {fmt} editions and "
+                f"this package is at none of their destinations, so which one "
+                f"it should match is undecidable. Check the package at the "
+                f"destination the document names")
 
 
-def _check_pages(findings: Findings, where: str, sizes: list[tuple[str, bytes]],
-                 doc: dict[str, Any]) -> None:
-    """Open every page the package claims to have, and measure it.
+def _verify_members(findings: Findings, where: str, names: list[str],
+                    payload_of: Any, doc: dict[str, Any],
+                    manifest: list[dict[str, Any]]) -> None:
+    """Every page of the package, one page in memory at a time.
 
-    The check used to be a suffix match on a name. Measured against a package
-    built by hand: bytes that are not an image passed, a *directory* entry named
-    `p0002.png/` passed (its `Path(...).suffix` is `.png`), and a page at the
-    wrong size passed. Only the name-ordering test did real work.
+    Reading the whole chapter into a list first was a second resource limit
+    nobody had set: a folder of forty 8000x12000 pages is several gigabytes
+    before a single check runs. Nothing here holds more than one page.
+
+    Three questions, asked together because they all want the same bytes: does
+    this page decode, is it the size the document says, and is it the page this
+    export wrote.
     """
     expected = [(page["width"], page["height"]) for page in doc["pages"]]
-    for index, (name, payload) in enumerate(sizes):
+    by_name = {row["name"]: row for row in manifest}
+    seen: dict[str, str] = {}
+
+    for index, name in enumerate(names):
+        payload = payload_of(name)
+        if payload is None:
+            continue
         size, problem = _page_size(payload)
         if problem:
             findings.add("archive-invalid", where, f"{name} {problem}")
@@ -129,66 +146,212 @@ def _check_pages(findings: Findings, where: str, sizes: list[tuple[str, bytes]],
                 f"{name} is {size[0]}x{size[1]}; the document says page "
                 f"{index + 1} is {expected[index][0]}x{expected[index][1]}",
             )
+        if not manifest:
+            continue
+
+        digest = ir.sha256_bytes(payload)
+        # Two identical pages is how a duplicated spread ships: the count is
+        # right, the names are right, and one page of the chapter is simply
+        # missing. But a chapter may legitimately hold two identical pages — a
+        # black page, a repeated panel — so this is only a defect where the
+        # export says those two pages were NOT the same.
+        twin = seen.get(digest)
+        if twin is not None:
+            wanted = (by_name.get(name) or {}).get("sha256")
+            other = (by_name.get(twin) or {}).get("sha256")
+            if wanted and other and wanted != other:
+                findings.add("archive-duplicate-page", where,
+                             f"{name} is byte-identical to {twin}, and the "
+                             f"export wrote two different pages")
+        seen[digest] = name
+
+        row = by_name.get(name)
+        if row is None:
+            findings.add("archive-invalid", where,
+                         f"{name} is not a page this export wrote")
+            continue
+        # Order is the whole point of a comic archive, and a reader sorts by
+        # name. Whether THAT order is the reading order is a question about the
+        # manifest, not about the names: the old check sorted them and then
+        # asked whether they were sorted.
+        if index < len(manifest) and manifest[index]["name"] != name:
+            findings.add("archive-invalid", where,
+                         f"{name} sorts into position {index + 1}; the export "
+                         f"wrote {manifest[index]['name']} there")
+        # Every row, lossy or not. `sha256` is the hash of the bytes the export
+        # WROTE — the re-encoded JPEG, not the PNG it came from — so it is
+        # always comparable, and gating it behind `lossy` left every JPEG page
+        # in every package unverified.
+        if row.get("sha256") and digest != row["sha256"]:
+            findings.add("archive-invalid", where,
+                         f"{name} is not the bytes that were exported")
 
 
-#: How much of a page an image must cover before it counts as the page's
-#: content. A placed thumbnail, a logo, or a resource left in the page's
-#: dictionary and never drawn are all "an image on the page" to a resource
-#: listing, and none of them is the artwork.
-MIN_PAGE_IMAGE_SHARE = 0.5
+def _zip_members(findings: Findings, where: str,
+                 archive: Any) -> list[str] | None:
+    """The page members of an archive, or `None` when it must not be read.
 
-
-def _check_pdf_page(findings: Findings, where: str, document: Any, page: Any,
-                    index: int, manifest: list[dict[str, Any]]) -> None:
-    """Does this sheet actually show the page the export wrote?
-
-    The old test was `page.get_images(full=True)` — does the page's resource
-    dictionary mention an image at all. It does not ask whether the image is
-    drawn, whether it is on the sheet, or whether it is THIS chapter's page: an
-    XObject placed off the edge satisfied it, and so did an unrelated picture
-    of the same shape.
+    Every limit here is checked against what the archive DECLARES, before a
+    byte is extracted. A checker that has to decompress a file to find out it
+    is too large has already lost.
     """
-    import io
-
-    from PIL import Image
-
-    rect = page.rect
-    area = abs(rect.width * rect.height) or 1.0
-    placed = []
-    for info in page.get_image_info(xrefs=True):
-        bbox = info.get("bbox")
-        xref = info.get("xref")
-        if not bbox or not xref:
-            continue
-        drawn = pymupdf_rect(bbox) & rect
-        if abs(drawn.width * drawn.height) / area >= MIN_PAGE_IMAGE_SHARE:
-            placed.append(xref)
-    if not placed:
+    infos = archive.infolist()
+    if len(infos) > MAX_MEMBERS:
         findings.add("archive-invalid", where,
-                     f"page {index + 1} shows no image covering the sheet")
-        return
+                     f"{len(infos)} members, over the {MAX_MEMBERS} this will "
+                     f"open. Nothing was read")
+        return None
 
-    row = manifest[index] if index < len(manifest) else None
-    wanted = (row or {}).get("pixels")
-    if not wanted:
-        return          # a package from a build that did not record them
-    for xref in placed:
-        try:
-            payload = document.extract_image(xref)["image"]
-            with Image.open(io.BytesIO(payload)) as image:
-                if ir.sha256_bytes(image.convert("RGB").tobytes()) == wanted:
-                    return
-        except Exception:
+    total = 0
+    names: list[str] = []
+    for info in infos:
+        if info.is_dir():
             continue
-    findings.add("archive-invalid", where,
-                 f"page {index + 1} does not show the page this export wrote")
+        total += info.file_size
+        if info.file_size > MAX_MEMBER_BYTES:
+            findings.add("archive-invalid", where,
+                         f"{info.filename} unpacks to {info.file_size:,} "
+                         f"bytes, over the {MAX_MEMBER_BYTES:,} limit. "
+                         f"Nothing was read")
+            return None
+        if info.compress_size and (info.file_size / info.compress_size
+                                   > MAX_COMPRESSION_RATIO):
+            findings.add("archive-invalid", where,
+                         f"{info.filename} expands "
+                         f"{info.file_size // max(info.compress_size, 1)}x, "
+                         f"over the {MAX_COMPRESSION_RATIO}x limit. Nothing "
+                         f"was read")
+            return None
+        # `info.is_dir()`, not the name: a member called `p0002.png/` is a
+        # directory, and `Path("p0002.png/").suffix` is `.png`, so counting by
+        # name alone let one stand in for a page.
+        if Path(info.filename).suffix.lower() in IMAGE_SUFFIXES:
+            names.append(info.filename)
+    if total > MAX_TOTAL_BYTES:
+        findings.add("archive-invalid", where,
+                     f"unpacks to {total:,} bytes, over the "
+                     f"{MAX_TOTAL_BYTES:,} limit. Nothing was read")
+        return None
+
+    # A ZIP may hold two members under one name, and every tool picks a
+    # different one — including the reader, which will not pick the one that
+    # was checked. There is no safe reading of it.
+    repeated = sorted({name for name in names if names.count(name) > 1})
+    if repeated:
+        findings.add("archive-invalid", where,
+                     f"{len(repeated)} name(s) appear on more than one member "
+                     f"({', '.join(repeated[:3])}), so which page a reader "
+                     f"opens is undefined")
+        return None
+    return sorted(names)
 
 
-def pymupdf_rect(bbox: Any) -> Any:
-    """A `Rect` from whatever shape PyMuPDF handed back."""
-    import pymupdf
+def _looks_like_pdf(package: Path) -> bool:
+    """Five bytes, so the format is decided by content and not by a suffix."""
+    try:
+        with package.open("rb") as handle:
+            return handle.read(5) == b"%PDF-"
+    except OSError:
+        return False
 
-    return pymupdf.Rect(bbox)
+
+def _check_cbz(findings: Findings, package: Path, doc: dict[str, Any],
+               manifest: list[dict[str, Any]]) -> int:
+    with zipfile.ZipFile(package) as archive:
+        bad = archive.testzip()
+        if bad:
+            findings.add("archive-invalid", package.name,
+                         f"corrupt member: {bad}")
+        names = _zip_members(findings, package.name, archive)
+        if names is None:
+            return 0
+        _verify_members(findings, package.name, names,
+                        lambda name: archive.read(name), doc, manifest)
+        return len(names)
+
+
+def _check_dir(findings: Findings, package: Path, doc: dict[str, Any],
+               manifest: list[dict[str, Any]]) -> int:
+    children = sorted(child for child in package.iterdir()
+                      if child.is_file()
+                      and child.suffix.lower() in IMAGE_SUFFIXES)
+    if len(children) > MAX_MEMBERS:
+        findings.add("archive-invalid", package.name,
+                     f"{len(children)} page(s), over the {MAX_MEMBERS} this "
+                     f"will open. Nothing was read")
+        return 0
+    total = 0
+    for child in children:
+        size = child.stat().st_size
+        total += size
+        if size > MAX_MEMBER_BYTES or total > MAX_TOTAL_BYTES:
+            findings.add("archive-invalid", package.name,
+                         f"{child.name} takes the folder over the "
+                         f"{MAX_MEMBER_BYTES:,}-byte page limit or the "
+                         f"{MAX_TOTAL_BYTES:,}-byte total. Nothing was read")
+            return 0
+    _verify_members(findings, package.name, [child.name for child in children],
+                    lambda name: (package / name).read_bytes(), doc, manifest)
+    return len(children)
+
+
+def _check_pdf(findings: Findings, package: Path, doc: dict[str, Any],
+               manifest: list[dict[str, Any]]) -> int:
+    import pdfpage
+
+    pymupdf = ir.require("pymupdf", "pymupdf", "verifying a PDF")
+    try:
+        with pymupdf.open(str(package)) as document:
+            found = document.page_count
+            if found > MAX_MEMBERS:
+                findings.add("archive-invalid", package.name,
+                             f"{found} sheets, over the {MAX_MEMBERS} this "
+                             f"will open. Nothing was rendered")
+                return found
+            # Counting pages proves the chapter has the right number of sheets
+            # of paper. Whether each one is the size the document says — and
+            # carries anything at all — is the question a reader would notice,
+            # and nothing asked it.
+            for index, page in enumerate(document):
+                if index >= len(doc["pages"]):
+                    break
+                want = doc["pages"][index]
+                ratio = (want["width"] / want["height"]
+                         if want["height"] else 0)
+                shown = (page.rect.width / page.rect.height
+                         if page.rect.height else 0)
+                if ratio and abs(shown - ratio) > 0.02:
+                    findings.add(
+                        "archive-page-size", package.name,
+                        f"page {index + 1} is {page.rect.width:.0f}x"
+                        f"{page.rect.height:.0f}, a different shape from "
+                        f"{want['width']}x{want['height']}")
+                if not manifest:
+                    continue
+                row = manifest[index] if index < len(manifest) else {}
+                code, message = pdfpage.verify(document, page, row, index)
+                if code:
+                    findings.add(code, package.name, message)
+            return found
+    except Exception as error:
+        findings.add("archive-invalid", package.name, f"cannot open: {error}")
+        return 0
+
+
+def _format_of(package: Path) -> str:
+    """What this package IS, by content. Empty when it is nothing readable.
+
+    Dispatching on the suffix meant `export --format cbz --out chapter.xyz`
+    produced an archive the checker then refused to look inside, and a `.cbz`
+    that is not a ZIP got as far as the ZIP reader before anything noticed.
+    """
+    if package.is_dir():
+        return "dir"
+    if zipfile.is_zipfile(package):
+        return "cbz"
+    if _looks_like_pdf(package):
+        return "pdf"
+    return ""
 
 
 def check_package(package: str | Path, doc_path: str | Path) -> dict[str, Any]:
@@ -201,69 +364,22 @@ def check_package(package: str | Path, doc_path: str | Path) -> dict[str, Any]:
         findings.add("archive-invalid", package.name, "the file does not exist")
         return _package_report(findings, package, expected, 0)
 
-    found = 0
-    if package.suffix.lower() in {".cbz", ".zip"}:
-        if not zipfile.is_zipfile(package):
-            findings.add("archive-invalid", package.name, "not a valid ZIP archive")
-        else:
-            with zipfile.ZipFile(package) as archive:
-                bad = archive.testzip()
-                if bad:
-                    findings.add("archive-invalid", package.name,
-                                 f"corrupt member: {bad}")
-                # `info.is_dir()`, not the name: a member called `p0002.png/`
-                # is a directory, and `Path("p0002.png/").suffix` is `.png`, so
-                # counting by name alone let one stand in for a page.
-                names = sorted(
-                    info.filename for info in archive.infolist()
-                    if not info.is_dir()
-                    and Path(info.filename).suffix.lower() in IMAGE_SUFFIXES
-                )
-                found = len(names)
-                members = [(name, archive.read(name)) for name in names]
-                _check_pages(findings, package.name, members, doc)
-                # Order is the whole point of a comic archive, and a reader
-                # sorts by name. Whether THAT order is the reading order is a
-                # question about the manifest, not about the names: the old
-                # check sorted them and then asked whether they were sorted.
-                _check_identity(findings, package.name, members, doc)
-    elif package.suffix.lower() == ".pdf":
-        pymupdf = ir.require("pymupdf", "pymupdf", "verifying a PDF")
-        try:
-            manifest = _manifest_of(doc)
-            with pymupdf.open(str(package)) as document:
-                found = document.page_count
-                # Counting pages proves the chapter has the right number of
-                # sheets of paper. Whether each one is the size the document
-                # says — and carries anything at all — is the question a reader
-                # would notice, and nothing asked it.
-                for index, page in enumerate(document):
-                    if index >= len(doc["pages"]):
-                        break
-                    want = doc["pages"][index]
-                    ratio = (want["width"] / want["height"]
-                             if want["height"] else 0)
-                    shown = (page.rect.width / page.rect.height
-                             if page.rect.height else 0)
-                    if ratio and abs(shown - ratio) > 0.02:
-                        findings.add(
-                            "archive-page-size", package.name,
-                            f"page {index + 1} is {page.rect.width:.0f}x"
-                            f"{page.rect.height:.0f}, a different shape from "
-                            f"{want['width']}x{want['height']}")
-                    _check_pdf_page(findings, package.name, document, page,
-                                    index, manifest)
-        except Exception as error:
-            findings.add("archive-invalid", package.name, f"cannot open: {error}")
-    else:
-        children = sorted(
-            child for child in package.iterdir()
-            if child.is_file() and child.suffix.lower() in IMAGE_SUFFIXES
-        ) if package.is_dir() else []
-        found = len(children)
-        members = [(child.name, child.read_bytes()) for child in children]
-        _check_pages(findings, package.name, members, doc)
-        _check_identity(findings, package.name, members, doc)
+    fmt = _format_of(package)
+    if not fmt:
+        findings.add(
+            "archive-invalid", package.name,
+            "not a valid ZIP archive"
+            if package.suffix.lower() in {".cbz", ".zip"}
+            else f"{package.name} is neither an archive, a PDF nor a folder "
+                 f"of pages")
+        return _package_report(findings, package, expected, 0)
+
+    manifest, problem = _manifest_of(doc, package, fmt)
+    if problem:
+        findings.add("archive-unverified", package.name, problem)
+
+    found = {"dir": _check_dir, "cbz": _check_cbz,
+             "pdf": _check_pdf}[fmt](findings, package, doc, manifest)
 
     if found != expected:
         findings.add("archive-page-count", package.name,

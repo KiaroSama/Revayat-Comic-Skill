@@ -507,7 +507,8 @@ $PY $SKILL_DIR/scripts/revayat-comic.py qa package --doc $WORK/comic.json \
 
 | Code | Meaning | Action |
 | --- | --- | --- |
-| `archive-invalid` | the package will not open, or its page names do not sort into reading order | re-run export |
+| `archive-invalid` | the package will not open, its page names do not sort into reading order, one name is on two members, it is over a read limit, or a sheet does not show the page that was exported | re-run export, or check the package the document names |
+| `archive-unverified` (warning) | this package is not an edition the document records exporting, or it was written by a build that recorded nothing to check its sheets against | export it again; the document remembers the last few destinations |
 | `archive-page-count` | the package has a different number of pages from the document | re-run export; if it repeats, a page failed to write |
 | `archive-page-size` | a page in the package is not the size the document says | re-run export; a mismatch means the wrong file was packed |
 
