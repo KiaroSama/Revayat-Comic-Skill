@@ -259,6 +259,48 @@ def region_mask(
     return mask, box
 
 
+def _may_be_edited(region: dict[str, Any], sfx_policy: str) -> bool:
+    """Whether the cleaner may touch this region's pixels at all.
+
+    Authority comes from the decisions that stand NOW, and there are three
+    sources of "leave this alone": the reader dropped it (there is no text
+    there), the reader kept it, or the POLICY keeps it — a sound effect under
+    `--sfx-policy keep` stays in the artwork by decision, and masking it put
+    artwork inside the area the cleaner may rewrite and inside the denominator
+    the preservation proof divides by.
+
+    An erase region is the exception that proves it: "remove this and put
+    nothing back" is a decision to touch the pixels, so it is masked even
+    though it will never carry Persian.
+    """
+    if region.get("erase"):
+        return True
+    if region.get("dropped") or region.get("keep"):
+        return False
+    return ir.translatable(region, sfx_policy)
+
+
+def _retire_assets(root: Path, page: dict[str, Any],
+                   keep: set[str]) -> list[str]:
+    """Delete the mask files this rebuild did not write.
+
+    A rebuild that leaves the previous run's files behind leaves authority
+    behind with them: remove every region from a page and the union mask still
+    said the cleaner could rewrite most of it. The sweep is bounded to this
+    page's own mask folder, and it removes only names this rebuild did not
+    produce.
+    """
+    folder = root / "masks" / page["id"]
+    if not folder.is_dir():
+        return []
+    retired = []
+    for child in sorted(folder.iterdir()):
+        if child.is_file() and child.name not in keep:
+            child.unlink()
+            retired.append(f"{page['id']}/{child.name}")
+    return retired
+
+
 def build_document(
     doc_path: str | Path,
     *,
@@ -271,19 +313,39 @@ def build_document(
     doc_path = Path(doc_path)
     doc = ir.load_doc(doc_path)
     root = ir.doc_dir(doc_path)
+    # The effective sound-effect policy: an effect this chapter keeps is
+    # artwork, and artwork is not the cleaner's to rewrite.
+    policy = doc["meta"].get("sfx_policy", "keep")
 
     from PIL import Image
 
     written = 0
     derived = 0
+    retired: list[str] = []
     per_page: list[dict[str, Any]] = []
     for page in doc["pages"]:
         if pages and page["id"] not in pages:
             continue
         if not page.get("regions"):
-            per_page.append({"page": page["id"], "regions": 0, "coverage": 0.0})
+            # A page with nothing on it still has to be REBUILT, not skipped.
+            # Skipping left the previous run's union and region masks on disk,
+            # so removing every region from a page left the cleaner authorised
+            # over most of it — with nothing in the document to say why.
+            empty = np.zeros((page["height"], page["width"]), np.uint8)
+            relative = f"masks/{page['id']}/union.png"
+            ir.write_bytes(root / relative,
+                           _encode_png(Image.fromarray(empty, mode="L")))
+            page["mask"] = relative
+            page["mask_coverage"] = 0.0
+            page["free_lettering_mask"] = "solid" if solid_free else "glyphs"
+            page["mask_options"] = {"grow": grow, "pad": pad,
+                                    "solid_free": bool(solid_free)}
+            retired += _retire_assets(root, page, {"union.png"})
+            per_page.append({"page": page["id"], "regions": 0,
+                             "not_masked": 0, "coverage": 0.0})
             continue
 
+        written_names: set[str] = set()
         rgb = np.asarray(ir.load_image(root / page["image"]))
         size = (page["width"], page["height"])
         union = np.zeros((page["height"], page["width"]), np.uint8)
@@ -295,7 +357,7 @@ def build_document(
             # kept is text they asked to leave in the artwork — masking either
             # put artwork inside the area the cleaner is allowed to rewrite and
             # inside the denominator the preservation proof divides by.
-            if region.get("dropped") or region.get("keep"):
+            if not _may_be_edited(region, policy):
                 region["mask"] = None
                 region["mask_box"] = None
                 skipped += 1
@@ -317,6 +379,7 @@ def build_document(
             )
             region["mask"] = relative
             region["mask_box"] = box
+            written_names.add(Path(relative).name)
             x, y, w, h = box
             union[y:y + h, x:x + w] = np.maximum(union[y:y + h, x:x + w], mask)
             written += 1
@@ -324,6 +387,8 @@ def build_document(
         relative = f"masks/{page['id']}/union.png"
         ir.write_bytes(root / relative, _encode_png(Image.fromarray(union, mode="L")))
         page["mask"] = relative
+        written_names.add("union.png")
+        retired += _retire_assets(root, page, written_names)
         coverage = float((union > 0).sum()) / float(page["width"] * page["height"])
         page["mask_coverage"] = round(coverage, 5)
         # Written HERE, by the builder, for THIS page. The mode was recorded
@@ -347,7 +412,8 @@ def build_document(
     # when it is there.
     doc["meta"]["free_lettering_mask"] = "solid" if solid_free else "glyphs"
     stages.stamp_stage(doc, "masks",
-                       {"written": written, "balloons_derived": derived},
+                       {"written": written, "balloons_derived": derived,
+                        "retired": len(retired)},
                        options={"grow": grow, "pad": pad,
                                 "solid_free": solid_free}, pages=pages)
     ir.save_doc(doc, doc_path)
@@ -360,6 +426,10 @@ def build_document(
         "document": str(doc_path),
         "masks_written": written,
         "balloons_derived": derived,
+        # Files this rebuild removed because nothing writes them any more. A
+        # rebuild that leaves them behind leaves authority behind with them.
+        "retired": len(retired),
+        "retired_assets": retired[:20],
         "pages": per_page,
         "excessive_coverage": excessive,
         "warning": (

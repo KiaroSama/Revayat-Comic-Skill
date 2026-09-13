@@ -61,7 +61,7 @@ STAGE_INPUTS: dict[str, tuple[str, ...]] = {
     "glossary": ("source", "text"),
     "falint": ("text",),
     "masks": ("render", "policy"),
-    "clean": ("render", "policy"),
+    "clean": ("render", "policy", "masked"),
     "typeset": ("render", "text", "policy"),
     "export": ("render", "text", "policy"),
 }
@@ -120,9 +120,20 @@ def _region_text(region: dict[str, Any]) -> str:
 
 
 def _region_render(region: dict[str, Any]) -> str:
-    """What a mask and a set balloon are measured from."""
+    """What a mask and a set balloon are measured from.
+
+    The ACTIONS are in here as well as in `text`, and they answer a different
+    question in each: `text` asks what the page says, this asks what the
+    cleaner is allowed to touch. A region the reader kept or dropped gets no
+    mask at all, so flipping either one changes the authority — and while they
+    lived only in `text`, masking and cleaning were never invalidated by the
+    decision that governs them.
+    """
     return "|".join([
         region["id"],
+        str(bool(region.get("dropped"))),
+        str(bool(region.get("keep"))),
+        str(bool(region.get("erase"))),
         ",".join(str(value) for value in region["bbox"]),
         region["kind"],
         region["orientation"],
@@ -156,6 +167,20 @@ def _page_facet(page: dict[str, Any], name: str) -> str:
     elif name == "text":
         for region in page.get("regions", []):
             digest.update((_region_text(region) + "|").encode("utf-8"))
+    elif name == "masked":
+        # What `mask` produced and `clean` consumes. `clean` already depends on
+        # the masks stage's revision, which covers a rebuild — this covers the
+        # page's mask mode, options and assets being changed under it without
+        # one, which is the case where the cleaner reaches for the tier a solid
+        # patch must never reach.
+        digest.update(
+            f"{page.get('free_lettering_mask')}|"
+            f"{_stable(page.get('mask_options'))}|{page.get('mask')}|"
+            f"{page.get('mask_coverage')}|".encode("utf-8"))
+        for region in page.get("regions", []):
+            digest.update(
+                f"{region['id']}|{region.get('mask')}|"
+                f"{_stable(region.get('mask_box'))}|".encode("utf-8"))
     else:  # pragma: no cover - a facet named in the table but not built here
         raise KeyError(name)
     return digest.hexdigest()
@@ -244,17 +269,28 @@ def stamp_stage(doc: dict[str, Any], stage: str, detail: dict[str, Any], *,
     forty were freshly masked.
     """
     recorded = doc.setdefault("stages", {})
+    previous = recorded.get(stage) or {}
     selected = None if not pages else set(pages)
-    carried = dict(((recorded.get(stage) or {}).get("pages") or {}))
     current = {page["id"] for page in doc.get("pages", [])}
-    per_page = {pid: rev for pid, rev in carried.items() if pid in current}
+    per_page = {pid: rev for pid, rev in (previous.get("pages") or {}).items()
+                if pid in current}
+    # The options belong to the PAGE that ran with them, not to the stage. One
+    # dict for the whole record meant `mask --pages p0001 --grow 3` followed by
+    # `mask --pages p0002 --grow 9` left grow=9 on the record, and page 1's
+    # revision — computed with grow=3 — never matched again. Masking two pages
+    # differently is the ordinary reason this feature exists.
+    per_options = {pid: opts
+                   for pid, opts in (previous.get("page_options") or {}).items()
+                   if pid in current}
     for page in doc.get("pages", []):
         if selected is None or page["id"] in selected:
             per_page[page["id"]] = page_revision(doc, stage, page,
                                                  options=options)
+            per_options[page["id"]] = options if options is not None else {}
     recorded[stage] = {
         "scheme": SCHEME,
         "pages": per_page,
+        "page_options": per_options,
         # What each page consumed from upstream, so "why is this stale" has an
         # exact answer instead of a guess: an upstream that moved is a
         # different instruction from an input of this page's own that moved.
@@ -264,6 +300,8 @@ def stamp_stage(doc: dict[str, Any], stage: str, detail: dict[str, Any], *,
                    for pid in per_page}
             for need in STAGE_NEEDS.get(stage, ())
         },
+        # The last run's options, for a human reading the document. The value
+        # every freshness decision uses is `page_options`.
         "options": options if options is not None else {},
         **detail,
     }
@@ -311,10 +349,14 @@ def stale_pages(doc: dict[str, Any], stage: str) -> list[str]:
     if record.get("scheme") != SCHEME or not record.get("pages"):
         return []                 # unverified, not stale
     consumed = record["pages"]
-    options = record.get("options")
+    per_options = record.get("page_options") or {}
+    fallback = record.get("options")
     out = []
     for page in doc.get("pages", []):
         was = consumed.get(page["id"])
+        # This page's own options. `record["options"]` is only the fallback for
+        # a stamp written before they were recorded per page.
+        options = per_options.get(page["id"], fallback)
         if was is None or was != page_revision(doc, stage, page,
                                                options=options,
                                                stages=stages):
