@@ -47,7 +47,10 @@ def test_already_correct_text_is_left_alone(text):
 # --- ZWNJ -------------------------------------------------------------------
 
 def test_a_plural_suffix_gets_a_zero_width_non_joiner():
-    assert fix("کتاب ها") == f"کتاب{ZWNJ}ها"
+    """Anchored by the word after it. `را` is the direct-object marker and can
+    only follow a complete noun phrase, so the `ها` before it is the plural and
+    nothing else."""
+    assert fix("کتاب ها را بده") == f"کتاب{ZWNJ}ها را بده"
 
 
 def test_a_verb_prefix_is_offered_rather_than_applied():
@@ -71,7 +74,7 @@ def test_chained_suffixes_settle():
 
 
 def test_zwnj_can_be_switched_off():
-    assert fix("کتاب ها", zwnj=False) == "کتاب ها"
+    assert fix("کتاب ها را", zwnj=False) == "کتاب ها را"
 
 
 # --- Punctuation ------------------------------------------------------------
@@ -147,13 +150,13 @@ def test_clean_persian_reports_nothing():
 def test_fixing_a_document_touches_only_what_changed(translated):
     doc = ir.load_doc(translated)
     region = next(r for _, r in ir.iter_regions(doc))
-    region["target_text"] = "كتاب ها, 25 تا"
+    region["target_text"] = "كتاب ها را, 25 تا"
     ir.save_doc(doc, translated)
 
     report = falint.fix_document(translated)
     assert region["id"] in report["changed"]
     fixed = ir.find_region(ir.load_doc(translated), region["id"])["target_text"]
-    assert fixed == f"کتاب{ZWNJ}ها، ۲۵ تا"
+    assert fixed == f"کتاب{ZWNJ}ها را، ۲۵ تا"
 
 
 def test_linting_a_document_groups_by_code(translated):
@@ -472,3 +475,104 @@ def test_a_region_from_an_older_build_keeps_its_bare_acknowledgment():
     evidence of anything wrong."""
     assert not falint.lint_text("می روم خانه.", acknowledged=["zwnj-review"],
                                 acknowledged_spans=None)
+
+
+# --- The particle that is not a suffix --------------------------------------
+
+@pytest.mark.parametrize("line,meaning", [
+    ("حواست باشه ها!", "mind you watch out"),
+    ("این کار رو نکن ها.", "don't do that, mind"),
+    ("نری ها", "don't go, mind"),
+])
+def test_the_colloquial_particle_is_not_glued_to_the_verb(line, meaning):
+    """`ها` after a verb is the warning particle, not a plural. It was joined
+    on a rule that claimed to test for a noun and tested for two Persian
+    letters, so `باشه ها` became `باشه‌ها` — which is not what the sentence
+    says, and the reader was never asked."""
+    assert fix(line) == line, meaning
+    assert any(issue["code"] == "zwnj-review"
+               for issue in falint.lint_text(line)), meaning
+
+
+def test_the_note_names_both_readings_of_a_bare_plural():
+    """A reader deciding this needs to know what they are deciding between."""
+    note = next(issue for issue in falint.lint_text("کتاب ها")
+                if issue["code"] == "zwnj-review")
+
+    assert "colloquial particle" in note["detail"]
+
+
+def test_a_bare_plural_is_reported_rather_than_joined():
+    assert fix("کتاب ها") == "کتاب ها"
+    assert any(issue["code"] == "zwnj-review"
+               for issue in falint.lint_text("کتاب ها"))
+
+
+def test_sobbing_is_not_a_plural():
+    """`های های گریه کرد` — `های` is also an interjection."""
+    assert fix("های های گریه کرد") == "های های گریه کرد"
+
+
+@pytest.mark.parametrize("line", [
+    "کتاب ها را بده",
+    "کتاب ها ی من",
+    "کتاب هایم",
+    "کتاب هایشان",
+    "حواست باشه ها!",
+    "کتاب ها",
+    "موهایم تر شد.",
+])
+def test_fixing_twice_is_the_same_as_fixing_once(line):
+    once = fix(line)
+    assert fix(once) == once
+
+
+# --- One acknowledgement, honoured the same way everywhere -------------------
+
+def test_the_linter_and_the_gate_read_the_same_acknowledgement(translated):
+    """`lint_document` passed the codes and not the spans, so a waiver recorded
+    about one pair of words silenced every later edit for ever — while the gate
+    re-asked. Which answer a reader got depended on which command they ran."""
+    import qa
+
+    doc = ir.load_doc(translated)
+    _page, region = next(iter(ir.iter_regions(doc)))
+    region["target_text"] = "می شیرین را نوشید."
+    falint.record_acknowledgement(region, ["zwnj-review"],
+                                  region["target_text"])
+    # A later edit, introducing a pair nobody has looked at.
+    region["target_text"] = "موهایم تر شد."
+    ir.save_doc(doc, translated)
+
+    linted = {finding["code"]
+              for finding in falint.lint_document(translated)["findings"]}
+    gated = [item for item in qa.check_document(translated)["findings"]
+             if item["code"] == "typography"
+             and "zwnj-review" in item["detail"]]
+
+    assert "zwnj-review" in linted, "the linter honoured a stale waiver"
+    assert gated, "the gate and the linter disagreed"
+
+
+def test_an_acknowledgement_still_settles_the_words_it_was_about(translated):
+    """The other direction: a decision a reader actually made must hold, or the
+    only ways out are to make the unsafe edit or to stop running the gate."""
+    doc = ir.load_doc(translated)
+    _page, region = next(iter(ir.iter_regions(doc)))
+    region["target_text"] = "می شیرین را نوشید."
+    falint.record_acknowledgement(region, ["zwnj-review"],
+                                  region["target_text"])
+    ir.save_doc(doc, translated)
+
+    assert not [finding for finding
+                in falint.lint_document(translated)["findings"]
+                if finding["region"] == region["id"]]
+
+
+def test_a_region_from_before_span_records_keeps_its_waiver():
+    """An older document is not evidence of anything wrong."""
+    region = {"id": "r1", "target_text": "می شیرین را نوشید.",
+              "review_ack": ["zwnj-review"]}
+
+    assert falint.lint_region(region) == []
+    assert falint.settled(region, "zwnj-review", "anything at all")
