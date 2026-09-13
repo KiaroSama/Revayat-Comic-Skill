@@ -83,7 +83,7 @@ def test_ocr_writes_nothing_when_it_is_not_sure(detected, monkeypatch):
     doc = ir.load_doc(detected)
     for _, region in ir.iter_regions(doc):
         assert not (region.get("source_text") or "").strip()
-        assert region.get("review")
+        assert region.get("audit")
 
 
 def test_ocr_survives_an_engine_that_cannot_read_the_crop(detected, monkeypatch):
