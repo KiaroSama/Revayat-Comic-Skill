@@ -48,15 +48,6 @@ jobs:
           fc-list :lang=fa family | head -5
           fc-list :lang=ja family | head -5
 
-      # The two capabilities this lane exists to prove are real. A CJK skip in
-      # this job on Linux is refused by `check_skips.py`; this step fails
-      # earlier and says which capability is missing.
-      - name: Assert the shaping and CJK capabilities this lane requires
-        if: runner.os == 'Linux'
-        run: |
-          python -c "import sys; from PIL import features; sys.exit(0) if features.check('raqm') else sys.exit('this Pillow wheel has no RAQM; the required lane must exercise the real shaper, not the fallback')"
-          echo "RAQM: present"
-
       # No runner can *write* a RAR — the format is proprietary and there is no
       # free writer — so `tests/data/real-rar.b64` carries a genuine one and this
       # supplies something that can read it. Without a backend the CBR test skips
@@ -86,6 +77,16 @@ jobs:
       # `-rs` prints a reason for every skip. The next step reads them: a skip
       # is a test that did not run, and a workflow that only looks at the final
       # summary line cannot tell "all green" from "half of it was skipped".
+      # The two capabilities this lane exists to prove are real, asserted
+      # after the dependencies are in. A CJK skip in this job on Linux is
+      # refused by `check_skips.py`; this fails earlier and says which
+      # capability is missing.
+      - name: Assert the shaping capability this lane requires
+        if: runner.os == 'Linux'
+        run: |
+          python -c "import sys; from PIL import features; sys.exit(0) if features.check('raqm') else sys.exit('this Pillow wheel has no RAQM; the required lane must exercise the real shaper, not the fallback')"
+          echo "RAQM: present"
+
       - name: Run tests
         env:
           PYTHONIOENCODING: utf-8
@@ -150,8 +151,8 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install --only-binary=:all: \
-            "pillow==10.0.0" "numpy==1.24.0" "opencv-python-headless==4.8.0.74" \
-            "pymupdf==1.24.0" "arabic-reshaper==3.0.0" "python-bidi==0.4.0" \
+            "pillow==10.0.0" "numpy==1.24.0" "opencv-python-headless==4.8.1.78" \
+            "pymupdf==1.24.3" "arabic-reshaper==3.0.0" "python-bidi==0.4.0" \
             pytest pytest-timeout rarfile
           python -m pip list --format=freeze > floor-versions.txt
           cat floor-versions.txt
