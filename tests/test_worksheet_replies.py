@@ -363,3 +363,194 @@ def test_status_tells_present_from_merged_from_edited_again(detected):
     again = worksheet.status(detected)
     assert page_id in again["edited_since_merge"]
     assert page_id not in again["merged"]
+
+
+# --- C03: the reply is validated before its cache shortcut -------------------
+
+def _first_region(doc_path, page_index=0):
+    doc = ir.load_doc(doc_path)
+    page = doc["pages"][page_index]
+    return page["id"], page["regions"][0]["id"]
+
+
+def _merged_once(doc_path):
+    worksheet.build_document(doc_path)
+    _fill(doc_path)
+    report = worksheet.merge_document(doc_path)
+    assert report["merged"], report
+    return report
+
+
+def test_a_duplicate_block_pasted_after_a_clean_merge_is_refused(detected):
+    """The shortcut compares a digest and the digest ignored the block count,
+    so a reply corrupted by a pasted-in duplicate hashed identically to the
+    reply it corrupted — and the merge reported the page as already landed."""
+    _merged_once(detected)
+    page_id, region_id = _first_region(detected)
+    path = _sheets(detected) / f"{page_id}.done.txt"
+    text = ir.read_text(path)
+    block = [line for line in text.splitlines()
+             if line.startswith(f"@@ {region_id} ")][0]
+    approved = ir.load_doc(detected)["pages"][0]["regions"][0]["target_text"]
+    ir.write_text(path, text + f"\n{block}\nfa: یک چیز دیگر\n")
+
+    report = worksheet.merge_document(detected)
+
+    assert page_id not in report["unchanged"], report
+    assert region_id in report["duplicate_regions"], report
+    after = ir.load_doc(detected)["pages"][0]["regions"][0]
+    assert after["target_text"] == approved, "approved content was overwritten"
+
+
+def test_a_same_value_duplicate_field_after_a_clean_merge_is_refused(detected):
+    """Same words, twice. The digest saw one value either way."""
+    _merged_once(detected)
+    page_id, region_id = _first_region(detected)
+    path = _sheets(detected) / f"{page_id}.done.txt"
+    text = ir.read_text(path)
+    line = [ln for ln in text.splitlines() if ln.startswith("fa: ")][0]
+    ir.write_text(path, _add_fields(text, region_id, line))
+
+    report = worksheet.merge_document(detected)
+
+    assert page_id not in report["unchanged"], report
+    assert f"{region_id}: fa" in report["duplicate_fields"], report
+
+
+def test_a_genuinely_unchanged_reply_still_takes_the_shortcut(detected):
+    """The control. Refusing everything is not validation."""
+    _merged_once(detected)
+    page_id = ir.load_doc(detected)["pages"][0]["id"]
+
+    report = worksheet.merge_document(detected)
+
+    assert page_id in report["unchanged"], report
+    assert not report["duplicate_regions"] and not report["duplicate_fields"]
+
+
+def test_re_heading_an_added_block_changes_what_the_reply_says():
+    """`@@ +slug <kind> <orientation>` is the ONLY place an added region's kind
+    is written, and the digest dropped it — so correcting the header of a box
+    the reader added was an edit nothing could see."""
+    body = ("# fingerprint: x\n@@ +sign speech horizontal\n"
+            "box: 10 10 120 60\nsrc: 看板\nfa: تابلو\n")
+
+    assert worksheet.reply_digest(body) != worksheet.reply_digest(
+        body.replace("@@ +sign speech horizontal", "@@ +sign sfx vertical"))
+
+
+def test_re_heading_an_added_box_after_a_clean_merge_is_applied(detected):
+    """The reader adds a box, merges, then corrects only its header. Nothing
+    else in the reply changed, so the digest matched and the shortcut reported
+    the page as already landed — and the box kept the kind that was wrong."""
+    worksheet.build_document(detected)
+    _fill(detected)
+    page_id = ir.load_doc(detected)["pages"][0]["id"]
+    path = _sheets(detected) / f"{page_id}.done.txt"
+    ir.write_text(path, ir.read_text(path) + (
+        "\n@@ +sign speech horizontal\n"
+        "box: 10 10 120 260\nsrc: 看板\nfa: تابلو\n"))
+    worksheet.merge_document(detected)
+    added = [region for region in ir.load_doc(detected)["pages"][0]["regions"]
+             if region.get("added_as") == "sign"][0]
+    assert added["kind"] == "speech" and added["orientation"] == "horizontal"
+
+    ir.write_text(path, ir.read_text(path).replace(
+        "@@ +sign speech horizontal", "@@ +sign sfx vertical"))
+    report = worksheet.merge_document(detected)
+
+    assert page_id not in report["unchanged"], report
+    now = [region for region in ir.load_doc(detected)["pages"][0]["regions"]
+           if region["id"] == added["id"]][0]
+    assert now["kind"] == "sfx" and now["orientation"] == "vertical"
+    # And the correction cleared what the old geometry had produced.
+    assert now["mask"] is None
+
+
+def test_an_old_reply_whose_regions_have_moved_is_not_migrated(detected):
+    """Migration must not become "accept anything". An old build's stamp and a
+    reply written before somebody split a balloon look identical; the ids do
+    not."""
+    worksheet.build_document(detected)
+    _fill(detected)
+    page_id = ir.load_doc(detected)["pages"][0]["id"]
+    path = _sheets(detected) / f"{page_id}.done.txt"
+    text = worksheet.FINGERPRINT.sub("# fingerprint: " + "b" * 64,
+                                     ir.read_text(path), count=1)
+    text = worksheet.SCHEME_LINE.sub("", text, count=1)
+    # One region gone from the page since the reply was written.
+    doc = ir.load_doc(detected)
+    doc["pages"][0]["regions"].pop()
+    ir.save_doc(doc, detected)
+    ir.write_text(path, text)
+
+    report = worksheet.merge_document(detected)
+
+    assert page_id in report["stale_worksheets"], report
+    assert page_id not in report["legacy_worksheets"]
+
+
+def test_two_notes_survive_the_round_trip_the_sheet_itself_writes(detected):
+    """The sheet writer emits one `note:` line per review note, so a region
+    with two notes produced a sheet this tool then refused as malformed."""
+    doc = ir.load_doc(detected)
+    doc["pages"][0]["regions"][0]["review"] = ["اسم گوینده مطمئن نیست",
+                                               "این بادکنک شکسته است"]
+    ir.save_doc(doc, detected)
+    worksheet.build_document(detected)
+    _fill(detected)
+    page_id = doc["pages"][0]["id"]
+
+    report = worksheet.merge_document(detected)
+
+    assert not report["duplicate_fields"], report
+    assert page_id not in report["stale_worksheets"]
+    after = ir.load_doc(detected)["pages"][0]["regions"][0]
+    assert after["review"] == ["اسم گوینده مطمئن نیست", "این بادکنک شکسته است"]
+
+
+def test_a_deleted_note_is_actually_deleted(detected):
+    """A worksheet is a picture of the page. Notes only ever accumulated, so a
+    reader who removed one found it still there after the merge."""
+    doc = ir.load_doc(detected)
+    doc["pages"][0]["regions"][0]["review"] = ["حذف شود"]
+    ir.save_doc(doc, detected)
+    worksheet.build_document(detected)
+    _fill(detected)
+    page_id, _region = _first_region(detected)
+    path = _sheets(detected) / f"{page_id}.done.txt"
+    ir.write_text(path, "\n".join(
+        line for line in ir.read_text(path).splitlines()
+        if not line.startswith("note: ")) + "\n")
+
+    worksheet.merge_document(detected)
+
+    assert not ir.load_doc(detected)["pages"][0]["regions"][0].get("review")
+
+
+def test_a_failed_document_save_leaves_the_replies_untouched(detected,
+                                                             monkeypatch):
+    """Restamping first made every reply claim a document state the save had
+    not reached. The merged Persian was lost, the replies pointed at it, and
+    the next run read them as fresh and merged nothing."""
+    worksheet.build_document(detected)
+    _fill(detected)
+    page_id = ir.load_doc(detected)["pages"][0]["id"]
+    path = _sheets(detected) / f"{page_id}.done.txt"
+    before = ir.read_text(path)
+
+    def refuse(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(ir, "save_doc", refuse)
+    with pytest.raises(OSError):
+        worksheet.merge_document(detected)
+    monkeypatch.undo()
+
+    assert ir.read_text(path) == before, "a reply was restamped anyway"
+    assert not (ir.load_doc(detected)["pages"][0]["regions"][0]
+                .get("target_text")), "the failed save left Persian behind"
+
+    # And the ordinary retry works.
+    report = worksheet.merge_document(detected)
+    assert report["merged"], report

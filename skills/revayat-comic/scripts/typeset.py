@@ -284,9 +284,9 @@ def typeset_page(
             region["typeset"] = {"status": "unreliable",
                                  "style": "unreliable",
                                  "reason": drawn.get("reason", "")}
-            note = f"sound effect left as drawn: {drawn.get('reason', '')}"
-            if note not in region.get("review", []):
-                region.setdefault("review", []).append(note)
+            ir.add_audit(
+                region,
+                f"sound effect left as drawn: {drawn.get('reason', '')}")
             unreliable.append(region["id"])
             skipped += 1
             continue
@@ -312,7 +312,8 @@ def typeset_page(
                 region["typeset"] = {"status": "unreliable", "style": drawn["verdict"],
                                      "reason": "the Persian does not fit the "
                                                "shape the lettering was drawn in"}
-                region.setdefault("review", []).append(
+                ir.add_audit(
+                    region,
                     f"sound effect restored as drawn: the Persian does not fit "
                     f"the {drawn['verdict']} shape it was lettered in")
                 unreliable.append(region["id"])
