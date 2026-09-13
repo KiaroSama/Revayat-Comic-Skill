@@ -312,6 +312,39 @@ def find_region(doc: dict[str, Any], region_id: str) -> dict[str, Any] | None:
     return None
 
 
+#: Sound-effect policies that leave the effect drawn in the artwork. `keep`
+#: says nothing more; `bilingual` and `annotate` add the Persian somewhere else
+#: and still leave the original where the artist drew it.
+SFX_KEEP_POLICIES = frozenset({"keep", "bilingual", "annotate"})
+
+
+def may_be_edited(region: dict[str, Any], sfx_policy: str = "keep") -> bool:
+    """Whether the cleaner may change this region's pixels at all.
+
+    The other half of `translatable`, and a different question: that one asks
+    whether Persian is owed here, this one asks who owns the pixels. They
+    disagree on an erasure (nothing is owed, the pixels go) and on a sound
+    effect under `bilingual` (Persian is owed, and the effect stays drawn).
+
+    It lives here because two modules were answering it separately and drifting:
+    the masker wrote authority over effects `clean` would never touch, and when
+    that was corrected `clean` stopped recognising them at all. A region the
+    cleaner may not edit gets no mask — masking it puts artwork inside the area
+    the cleaner may rewrite and inside the denominator the preservation proof
+    divides by.
+    """
+    if region.get("erase"):
+        # "Remove this and put nothing back" is a decision to touch the pixels,
+        # and it outranks the policy: an SFX policy is about lettering that
+        # belongs to the artwork, not about a stamp put on top of it.
+        return True
+    if region.get("dropped") or region.get("keep"):
+        return False
+    if region["kind"] == "sfx":
+        return sfx_policy not in SFX_KEEP_POLICIES
+    return True
+
+
 def translatable(region: dict[str, Any], sfx_policy: str = "keep") -> bool:
     """Whether this region is expected to end up carrying Persian.
 

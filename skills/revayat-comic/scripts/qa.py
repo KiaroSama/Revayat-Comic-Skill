@@ -55,6 +55,8 @@ CODES = {
     "clean-refused": "error",
     "region-not-rendered": "error",
     "erase-unfinished": "error",
+    "delivery-mismatch": "error",
+    "delivery-unverified": "warning",
     "stage-unverified": "warning",
     "policy-conflict": "warning",
     "annotation-unplaced": "warning",
@@ -311,7 +313,64 @@ def visual_review(doc_path: str | Path, *, provider: str,
     }
 
 
-def check_document(doc_path: str | Path, *, strict: bool = False) -> dict[str, Any]:
+def _certify_delivery(findings: "Findings", root: Path, page: dict[str, Any],
+                      final: str) -> None:
+    """Are the bytes on disk the ones the render committed?
+
+    `typeset` signs the finished page, the writable mask it drew inside and the
+    cleaned page it drew onto. This re-reads all three. It is deliberately a
+    question about provenance and not about content: no OCR, no "does this look
+    like Persian" — only whether what is about to be packaged is what the
+    recorded run produced. A page swapped for its own cleaned copy, a mask
+    rebuilt under a finished render, a hand-edited PNG dropped in afterwards:
+    every one of them changes a hash and none of them changes a status.
+    """
+    delivery = page.get("delivery") or {}
+    if not delivery:
+        # Rendered by a build that did not sign its output. A warning, for the
+        # same reason `stage-unverified` is one: a chapter finished by an older
+        # build is not evidence of anything wrong, and making people re-render
+        # to satisfy new bookkeeping would be a defect of the upgrade.
+        findings.add(
+            "delivery-unverified", page["id"],
+            "this page was rendered before finished pages were signed, so "
+            "there is nothing to check the file against. Re-run `typeset` to "
+            "certify it")
+        return
+
+    if list(delivery.get("size") or ()) != [page["width"], page["height"]]:
+        findings.add(
+            "delivery-mismatch", page["id"],
+            f"the render was committed at "
+            f"{'x'.join(str(n) for n in delivery.get('size') or ('?', '?'))} "
+            f"and the page is now {page['width']}x{page['height']}")
+
+    for name, relative in (("final", final), ("clean", page.get("clean")),
+                           ("writable", page.get("writable"))):
+        recorded = delivery.get(name)
+        if not recorded:
+            continue
+        if not relative:
+            findings.add(
+                "delivery-mismatch", page["id"],
+                f"the render committed a {name} page and the document no "
+                f"longer names one. Re-run `typeset`")
+            continue
+        path = root / relative
+        if not path.exists():
+            findings.add(
+                "delivery-mismatch", page["id"],
+                f"{relative} was part of the finished render and is gone")
+        elif ir.sha256_file(path) != recorded:
+            findings.add(
+                "delivery-mismatch", page["id"],
+                f"{relative} is not the file this page was finished with — "
+                f"it was replaced after `typeset` ran. Re-run `typeset`, or "
+                f"restore the page it rendered")
+
+
+def check_document(doc_path: str | Path, *, strict: bool = False,
+                   limit: int | None = 60) -> dict[str, Any]:
     doc_path = Path(doc_path)
     doc = ir.load_doc(doc_path)
     root = ir.doc_dir(doc_path)
@@ -487,6 +546,7 @@ def check_document(doc_path: str | Path, *, strict: bool = False) -> dict[str, A
             if not final_path.exists():
                 findings.add("page-missing", page["id"], f"{final} is gone")
             else:
+                _certify_delivery(findings, root, page, final)
                 mask_name = page.get("writable") or page.get("mask")
                 changed, total, worst = compare_outside_mask(
                     original, final_path, root / mask_name if mask_name else None
@@ -649,7 +709,12 @@ def check_document(doc_path: str | Path, *, strict: bool = False) -> dict[str, A
         "warnings": len(warnings),
         "by_code": findings.by_code(),
         "stats": stats,
-        "findings": (errors + warnings)[:60],
+        # `limit` caps the list for a human reading it. Every total above is
+        # computed from the full collection, and a caller that has to DECIDE
+        # something passes `limit=None`: filing from the capped list reported a
+        # document with 82 errors as having 60, and published the other 22.
+        "findings": (errors + warnings)[:limit] if limit else errors + warnings,
+        "truncated": bool(limit) and len(errors) + len(warnings) > limit,
         "strict": strict,
     }
 
@@ -664,7 +729,7 @@ def publication_preflight(doc_path: str | Path) -> dict[str, Any]:
     overflowed, or whose erasures had never been cleaned went straight into a
     package without the gate ever running.
     """
-    report = check_document(doc_path)
+    report = check_document(doc_path, limit=None)
     blocking = [item for item in report["findings"]
                 if item["severity"] == "error"]
     return {

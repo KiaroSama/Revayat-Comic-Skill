@@ -26,7 +26,7 @@ def test_a_mask_is_written_for_every_region_the_cleaner_may_edit(detected):
     policy = doc["meta"].get("sfx_policy", "keep")
     editable = kept = 0
     for _, region in ir.iter_regions(doc):
-        if masks._may_be_edited(region, policy):
+        if ir.may_be_edited(region, policy):
             editable += 1
             assert region["mask"], f"{region['id']} has no mask"
             assert (root / region["mask"]).exists()
@@ -121,7 +121,7 @@ def test_the_union_is_the_union(detected):
     for region in page["regions"]:
         # Only the regions that HAVE a mask: the union is the union of the
         # authority, and a region the policy keeps has none.
-        if not masks._may_be_edited(region, policy):
+        if not ir.may_be_edited(region, policy):
             continue
         mask = masks.load_mask(root / region["mask"])
         x, y, w, h = region["mask_box"]
