@@ -271,7 +271,9 @@ are missing from the package.
 >     `qa` raises `compressed-variant` so somebody reads the pair.
 >   - `reviewed: <lint code>` — a lint you have looked at and settled, so
 >     the gate stops asking. `reviewed: zwnj-review` on a line where `می`
->     is wine and not the verb prefix.
+>     is wine and not the verb prefix. It records **which words** you
+>     settled, so a later edit that introduces a different ambiguity is
+>     still raised rather than covered by the old decision.
 >   - `propose: <name>, <name>` — a name or term this balloon *mentions*
 >     but does not say. It reaches the glossary without claiming somebody
 >     else is talking.

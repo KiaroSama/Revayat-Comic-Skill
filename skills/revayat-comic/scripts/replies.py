@@ -265,9 +265,17 @@ def _apply(region: dict[str, Any], block: dict[str, str],
         codes = [code.strip() for code
                  in PROPOSALS.split(block["reviewed"]) if code.strip()]
         if codes:
+            import falint
+
             region["review_ack"] = codes
+            # WHAT they settled, not only that they settled something. A bare
+            # code silenced the line for ever, so an ambiguity introduced by a
+            # later edit was waved through by a decision taken about a
+            # different pair of words.
+            region["review_ack_spans"] = falint.ambiguous_spans(target)
         else:
             region.pop("review_ack", None)
+            region.pop("review_ack_spans", None)
     if "propose" in block:
         # Replaces rather than accumulates, like every other field here: a
         # worksheet is a picture of the page, and a merge run twice must not
