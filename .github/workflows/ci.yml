@@ -336,7 +336,11 @@ jobs:
       # shadowed name, a dead variable. Not style. See ruff.toml for what is
       # left off and why.
       - name: Every Python file passes the linter
-        run: python -m ruff check skills/revayat-comic/scripts tests
+        # `evaluation` and `.github` too: both hold Python this project runs,
+        # and both were outside the gate while their files were being changed.
+        run: >
+          python -m ruff check
+          skills/revayat-comic/scripts tests evaluation .github
 
       - name: Every plugin manifest is valid JSON and agrees on version
         run: |
