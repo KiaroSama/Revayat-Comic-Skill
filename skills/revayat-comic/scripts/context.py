@@ -173,6 +173,16 @@ SECTION_LIMITS = {
 }
 
 
+def _approved_forms(entry: dict[str, Any]) -> list[str]:
+    """The attached spellings a reader approved for this term, beyond the
+    headword. Read through `glossary`, so one definition decides what counts.
+    """
+    import glossary
+
+    return [form for form in glossary.target_forms(entry)
+            if form != (entry.get("target") or "").strip()]
+
+
 def _speaking_on(doc: dict[str, Any], page_id: str) -> set[str]:
     """Who actually talks on the page being translated."""
     for page in doc["pages"]:
@@ -376,8 +386,15 @@ def build(doc: dict[str, Any], page_id: str, *,
     # glossary stage. A test that builds its own fixture can validate a schema
     # that does not exist.
     entries = (doc.get("glossary") or {}).get("entries") or {}
+    # The canonical spelling alone when that is all there is, and every
+    # approved form when a reader has written some down: a translator told only
+    # `آنا` cannot know that `آنای` was approved too, and `check` enforces
+    # both. The plain string stays the common case, so the package a chapter
+    # without attached forms sends is unchanged.
     glossary = {
-        term: entry.get("target", "")
+        term: (entry.get("target", "") if not _approved_forms(entry)
+               else {"target": entry.get("target", ""),
+                     "forms": _approved_forms(entry)})
         for term, entry in entries.items()
         if isinstance(entry, dict) and entry.get("locked")
         and (entry.get("target") or "").strip()
