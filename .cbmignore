@@ -1,0 +1,5 @@
+# This project's implementation lives in skills/revayat-comic/scripts/, which
+# the indexer's built-in skip-list drops as a generic "scripts" directory.
+# Without this the code graph holds only the tests.
+!skills/revayat-comic/scripts/
+!skills/revayat-comic/scripts/**
