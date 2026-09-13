@@ -630,87 +630,99 @@ def import_source(
     # only copy of the thing being imported.
     _refuse_overlap(path, pages_dir)
 
-    kind = detect_kind(path)
-    staging = scratch(work, "incoming")
-    previous = scratch(work, "previous")
-    files = _stage_pages(kind, path, staging, dpi)
+    # One writer at a time. Two imports into the same folder interleaved:
+    # each staged its own pages, each promoted them, and whichever saved
+    # last published ITS document over the other's images — a chapter whose
+    # `comic.json` described a different book from the files beside it,
+    # with every hash correct because each half was internally consistent.
+    with ir.workspace_lock(work, what="import"):
+        kind = detect_kind(path)
+        staging = scratch(work, "incoming")
+        previous = scratch(work, "previous")
+        files = _stage_pages(kind, path, staging, dpi)
 
-    doc = ir.new_doc(
-        source_language=source_language,
-        target_language=target_language,
-        reading_direction=direction,
-        title=title or path.stem,
-        chapter=chapter,
-    )
-    doc["source"] = {
-        "kind": kind,
-        "name": path.name,
-        "page_count": len(files),
-        "dpi": dpi if kind == "pdf" else None,
-    }
+        doc = ir.new_doc(
+            source_language=source_language,
+            target_language=target_language,
+            reading_direction=direction,
+            title=title or path.stem,
+            chapter=chapter,
+        )
+        doc["source"] = {
+            "kind": kind,
+            "name": path.name,
+            # The container itself, resolved. Only its NAME was recorded, so
+            # nothing downstream could tell that `export --out chapter.cbz` was
+            # about to write over the archive the chapter was imported from — and
+            # the original is the one file in this pipeline that is never
+            # reproducible.
+            "path": str(path.resolve()),
+            "page_count": len(files),
+            "dpi": dpi if kind == "pdf" else None,
+        }
 
-    sizes: list[tuple[int, int]] = []
-    try:
-        # Every page is opened and hashed while it is still only staged, so a
-        # source that turns out to be unreadable half way through is refused
-        # with the previous chapter still on disk.
-        for index, file in enumerate(files):
-            image = _load_page(file)
-            width, height = image.size
-            sizes.append((width, height))
-            doc["pages"].append(
-                ir.new_page(
-                    ir.page_id_for(index),
-                    index,
-                    f"pages/{file.name}",
-                    width,
-                    height,
-                    ir.sha256_file(file),
+        sizes: list[tuple[int, int]] = []
+        try:
+            # Every page is opened and hashed while it is still only staged, so a
+            # source that turns out to be unreadable half way through is refused
+            # with the previous chapter still on disk.
+            for index, file in enumerate(files):
+                image = _load_page(file)
+                width, height = image.size
+                sizes.append((width, height))
+                doc["pages"].append(
+                    ir.new_page(
+                        ir.page_id_for(index),
+                        index,
+                        f"pages/{file.name}",
+                        width,
+                        height,
+                        ir.sha256_file(file),
+                    )
                 )
-            )
-        moved = _commit_pages(staging, pages_dir, previous)
-    except BaseException:
-        shutil.rmtree(staging, ignore_errors=True)
-        raise
+            moved = _commit_pages(staging, pages_dir, previous)
+        except BaseException:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
 
-    # One transaction, pages and document together. Until this succeeds the
-    # previous pages are still on disk under `previous`, and a failure puts
-    # them back rather than leaving a chapter that references files that are
-    # not there.
-    doc_path = work / "comic.json"
-    try:
-        ir.save_doc(doc, doc_path)
-    except BaseException:
-        shutil.rmtree(pages_dir, ignore_errors=True)
-        if moved:
-            previous.rename(pages_dir)
-        raise
-    shutil.rmtree(previous, ignore_errors=True)
+        # One transaction, pages and document together. Until this succeeds the
+        # previous pages are still on disk under `previous`, and a failure puts
+        # them back rather than leaving a chapter that references files that are
+        # not there.
+        doc_path = work / "comic.json"
+        try:
+            ir.save_doc(doc, doc_path)
+        except BaseException:
+            shutil.rmtree(pages_dir, ignore_errors=True)
+            if moved:
+                previous.rename(pages_dir)
+            raise
+        shutil.rmtree(previous, ignore_errors=True)
 
-    widths = sorted(size[0] for size in sizes)
-    heights = sorted(size[1] for size in sizes)
-    median = (widths[len(widths) // 2], heights[len(heights) // 2]) if sizes else (0, 0)
-    # A webtoon is one very tall strip per file; it needs the vertical reading
-    # order and a different crop strategy, so say so rather than letting the
-    # detector quietly do the wrong thing on a 20,000-pixel page.
-    tall = [
-        page["id"] for page in doc["pages"]
-        if page["height"] >= 3 * max(1, page["width"])
-    ]
+        widths = sorted(size[0] for size in sizes)
+        heights = sorted(size[1] for size in sizes)
+        median = (widths[len(widths) // 2], heights[len(heights) // 2]) if sizes else (0, 0)
+        # A webtoon is one very tall strip per file; it needs the vertical reading
+        # order and a different crop strategy, so say so rather than letting the
+        # detector quietly do the wrong thing on a 20,000-pixel page.
+        tall = [
+            page["id"] for page in doc["pages"]
+            if page["height"] >= 3 * max(1, page["width"])
+        ]
 
-    return {
-        "document": str(doc_path),
-        "kind": kind,
-        "pages": len(files),
-        "median_size": list(median),
-        "reading_direction": direction,
-        "webtoon_strips": tall,
-        "warning": (
-            f"{len(tall)} page(s) are at least three times taller than they are "
-            "wide — that is a webtoon strip, not a book page. Pass "
-            "`--direction ltr` and expect one long column."
-        ) if tall else None,
-    }
+        return {
+            "document": str(doc_path),
+            "kind": kind,
+            "pages": len(files),
+            "median_size": list(median),
+            "reading_direction": direction,
+            "webtoon_strips": tall,
+            "warning": (
+                f"{len(tall)} page(s) are at least three times taller than they are "
+                "wide — that is a webtoon strip, not a book page. Pass "
+                "`--direction ltr` and expect one long column."
+            ) if tall else None,
+        }
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -275,6 +275,43 @@ def save_doc(doc: dict[str, Any], path: str | os.PathLike[str]) -> Path:
     return write_text(path, dumps(doc) + "\n")
 
 
+class workspace_lock:
+    """Exclusive use of one working folder, for the length of a `with`.
+
+    Two imports into the same folder interleaved: each wrote its own pages and
+    then its own document, and whichever saved last published ITS document over
+    the other's pages — a chapter whose `comic.json` described a different book
+    from the images beside it, with every hash correct because each half was
+    internally consistent.
+
+    A file created with `O_EXCL` is the lock: it either exists or it does not,
+    on every filesystem this runs on, with no daemon and no cleanup thread. A
+    stale one is reported rather than removed — a lock nobody can explain is
+    not a lock this code should break on its own.
+    """
+
+    def __init__(self, folder: str | os.PathLike[str], *, what: str = "write"):
+        self.path = Path(folder) / ".revayat-lock"
+        self.what = what
+
+    def __enter__(self) -> "workspace_lock":
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            handle = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            raise RuntimeError(
+                f"another run is already writing {self.path.parent}.\n"
+                f"Wait for it to finish. If nothing is running, the previous "
+                f"one was killed: delete {self.path} and try again."
+            ) from None
+        with os.fdopen(handle, "w", encoding="utf-8") as out:
+            out.write(f"{self.what} pid={os.getpid()}\n")
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.path.unlink(missing_ok=True)
+
+
 def doc_dir(path: str | os.PathLike[str]) -> Path:
     """The folder a document's relative asset paths resolve against."""
     return Path(path).resolve().parent
