@@ -66,7 +66,7 @@ PROVIDER_TIMEOUT = 180.0
 #: Persian gloss beside it, `annotate` keeps it and records the meaning off the
 #: page. Erasing the artwork for either would delete the very thing they promise
 #: to show, and there would be nothing left for the gloss to sit beside.
-KEEP_POLICIES = frozenset({"keep", "bilingual", "annotate"})
+KEEP_POLICIES = ir.SFX_KEEP_POLICIES
 
 #: Said to the reader when the generative repair a solid patch needs is missing
 #: at the point the region is actually repaired — and written into the region,
@@ -253,21 +253,28 @@ def clean_page(
     counts = {"flat": 0, "inpaint": 0, "external": 0, "keep": 0, "skipped": 0,
               "refused": 0}
     for region in page.get("regions", []):
-        if region.get("dropped") or not region.get("mask"):
+        if region.get("dropped"):
             counts["skipped"] += 1
             continue
-        # `erase: yes` first, and deliberately so. It is a reader looking at
-        # this one region and saying *remove this, put nothing back* — a
-        # watermark, a site stamp. The SFX policy is a decision about lettering
-        # that belongs to the artwork, and it has nothing to say about a mark
-        # stamped on top of it; letting the policy win here left the stamp on
-        # the page and the document claiming it had been dealt with.
-        if not region.get("erase") and (region.get("keep") or (
-                region["kind"] == "sfx" and policy in KEEP_POLICIES)):
+        # Asked BEFORE the mask, and before the mask existed it had to be the
+        # other way round. "Leave this alone" is an outcome, not a skip, and a
+        # region the cleaner may not edit has no mask to skip on — so ordering
+        # the mask first counted every policy-kept effect as `skipped` and left
+        # its `fill` unwritten, which every later stage reads.
+        #
+        # `ir.may_be_edited` puts `erase` above the policy deliberately: a
+        # reader saying *remove this, put nothing back* is talking about a
+        # watermark stamped on the artwork, and an SFX policy has nothing to
+        # say about it. Letting the policy win here left the stamp on the page
+        # and the document claiming it had been dealt with.
+        if not ir.may_be_edited(region, policy):
             # The artwork *is* the sound effect. Erasing it to write the same
             # thing in Persian is a loss, so these policies leave it drawn.
             region["fill"] = "keep"
             counts["keep"] += 1
+            continue
+        if not region.get("mask"):
+            counts["skipped"] += 1
             continue
 
         mask = mask_tools.load_mask(root / region["mask"])

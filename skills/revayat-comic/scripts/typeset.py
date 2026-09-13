@@ -411,6 +411,25 @@ def typeset_page(
                    mask_tools._encode_png(Image.fromarray(writable, mode="L")))
     page["writable"] = writable_path
 
+    # What was actually delivered, signed by the run that delivered it.
+    #
+    # A filename and `typeset.status: ok` say a page was written; they say
+    # nothing about WHICH pixels are in the file now. Copying the cleaned,
+    # textless page over `final/` left every count correct, every status `ok`,
+    # the size identical and every pixel inside the authorised mask — so the
+    # preservation proof passed it and the chapter shipped with no Persian on
+    # it. Nothing in the document could tell the difference, because nothing in
+    # the document had ever looked at the bytes.
+    page["delivery"] = {
+        "final": ir.sha256_file(root / relative),
+        "writable": ir.sha256_file(root / writable_path),
+        "clean": (ir.sha256_file(root / page["clean"])
+                  if page.get("clean") and (root / page["clean"]).exists()
+                  else None),
+        "size": [page["width"], page["height"]],
+        "placed": placed,
+    }
+
     return {"placed": placed, "overflow": overflow, "skipped": skipped,
             "unreliable": unreliable, "refused_clean": refused,
             "unplaced_gloss": glossed}

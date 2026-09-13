@@ -708,7 +708,11 @@ def test_a_kept_or_dropped_region_is_not_given_cleaning_authority(translated):
     page = ir.load_doc(translated)["pages"][0]
     assert page["regions"][0]["mask"] is None
     assert page["regions"][1]["mask"] is None
-    assert report["pages"][0]["not_masked"] == 2
+    # Three, not two: the fixture also carries a sound effect the default
+    # policy keeps, and a kept effect is artwork the cleaner may not rewrite.
+    kept = sum(1 for region in page["regions"]
+               if not ir.may_be_edited(region, doc["meta"].get("sfx_policy", "keep")))
+    assert report["pages"][0]["not_masked"] == kept == 3
 
 
 def test_an_unrepaired_region_takes_no_persian_and_fails_the_gate(finished):

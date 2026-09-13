@@ -259,27 +259,6 @@ def region_mask(
     return mask, box
 
 
-def _may_be_edited(region: dict[str, Any], sfx_policy: str) -> bool:
-    """Whether the cleaner may touch this region's pixels at all.
-
-    Authority comes from the decisions that stand NOW, and there are three
-    sources of "leave this alone": the reader dropped it (there is no text
-    there), the reader kept it, or the POLICY keeps it — a sound effect under
-    `--sfx-policy keep` stays in the artwork by decision, and masking it put
-    artwork inside the area the cleaner may rewrite and inside the denominator
-    the preservation proof divides by.
-
-    An erase region is the exception that proves it: "remove this and put
-    nothing back" is a decision to touch the pixels, so it is masked even
-    though it will never carry Persian.
-    """
-    if region.get("erase"):
-        return True
-    if region.get("dropped") or region.get("keep"):
-        return False
-    return ir.translatable(region, sfx_policy)
-
-
 def _retire_assets(root: Path, page: dict[str, Any],
                    keep: set[str]) -> list[str]:
     """Delete the mask files this rebuild did not write.
@@ -357,7 +336,7 @@ def build_document(
             # kept is text they asked to leave in the artwork — masking either
             # put artwork inside the area the cleaner is allowed to rewrite and
             # inside the denominator the preservation proof divides by.
-            if not _may_be_edited(region, policy):
+            if not ir.may_be_edited(region, policy):
                 region["mask"] = None
                 region["mask_box"] = None
                 skipped += 1

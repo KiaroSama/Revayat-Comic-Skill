@@ -438,6 +438,8 @@ $PY $SKILL_DIR/scripts/revayat-comic.py qa check --doc $WORK/comic.json
 | `clean-refused` | `clean` had no repair for this patch and left the original lettering on the page | give it `--external`, a working `--provider`, or re-run `mask --free-lettering glyphs` for that page |
 | `region-not-rendered` | this region has approved Persian and its render is missing or overflowed | run `typeset`, or shorten the line until it fits |
 | `erase-unfinished` | a region is marked for erasure and the cleaner has not acted on it | run `clean` before publishing |
+| `delivery-mismatch` | the finished page, the mask it was drawn inside, or the cleaned page under it is not the file `typeset` committed | re-run `typeset`, or restore the page it rendered |
+| `delivery-unverified` | this page was rendered before finished pages were signed, so there is nothing to check the file against | re-run `typeset` to certify it |
 | `annotation-unplaced` | a `bilingual`/`annotate` gloss was produced and nothing reserves a place for it | place it by hand, or use `--sfx-policy translate` to replace the effect instead |
 | `compressed-variant` | a line was shortened to fit and the full-meaning version is recorded beside it | read both, then mark it `reviewed: compressed-variant` |
 | `archive-duplicate-page` | two pages in the package are byte-identical where the export wrote two different ones | re-run `export`; if it repeats, a page failed to write |
