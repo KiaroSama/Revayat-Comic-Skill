@@ -185,6 +185,16 @@ def cjk_font(size: int):
     return None
 
 
+def _ink_width(draw, text: str, font) -> float:
+    """How wide this face really draws these characters.
+
+    The fixture used to multiply the em size by the character count, which is
+    right for a monospaced face and wrong for every other one.
+    """
+    box = draw.textbbox((0, 0), text, font=font)
+    return max(1.0, box[2] - box[0])
+
+
 def japanese_page(width: int = 1000, height: int = 1500):
     """A page whose lettering is real Japanese, or `None` without a CJK font.
 
@@ -235,8 +245,14 @@ def japanese_page(width: int = 1000, height: int = 1500):
     cx = px0 + panel_w * 0.52
     top = py0 + 60 * scale
     pad_x, pad_y = 42 * scale, 34 * scale
+    # MEASURED, not assumed. `40 * scale` was the em size asked for, which is
+    # not the width a proportional CJK face actually draws — on Noto Sans CJK
+    # the balloon came out wider than its text, the interior fell under the
+    # detector's `ink_min`, and the balloon stopped being one. A real manga
+    # balloon is drawn around its text, so this one is too.
+    glyph_w = max(_ink_width(draw, glyph, font) for glyph in column_text)
     draw.ellipse([cx - pad_x, top - pad_y,
-                  cx + 40 * scale + pad_x, top + step * len(column_text) + pad_y],
+                  cx + glyph_w + pad_x, top + step * len(column_text) + pad_y],
                  fill=WHITE, outline=BLACK, width=outline)
     y = top
     for glyph in column_text:
@@ -253,7 +269,7 @@ def japanese_page(width: int = 1000, height: int = 1500):
     # --- a horizontal balloon, so the page carries both orientations ---------
     px0, py0, _, _ = panels[1]
     line = "\u305d\u3046\u304b\u3001\u3068\u601d\u3046"   # そうか、と思う
-    text_w = 40 * scale * len(line)
+    text_w = _ink_width(draw, line, font)
     mid = (px0 + panel_w / 2, py0 + 110 * scale)
     draw.ellipse([mid[0] - text_w / 2 - 34 * scale, mid[1] - 52 * scale,
                   mid[0] + text_w / 2 + 34 * scale, mid[1] + 52 * scale],
