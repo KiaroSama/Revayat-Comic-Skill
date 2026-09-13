@@ -145,43 +145,78 @@ def test_the_column_is_taller_than_it_is_wide(japanese_chapter):
     assert height > width * 1.5
 
 
-def _lightened(page, keep: float):
-    """The same page with its lettering thinned to `keep` of its ink.
+def _thinned_pages(page):
+    """`(label, page)` for the original and progressively lighter versions.
 
-    Not "eroded by N pixels": N pixels off a heavy gothic face is a light face,
-    and N pixels off an already-light one is a blank page — which is exactly
-    what a fixed kernel did when this test first ran on a runner carrying Noto
-    Sans CJK. Thinning to a share of the original ink is the same condition
-    whatever face the machine has.
-
-    Returns `(page, achieved share)`; the caller asserts against a page it
-    knows the weight of.
+    Thinning the strokes is what a lighter face amounts to as far as balloon
+    detection is concerned. Doing it here rather than trusting the runner's
+    font collection is what makes the test below say the same thing on every
+    machine.
     """
     import cv2
     import numpy as np
     from PIL import Image
 
     array = np.asarray(page.convert("L"))
-    ink = np.where(array < 128, np.uint8(255), np.uint8(0))
+    all_ink = np.where(array < 128, np.uint8(255), np.uint8(0))
+    # Only the GLYPH-sized marks. A face changes the lettering; it does not
+    # change the ellipse the artist drew or the panel borders, and eroding
+    # those breaks the outline so the interior leaks into the page — which is
+    # a broken fixture, not a lighter face.
+    count, labels, stats = detect._components(all_ink, np)
+    ceiling = detect.DEFAULTS["glyph_max"] * min(array.shape)
+    small = np.zeros(count, bool)
+    for label in range(1, count):
+        small[label] = max(stats[label][cv2.CC_STAT_WIDTH],
+                           stats[label][cv2.CC_STAT_HEIGHT]) <= ceiling
+    ink = np.where(small[labels], np.uint8(255), np.uint8(0))
+    keep_as_is = cv2.subtract(all_ink, ink)
     total = float(ink.sum()) or 1.0
-
-    best, achieved = ink, 1.0
-    for size in range(2, 10):
+    out = [("as drawn", page)]
+    for size in (2, 3, 4, 5):
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size))
         thinner = cv2.erode(ink, kernel)
         share = float(thinner.sum()) / total
-        if share < keep:
+        if share < 0.05:
             break
-        best, achieved = thinner, share
+        canvas = np.asarray(page.convert("RGB")).copy()
+        canvas[ink > 0] = 255               # lift the lettering off the page
+        canvas[thinner > 0] = 0             # and put the thinned version back
+        canvas[keep_as_is > 0] = 0          # outlines and borders, untouched
+        out.append((f"{share:.0%} of its ink", Image.fromarray(canvas)))
+    return out
 
-    out = np.asarray(page.convert("RGB")).copy()
-    out[ink > 0] = 255                      # lift every mark off the page
-    out[best > 0] = 0                       # and put the thinned ones back
-    return Image.fromarray(out), achieved
+
+def _column_interior(gray):
+    """`(bbox, true ink share)` for the balloon around the vertical column.
+
+    Found geometrically — the tall component in the first panel — so it does
+    not depend on the decision under test.
+    """
+    import numpy as np
+
+    height, width = gray.shape[:2]
+    options = detect.DEFAULTS
+    import cv2
+
+    _, light = cv2.threshold(gray, 0, 255,
+                             cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    solid = detect._fill_lettering(
+        light, np, options["glyph_max"] * min(height, width))
+    count, labels, stats = detect._components(solid, np)
+    for label in range(1, count):
+        x, y, w, h, _area = (int(stats[label][index]) for index in range(5))
+        if not (x < width // 2 and y < height // 2 and h > w and 100 < h < 400):
+            continue
+        interior = detect._enclosed(labels[y:y + h, x:x + w] == label, np)
+        window = gray[y:y + h, x:x + w]
+        share = float((window[interior] < 128).sum()) / max(
+            1.0, float(interior.sum()))
+        return [x, y, w, h], share
+    return None, 0.0
 
 
-@pytest.mark.parametrize("keep", [1.0, 0.6, 0.4])
-def test_a_balloon_full_of_thin_strokes_is_still_a_balloon(keep):
+def test_balloon_detection_agrees_with_what_is_inside_the_balloon():
     """THE REGRESSION, at the level it actually happens.
 
     `_fill_lettering` absorbs a hole into the balloon interior only when its
@@ -191,37 +226,45 @@ def test_a_balloon_full_of_thin_strokes_is_still_a_balloon(keep):
     are under it on a light one. The letters then stayed OUTSIDE the interior,
     the ink measured inside it was the bare paper around them, and a balloon
     that was the right size, the right shape and in the right place was
-    rejected for holding 0.19% ink.
+    rejected for holding 0.19% ink where it really held 4.63%.
 
-    Measured on this fixture, thinning its own strokes:
+    So the invariant, not a weight: **wherever the ink inside the balloon
+    clears the detector's floor, the balloon is found.** A fixed thinning
+    amount is not a fact about faces — 40% of a heavy gothic is a light face,
+    40% of Noto Sans CJK is legitimately under the floor — which is the same
+    mistake as picking a padding constant, made twice already in this file's
+    history.
 
-        before the fix   full weight: 0.0463   thinned: 0.00007   <- a cliff
-        after            full weight: 0.0631   thinned: 0.0280
-
-    `_balloon_candidates` asks for the component PLUS what it encloses now,
-    which is what a balloon's interior means and needs no threshold at all.
+    The interior is located geometrically, so the number this compares against
+    does not come from the decision under test.
     """
     import cv2
     import numpy as np
 
-    page = japanese_page()
-    if keep < 1.0:
-        page, achieved = _lightened(page, keep)
-        assert achieved <= 1.0
-    gray = cv2.cvtColor(np.asarray(page.convert("RGB")), cv2.COLOR_RGB2GRAY)
+    options = detect.DEFAULTS
+    checked = 0
+    for label, page in _thinned_pages(japanese_page()):
+        gray = cv2.cvtColor(np.asarray(page.convert("RGB")), cv2.COLOR_RGB2GRAY)
+        bbox, share = _column_interior(gray)
+        assert bbox, f"the column's balloon is not even a component at {label}"
 
-    column = [balloon
-              for balloon in detect._balloon_candidates(
-                  gray, detect.DEFAULTS, invert=False)
-              # The first panel, and taller than it is wide.
-              if balloon["bbox"][0] < page.width // 2
-              and balloon["bbox"][1] < page.height // 2
-              and balloon["bbox"][3] > balloon["bbox"][2]]
+        found = [balloon
+                 for balloon in detect._balloon_candidates(
+                     gray, options, invert=False)
+                 if balloon["bbox"] == bbox]
+        if share >= options["ink_min"]:
+            assert found, (
+                f"at {label} the balloon holds {share:.4f} ink, over the "
+                f"{options['ink_min']} floor, and was not found")
+            checked += 1
+        else:
+            assert not found, (
+                f"at {label} the balloon holds {share:.4f} ink, under the "
+                f"{options['ink_min']} floor, and was accepted anyway")
 
-    assert column, (
-        f"the column's balloon disappeared with its strokes thinned to "
-        f"{keep:.0%} of their ink; a lighter face is not a missing balloon")
-    assert column[0]["ink_share"] >= detect.DEFAULTS["ink_min"], column
+    assert checked >= 2, (
+        "every thinning level fell under the floor, so nothing was actually "
+        "asserted about detection")
 
 
 def test_the_interior_of_a_balloon_includes_what_it_encloses():
