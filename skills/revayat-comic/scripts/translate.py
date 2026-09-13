@@ -80,6 +80,21 @@ def translate_document(
         # Built once per page and handed to every region on it: the package is
         # about where the page sits in the chapter, not about one balloon.
         package = chapter_context.build(doc, page["id"], budget=budget)
+        # What the model will actually be shown, named. `constraints` alone
+        # left the scene, the previous pages' approved dialogue and the cast
+        # out of the question's identity, so editing any of them left every
+        # line translated before the edit looking finished — answers to a
+        # question nobody had asked in that form.
+        #
+        # `budget` is deliberately excluded: it is accounting about the
+        # package, not part of it, and including it made an unrelated
+        # `--allow-unmerged` re-ask the whole chapter.
+        context_identity = providers.request_identity(
+            **{key: value for key, value in package.items()
+               if key not in ("budget", "page")})
+        # The page as it is drawn now. A re-cropped or re-split balloon is a
+        # different question even when its text has not changed yet.
+        geometry = stages.facet_revision(page, "geometry")
         if state["unmerged"]:
             package["budget"]["unmerged_pages"] = state["unmerged"]
             package["budget"]["unmerged_override"] = True
@@ -94,10 +109,10 @@ def translate_document(
                 continue
             identity = providers.request_identity(
                 source=source, provider=provider,
-                # The constraints the answer was produced under. Locking a
-                # name or changing an approved spelling used to leave every
-                # line translated before it looking finished.
-                constraints=package.get("constraints"),
+                # The whole bounded package, not only the constraints, plus
+                # the engine that will answer and the page as it is drawn now.
+                context=context_identity, geometry=geometry,
+                engine=providers.engine_identity(engine),
                 kind=region["kind"], speaker=region.get("speaker") or "")
             if providers.completed(region, "translation", "target_text",
                                    identity=identity):
@@ -124,10 +139,14 @@ def translate_document(
 
     if refused:
         counts["refused_pages"] = len(refused)
+    # The pages this run actually translated, never the pages it was ASKED to.
+    # A page the preflight refused was stamped as processed alongside the rest,
+    # so the refusal it printed was contradicted by the document, and the next
+    # run saw a finished stage over untranslated pages.
     stages.stamp_stage(doc, "translate", {"provider": provider,
                                           "totals": counts},
                        options={"provider": provider, "budget": budget},
-                       pages=pages)
+                       pages=[entry["page"] for entry in per_page])
     ir.save_doc(doc, doc_path)
 
     return {
