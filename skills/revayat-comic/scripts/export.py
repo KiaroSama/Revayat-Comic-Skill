@@ -101,25 +101,69 @@ def _refuse_collisions(doc: dict[str, Any], root: Path, doc_path: Path,
         return
 
 
+def _scratch(beside: Path, label: str) -> Path:
+    """A scratch path this export owns.
+
+    `<name>.part` was predictable, so two exports of the same chapter wrote to
+    the same file and an operator's own `<name>.part` was overwritten and then
+    deleted. A random suffix makes ownership a fact.
+    """
+    import secrets
+
+    for _ in range(8):
+        candidate = beside.with_name(
+            f"{beside.name}.{label}-{secrets.token_hex(6)}")
+        if not candidate.exists():
+            return candidate
+    raise RuntimeError(f"could not find an unused scratch name beside {beside}")
+
+
+def _shipped(page: dict[str, Any], name: str, payload: bytes,
+             quality: int) -> dict[str, Any]:
+    """One manifest row: what this page was shipped as.
+
+    `lossy` matters to the check that reads it back. A re-encoded JPEG will
+    never hash to the bytes on disk, so an exact comparison is only meaningful
+    where nothing was re-encoded — and saying which is which is the difference
+    between a real check and one that has to be switched off.
+    """
+    return {
+        "page": page["id"],
+        "name": name,
+        "sha256": ir.sha256_bytes(payload),
+        "width": page["width"],
+        "height": page["height"],
+        "lossy": quality > 0 and not name.lower().endswith((".jpg", ".jpeg")),
+    }
+
+
 def _export_cbz(doc: dict[str, Any], root: Path, out: Path,
-                quality: int) -> dict[str, Any]:
+                quality: int, draft: bool = False) -> dict[str, Any]:
     written = 0
+    manifest: list[dict[str, Any]] = []
     out.parent.mkdir(parents=True, exist_ok=True)
     # Written to a temporary name and moved into place, so an interrupted export
     # cannot leave a half-written archive that opens and is missing chapters.
-    staging = out.with_suffix(out.suffix + ".part")
-    with zipfile.ZipFile(staging, "w", zipfile.ZIP_DEFLATED) as archive:
-        for page in doc["pages"]:
-            source = _page_source(root, page)
-            name = f"{page['index'] + 1:04d}{source.suffix.lower()}"
-            payload, name = _encode(source, name, quality)
-            archive.writestr(name, payload)
-            written += 1
-        archive.writestr(
-            "ComicInfo.xml", _comic_info(doc).encode("utf-8")
-        )
-    staging.replace(out)
-    return {"format": "cbz", "path": str(out), "pages": written}
+    staging = _scratch(out, "part")
+    try:
+        with zipfile.ZipFile(staging, "w", zipfile.ZIP_DEFLATED) as archive:
+            for page in doc["pages"]:
+                source = _page_source(root, page)
+                name = f"{page['index'] + 1:04d}{source.suffix.lower()}"
+                payload, name = _encode(source, name, quality)
+                archive.writestr(name, payload)
+                manifest.append(_shipped(page, name, payload, quality))
+                written += 1
+            archive.writestr(
+                "ComicInfo.xml", _comic_info(doc, draft).encode("utf-8")
+            )
+        staging.replace(out)
+    finally:
+        # An encoding failure half way through leaves the previous package
+        # untouched and no debris beside it.
+        staging.unlink(missing_ok=True)
+    return {"format": "cbz", "path": str(out), "pages": written,
+            "manifest": manifest}
 
 
 def _encode(source: Path, name: str, quality: int) -> tuple[bytes, str]:
@@ -134,7 +178,7 @@ def _encode(source: Path, name: str, quality: int) -> tuple[bytes, str]:
     return buffer.getvalue(), str(Path(name).with_suffix(".jpg"))
 
 
-def _comic_info(doc: dict[str, Any]) -> str:
+def _comic_info(doc: dict[str, Any], draft: bool = False) -> str:
     """The metadata sidecar every comic reader looks for."""
     meta = doc["meta"]
 
@@ -148,6 +192,10 @@ def _comic_info(doc: dict[str, Any]) -> str:
         ("LanguageISO", meta.get("target_language", "fa")),
         ("PageCount", str(len(doc["pages"]))),
         ("Translator", meta.get("tool", "")),
+        # Inside the package, so a draft cannot pass for an approved
+        # edition once the report has scrolled away.
+        *([("Notes", "DRAFT - did not pass publication QA")]
+          if draft else []),
         # Persian is read right to left, so a two-page spread has to be paired
         # the other way round. `Manga` carries that: the ComicInfo
         # documentation says the field "defines the reading direction as
@@ -168,7 +216,7 @@ def _comic_info(doc: dict[str, Any]) -> str:
 
 
 def _export_pdf(doc: dict[str, Any], root: Path, out: Path,
-                quality: int) -> dict[str, Any]:
+                quality: int, draft: bool = False) -> dict[str, Any]:
     pymupdf = ir.require("pymupdf", "pymupdf", "writing a PDF")
     out.parent.mkdir(parents=True, exist_ok=True)
     document = pymupdf.open()
@@ -185,17 +233,28 @@ def _export_pdf(doc: dict[str, Any], root: Path, out: Path,
         })
         # Saved beside the destination and moved into place, so a write that
         # fails part way cannot replace a good package with a truncated one.
-        staging = out.with_suffix(out.suffix + ".part")
+        staging = _scratch(out, "part")
         document.save(str(staging), garbage=3, deflate=True)
     finally:
         document.close()
-    staging.replace(out)
-    return {"format": "pdf", "path": str(out), "pages": len(doc["pages"])}
+    try:
+        staging.replace(out)
+    finally:
+        staging.unlink(missing_ok=True)
+    return {"format": "pdf", "path": str(out), "pages": len(doc["pages"]),
+            # A PDF re-wraps every page, so there are no shipped bytes to hash.
+            # The dimensions are still checkable, and they are what a reader
+            # sees.
+            "manifest": [{"page": page["id"], "name": f"{index + 1:04d}",
+                          "width": page["width"], "height": page["height"],
+                          "lossy": True}
+                         for index, page in enumerate(doc["pages"])]}
 
 
 def _export_dir(doc: dict[str, Any], root: Path, out: Path,
-                quality: int) -> dict[str, Any]:
+                quality: int, draft: bool = False) -> dict[str, Any]:
     out.mkdir(parents=True, exist_ok=True)
+    manifest: list[dict[str, Any]] = []
 
     planned = set()
     for page in doc["pages"]:
@@ -223,21 +282,44 @@ def _export_dir(doc: dict[str, Any], root: Path, out: Path,
     # way — an unreadable page, a full disk — leaves the previous export whole
     # instead of a mixture of two. Moved file by file rather than swapping the
     # folder, because anything else the operator keeps in there is not ours.
-    staging = out.with_name(out.name + ".part")
-    shutil.rmtree(staging, ignore_errors=True)
-    staging.mkdir(parents=True)
+    staging = _scratch(out, "part")
+    staging.mkdir(parents=True, exist_ok=False)
+    replaced = _scratch(out, "kept")
     try:
         for page in doc["pages"]:
             source = _page_source(root, page)
             name = f"{page['index'] + 1:04d}{source.suffix.lower()}"
             payload, name = _encode(source, name, quality)
             ir.write_bytes(staging / name, payload)
-        ir.write_text(staging / "ComicInfo.xml", _comic_info(doc))
-        for child in sorted(staging.iterdir()):
-            child.replace(out / child.name)
+            manifest.append(_shipped(page, name, payload, quality))
+        ir.write_text(staging / "ComicInfo.xml", _comic_info(doc, draft))
+
+        # Promoted with the previous edition of each file held aside until
+        # every one has landed. Promoting file by file and hoping was enough
+        # for the first failure: a `replace` that raised half way through left
+        # some pages from this chapter and the rest from the last one, in a
+        # folder that looked finished.
+        replaced.mkdir(parents=True, exist_ok=False)
+        promoted: list[str] = []
+        try:
+            for child in sorted(staging.iterdir()):
+                target = out / child.name
+                if target.exists():
+                    target.replace(replaced / child.name)
+                child.replace(target)
+                promoted.append(child.name)
+        except BaseException:
+            for name in reversed(promoted):
+                (out / name).unlink(missing_ok=True)
+                kept = replaced / name
+                if kept.exists():
+                    kept.replace(out / name)
+            raise
     finally:
         shutil.rmtree(staging, ignore_errors=True)
-    return {"format": "dir", "path": str(out), "pages": len(doc["pages"])}
+        shutil.rmtree(replaced, ignore_errors=True)
+    return {"format": "dir", "path": str(out), "pages": len(doc["pages"]),
+            "manifest": manifest}
 
 
 def export_document(
@@ -264,6 +346,23 @@ def export_document(
         page["id"] for page in doc["pages"]
         if _wants_rendering(page) and sources[page["id"]] != "final"
     )
+    if not draft:
+        # The whole gate, not export's own narrower question. Asking only "is
+        # there a file for every page that wants one" let a chapter whose
+        # render was stale, whose lines had overflowed, or whose erasures had
+        # never been cleaned go into a package without `qa` ever running.
+        import qa
+
+        state = qa.publication_preflight(doc_path)
+        if not state["ok"]:
+            named = ", ".join(
+                f"{item['code']} ({item['where']})"
+                for item in state["blocking"][:4])
+            raise ValueError(
+                f"this chapter does not pass publication QA: "
+                f"{state['blocking_count']} blocking finding(s) — {named}. "
+                f"{state['next']}"
+            )
     if unrendered and not draft:
         raise ValueError(
             f"{len(unrendered)} page(s) carry Persian that has not been "
@@ -273,13 +372,22 @@ def export_document(
         )
 
     writers = {"cbz": _export_cbz, "pdf": _export_pdf, "dir": _export_dir}
-    report = writers[fmt](doc, root, out, quality)
+    report = writers[fmt](doc, root, out, quality, draft)
 
     # Counted from what was actually written, not from what the document says
     # exists. A recorded `final` whose file has been deleted is not a
     # typeset page, and a cleaned page is not an unchanged original.
     report["sources"] = sources
     report["draft"] = draft
+    if draft:
+        # A draft says so in the report AND in the package. Without the second
+        # one, a folder or archive produced with `--draft` is indistinguishable
+        # from an approved edition as soon as the report scrolls away.
+        report["approved"] = False
+        report["note"] = ("DRAFT — this package did NOT pass publication QA "
+                          "and must not be shipped as a finished chapter.")
+    else:
+        report["approved"] = True
     report["typeset_pages"] = sum(1 for key in sources.values() if key == "final")
     report["cleaned_pages"] = sum(1 for key in sources.values() if key == "clean")
     report["original_pages"] = sum(1 for key in sources.values() if key == "image")
@@ -296,7 +404,14 @@ def export_document(
             f"{report['original_pages']} page(s) had no translated text and "
             "were exported exactly as they arrived."
         )
-    stages.stamp_stage(doc, "export", {"format": fmt, "path": str(out)})
+    stages.stamp_stage(doc, "export",
+                       {"format": fmt, "path": str(out),
+                        # What was shipped, so `qa package` can check the
+                        # package against it rather than against a sort of its
+                        # own file names.
+                        "manifest": report.get("manifest") or []},
+                       options={"format": fmt, "quality": quality,
+                                "draft": draft})
     ir.save_doc(doc, doc_path)
     return report
 

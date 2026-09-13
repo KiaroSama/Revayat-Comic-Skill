@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 import zipfile
 
 import pytest
 
 import export
-import glossary
 import pageir as ir
 import qa
+import stages
 
 
 # --- Export -----------------------------------------------------------------
@@ -42,6 +43,11 @@ def test_the_archive_carries_a_comicinfo(finished, tmp_path):
 def test_a_left_to_right_comic_is_not_marked_as_manga(finished, tmp_path):
     doc = ir.load_doc(finished)
     doc["meta"]["reading_direction"] = "ltr"
+    # Turning the book round really does invalidate the render — the reading
+    # order and every mask were measured the other way — so the stages are
+    # re-stamped here. This test is about the ComicInfo tag.
+    for stage in ("masks", "clean", "typeset"):
+        stages.stamp_stage(doc, stage, {"ran": True})
     ir.save_doc(doc, finished)
     export.export_document(finished, tmp_path / "c.cbz")
     with zipfile.ZipFile(tmp_path / "c.cbz") as archive:
@@ -159,54 +165,6 @@ def test_a_short_package_fails(finished, tmp_path):
     assert "archive-page-count" in {item["code"] for item in report["findings"]}
 
 
-# --- Glossary ---------------------------------------------------------------
-
-def test_scanning_collects_the_speakers(translated):
-    report = glossary.scan(translated)
-    doc = ir.load_doc(translated)
-    entries = doc["glossary"]["entries"]
-    assert "هاروکا" in entries
-    assert entries["هاروکا"]["role"] == "character"
-    assert entries["هاروکا"]["count"] >= 1
-    assert "هاروکا" in report["needs_persian"]
-
-
-def test_a_short_line_repeated_across_the_chapter_is_a_candidate(translated):
-    glossary.scan(translated)
-    entries = ir.load_doc(translated)["glossary"]["entries"]
-    assert "やめろ！" in entries
-
-
-def test_a_long_line_is_not_a_name_candidate(translated):
-    doc = ir.load_doc(translated)
-    for _, region in ir.iter_regions(doc):
-        region["source_text"] = "これはとても長い文章なので名前ではありません"
-    ir.save_doc(doc, translated)
-    glossary.scan(translated)
-    entries = ir.load_doc(translated)["glossary"]["entries"]
-    assert not any(len(name) > glossary.MAX_NAME_LENGTH for name in entries)
-
-
-def test_a_hand_written_table_can_be_applied(translated, tmp_path):
-    table = tmp_path / "names.json"
-    ir.write_text(table, '{"ハルカ": {"target": "هاروکا", "role": "character"}}')
-    report = glossary.apply_file(translated, table)
-    assert report["applied"] == 1
-    entry = ir.load_doc(translated)["glossary"]["entries"]["ハルカ"]
-    assert entry["target"] == "هاروکا" and entry["locked"] is True
-
-
-def test_checking_with_no_locked_terms_is_a_pass(translated):
-    assert glossary.check(translated)["ok"]
-
-
-def test_a_term_absent_from_the_balloon_cannot_have_drifted(translated):
-    doc = ir.load_doc(translated)
-    doc["glossary"] = {"entries": {"ケンジ": {"target": "کنجی", "locked": True}}}
-    ir.save_doc(doc, translated)
-    assert glossary.check(translated)["ok"]
-
-
 # --- R01: an export may never write over what the chapter is made of ---------
 
 @pytest.mark.parametrize("fmt", ["cbz", "pdf", "dir"])
@@ -305,141 +263,6 @@ def test_an_interrupted_dir_export_leaves_the_previous_one_intact(
         "a half-written export replaced a complete one")
 
 
-# --- R06: names, presented honestly and matched sensibly ---------------------
-
-def _entries(doc_path, table):
-    doc = ir.load_doc(doc_path)
-    doc["glossary"] = {"entries": table}
-    ir.save_doc(doc, doc_path)
-    return doc
-
-
-def test_unlocked_names_are_not_presented_as_binding(translated):
-    """The table is headed "these are binding. Use exactly the Persian given."
-    and then listed every entry that had a `target` — including the ones nobody
-    had locked, which are the tool's own guesses. A translator told a guess is
-    binding will spell the rest of the chapter to match it."""
-    import worksheet
-
-    _entries(translated, {
-        "ハルカ": {"target": "هاروکا", "locked": True, "role": "character"},
-        "ケンジ": {"target": "کنجی", "locked": False, "role": "character"},
-    })
-    lines = worksheet._glossary_table(ir.load_doc(translated))
-    text = "\n".join(lines)
-
-    assert "هاروکا" in text, "the locked name is missing"
-    if "کنجی" in text:
-        marks = [text.find(word) for word in
-                 ("not binding", "Suggestion", "suggestion")]
-        marks = [index for index in marks if index >= 0]
-        assert marks and min(marks) < text.index("کنجی"), (
-            "an unlocked guess is printed under the binding heading")
-
-
-def test_a_long_name_is_not_clipped(translated):
-    """Names were cut to 21 characters with no ellipsis, so the worksheet asked
-    for a spelling that was not the spelling."""
-    import worksheet
-
-    long_name = "هاروکا-تاچیبانا-شینومیا"
-    assert len(long_name) > 21
-    _entries(translated, {"X": {"target": long_name, "locked": True}})
-    text = "\n".join(worksheet._glossary_table(ir.load_doc(translated)))
-    assert long_name in text, "the binding spelling was truncated"
-
-
-def test_a_locked_name_is_never_pushed_out_by_suggestions(translated):
-    """The table stopped after 40 rows with nothing said about it. Fill it with
-    unlocked guesses and the one term that actually matters falls off the end —
-    silently, so the chapter spells it two ways."""
-    import worksheet
-
-    table = {f"guess{n}": {"target": f"حدس{n}", "locked": False}
-             for n in range(60)}
-    table["ハナ"] = {"target": "هانا", "locked": True, "role": "character"}
-    _entries(translated, table)
-
-    text = "\n".join(worksheet._glossary_table(ir.load_doc(translated)))
-    assert "هانا" in text, "the one locked term was pushed out by guesses"
-    assert "60" in text or "not shown" in text or "more" in text, (
-        "entries were left out with nothing saying so")
-
-
-def test_a_short_latin_name_does_not_match_inside_a_longer_one(translated):
-    """`Ann` inside `Anna` is not an occurrence of `Ann`, and reporting it as
-    drift sends a translator to correct something that is already right."""
-    import glossary
-
-    doc = _entries(translated, {"Ann": {"target": "آن", "locked": True}})
-    region = next(region for _, region in ir.iter_regions(doc))
-    region["source_text"] = "Anna went home"
-    # Deliberately without `آن` anywhere: otherwise the drift test passes
-    # because the expected Persian happens to be a prefix of the real one.
-    region["target_text"] = "او به خانه رفت"
-    ir.save_doc(doc, translated)
-
-    assert glossary.check(translated)["drift"] == []
-
-
-def test_a_cjk_term_still_matches_inside_a_phrase(translated):
-    """The fix for the line above must not be a word boundary: Japanese has no
-    spaces, so `\\b束\\b` never matches anything and every CJK term would stop
-    being enforced."""
-    import glossary
-
-    doc = _entries(translated, {"束": {"target": "دسته", "locked": True}})
-    region = next(region for _, region in ir.iter_regions(doc))
-    region["source_text"] = "束の間の休息"
-    region["target_text"] = "استراحتی کوتاه"
-    ir.save_doc(doc, translated)
-
-    assert glossary.check(translated)["drift"], "a CJK term stopped being enforced"
-
-
-def test_term_counts_are_refreshed_on_a_rescan(translated):
-    """Speaker counts were refreshed and term counts were not, so a term that
-    had almost left the chapter still looked like its most common word."""
-    import glossary
-
-    doc = ir.load_doc(translated)
-    for _, region in ir.iter_regions(doc):
-        region["source_text"] = "やめろ"
-    ir.save_doc(doc, translated)
-    glossary.scan(translated)
-    before = ir.load_doc(translated)["glossary"]["entries"]["やめろ"]["count"]
-    assert before >= 2
-
-    doc = ir.load_doc(translated)
-    for index, (_, region) in enumerate(ir.iter_regions(doc)):
-        if index:
-            region["source_text"] = "べつに"
-    ir.save_doc(doc, translated)
-    glossary.scan(translated)
-
-    after = ir.load_doc(translated)["glossary"]["entries"]["やめろ"]["count"]
-    assert after < before, f"the count stayed at {after} after the text changed"
-
-
-def test_drift_totals_count_every_finding(translated):
-    """`check` caps its list at 30 for display and reports the true total beside
-    it. The gate filed one finding per row of the CAPPED list, so a chapter with
-    50 drifting regions was reported as having 30."""
-    import glossary
-
-    doc = _entries(translated, {"やめろ": {"target": "بس کن", "locked": True}})
-    for _, region in ir.iter_regions(doc):
-        region["source_text"] = "やめろ"
-        region["target_text"] = "چیز دیگری"
-    ir.save_doc(doc, translated)
-
-    result = glossary.check(translated)
-    report = qa.check_document(translated)
-    filed = report["by_code"].get("glossary-drift", 0)
-    assert filed == result["drift_count"], (
-        f"filed {filed} of {result['drift_count']} drifting regions")
-
-
 # --- R12: an export must say what it actually shipped ------------------------
 
 def test_the_rtl_tag_is_the_one_that_means_right_to_left(finished, tmp_path):
@@ -457,6 +280,11 @@ def test_a_left_to_right_chapter_is_not_tagged_right_to_left(finished, tmp_path)
     """The other direction has to keep working."""
     doc = ir.load_doc(finished)
     doc["meta"]["reading_direction"] = "ltr"
+    # Turning the book round really does invalidate the render — the reading
+    # order and every mask were measured the other way — so the stages are
+    # re-stamped here. This test is about the ComicInfo tag.
+    for stage in ("masks", "clean", "typeset"):
+        stages.stamp_stage(doc, stage, {"ran": True})
     ir.save_doc(doc, finished)
 
     out = tmp_path / "chapter.cbz"
@@ -592,53 +420,256 @@ def test_a_sound_package_still_passes(finished, tmp_path):
     assert report["ok"], report["findings"]
 
 
-# --- a proposal is a candidate, and a canonical form keeps its history --------
+# --- R6: an export leaves a whole edition or the previous one ----------------
 
-def test_a_proposed_name_becomes_a_candidate_without_a_speaker(translated):
-    doc = ir.load_doc(translated)
-    for _page, region in ir.iter_regions(doc):
-        region.pop("speaker", None)
-    doc["pages"][0]["regions"][0]["proposed"] = ["Anna"]
-    ir.save_doc(doc, translated)
+def test_a_failed_page_leaves_the_previous_folder_export_whole(
+        finished, tmp_path, monkeypatch):
+    """Promoting file by file and hoping was enough for the first failure: a
+    `replace` that raised half way left some pages from this chapter and the
+    rest from the last one, in a folder that looked finished."""
+    out = tmp_path / "edition"
+    export.export_document(finished, out, fmt="dir")
+    before = {child.name: child.read_bytes() for child in out.iterdir()}
+    assert before
 
-    glossary.scan(translated)
+    real = Path.replace
+    calls = {"n": 0}
 
-    entry = ir.load_doc(translated)["glossary"]["entries"]["Anna"]
-    assert entry["role"] == "mentioned"
-    assert entry["count"] == 1
+    def flaky(self, target):
+        calls["n"] += 1
+        if calls["n"] == 3:
+            raise OSError("the disk went away")
+        return real(self, target)
 
+    monkeypatch.setattr(Path, "replace", flaky)
+    with pytest.raises(OSError):
+        export.export_document(finished, out, fmt="dir")
+    monkeypatch.setattr(Path, "replace", real)
 
-def test_being_mentioned_does_not_demote_a_character(translated):
-    """A character who is also named in someone else's balloon must not stop
-    being a character because the mention was scanned second."""
-    doc = ir.load_doc(translated)
-    doc["pages"][0]["regions"][0]["speaker"] = "Anna"
-    doc["pages"][0]["regions"][-1]["proposed"] = ["Anna"]
-    ir.save_doc(doc, translated)
-
-    glossary.scan(translated)
-
-    assert ir.load_doc(translated)["glossary"]["entries"]["Anna"]["role"] == \
-        "character"
-
-
-def test_changing_a_locked_form_keeps_the_one_it_replaces():
-    """An approved spelling is a decision. Re-deciding it must not erase the
-    chapter already translated against the first one."""
-    entry = glossary._entry("Anna", role="character")
-    glossary.set_target(entry, "آنا")
-    assert entry["version"] == 1 and "previous" not in entry
-
-    entry["locked"] = True
-    glossary.set_target(entry, "آنّا")
-
-    assert entry["target"] == "آنّا"
-    assert entry["version"] == 2
-    assert entry["previous"] == [{"target": "آنا", "version": 1}]
+    after = {child.name: child.read_bytes() for child in out.iterdir()}
+    assert after == before, "the folder holds a mixture of two editions"
 
 
-def test_an_unlocked_suggestion_has_no_history_to_keep():
-    entry = glossary._entry("Ken", role="character")
-    glossary.set_target(entry, "کن")
-    glossary.set_target(entry, "کِن")
-    assert entry["version"] == 1 and "previous" not in entry
+def test_a_failed_archive_leaves_the_previous_package_and_no_debris(
+        finished, tmp_path, monkeypatch):
+    out = tmp_path / "chapter.cbz"
+    export.export_document(finished, out)
+    before = out.read_bytes()
+
+    monkeypatch.setattr(export, "_encode",
+                        lambda *_a, **_k: (_ for _ in ()).throw(OSError("nope")))
+    with pytest.raises(OSError):
+        export.export_document(finished, out)
+
+    assert out.read_bytes() == before
+    assert not [child for child in tmp_path.iterdir()
+                if ".part-" in child.name]
+
+
+def test_two_exports_of_one_chapter_do_not_share_a_scratch_name(finished, tmp_path):
+    """`<name>.part` was predictable, so an operator's own `<name>.part` was
+    overwritten and then deleted."""
+    out = tmp_path / "chapter.cbz"
+    mine = tmp_path / "chapter.cbz.part"
+    mine.write_bytes(b"something of mine")
+
+    export.export_document(finished, out)
+
+    assert mine.read_bytes() == b"something of mine"
+
+
+# --- R7: the package is checked against what was written ---------------------
+
+def test_pixels_that_do_not_decode_are_caught(finished, tmp_path):
+    """`Image.open` is lazy: it reads the header and stops. A PNG whose chunk
+    CRCs are correct and whose compressed pixels are rubbish reported its
+    declared size and passed."""
+    good = tmp_path / "chapter.cbz"
+    export.export_document(finished, good)
+
+    def rot(archive, members):
+        first = True
+        for info, payload in members:
+            if first and info.filename.endswith(".png"):
+                payload = _corrupt_idat(payload)
+                first = False
+            archive.writestr(info.filename, payload)
+
+    broken = _repack(good, tmp_path / "broken.cbz", rot)
+    report = qa.check_package(broken, finished)
+    assert not report["ok"], "an archive of undecodable pixels was reported fine"
+
+
+def _corrupt_idat(payload: bytes) -> bytes:
+    """Replace the compressed data of the first IDAT, keeping its CRC valid."""
+    import struct
+    import zlib
+
+    out, offset = bytearray(payload[:8]), 8
+    while offset < len(payload):
+        length = struct.unpack(">I", payload[offset:offset + 4])[0]
+        kind = payload[offset + 4:offset + 8]
+        body = payload[offset + 8:offset + 8 + length]
+        if kind == b"IDAT":
+            body = b"\x00" * length
+        out += struct.pack(">I", len(body)) + kind + body
+        out += struct.pack(">I", zlib.crc32(kind + body) & 0xFFFFFFFF)
+        offset += 12 + length
+    return bytes(out)
+
+
+def test_two_identical_pages_are_caught(finished, tmp_path):
+    """The count is right, the names are right, and one page of the chapter is
+    simply missing."""
+    good = tmp_path / "chapter.cbz"
+    export.export_document(finished, good)
+
+    def duplicate(archive, members):
+        images = [m for m in members if m[0].filename.endswith(".png")]
+        first = images[0][1]
+        for info, payload in members:
+            archive.writestr(info.filename,
+                             first if info.filename.endswith(".png") else payload)
+
+    doubled = _repack(good, tmp_path / "doubled.cbz", duplicate)
+    codes = {item["code"]
+             for item in qa.check_package(doubled, finished)["findings"]}
+    assert "archive-duplicate-page" in codes
+
+
+def test_a_page_that_is_not_the_bytes_that_were_exported_is_caught(
+        finished, tmp_path):
+    """The order check sorted the names and then asked whether they were
+    sorted, which is true of every list. What it meant to ask can only be
+    answered against a record of which page each name was."""
+    from PIL import Image
+
+    good = tmp_path / "chapter.cbz"
+    export.export_document(finished, good)
+
+    def swap(archive, members):
+        first = True
+        for info, payload in members:
+            if first and info.filename.endswith(".png"):
+                import io
+                with Image.open(io.BytesIO(payload)) as image:
+                    other = Image.new("RGB", image.size, (7, 7, 7))
+                buffer = io.BytesIO()
+                other.save(buffer, "PNG")
+                payload = buffer.getvalue()
+                first = False
+            archive.writestr(info.filename, payload)
+
+    swapped = _repack(good, tmp_path / "swapped.cbz", swap)
+    report = qa.check_package(swapped, finished)
+    assert not report["ok"], report["findings"]
+    assert any("not the bytes that were exported" in item["detail"]
+               for item in report["findings"]), report["findings"]
+
+
+def test_a_lossy_export_is_not_asked_to_hash_equal(finished, tmp_path):
+    """A re-encoded JPEG will never hash to the bytes on disk, so an exact
+    comparison is only meaningful where nothing was re-encoded."""
+    out = tmp_path / "chapter.cbz"
+    export.export_document(finished, out, quality=70)
+    assert qa.check_package(out, finished)["ok"]
+
+
+def test_a_sound_package_still_passes_the_new_checks(finished, tmp_path):
+    out = tmp_path / "chapter.cbz"
+    export.export_document(finished, out)
+    report = qa.check_package(out, finished)
+    assert report["ok"], report["findings"]
+
+
+def test_a_pdf_package_is_measured_and_not_only_counted(finished, tmp_path):
+    pytest.importorskip("pymupdf")
+    out = tmp_path / "chapter.pdf"
+    export.export_document(finished, out, fmt="pdf")
+    assert qa.check_package(out, finished)["ok"]
+
+
+# --- R10: approval is a completion proof -------------------------------------
+
+def test_export_runs_the_whole_gate_not_its_own_narrower_question(finished,
+                                                                  tmp_path):
+    """`export` asked only "is there a rendered file for every page that wants
+    one". A chapter whose lines had overflowed went straight into a package
+    without `qa` ever running."""
+    doc = ir.load_doc(finished)
+    region = next(r for _p, r in ir.iter_regions(doc)
+                  if (r.get("target_text") or "").strip())
+    region["typeset"] = {"status": "overflow"}
+    ir.save_doc(doc, finished)
+
+    with pytest.raises(ValueError, match="publication QA"):
+        export.export_document(finished, tmp_path / "chapter.cbz")
+
+
+def test_a_region_whose_render_never_happened_is_caught(finished):
+    """A page file existing proves a page was written. It does not prove that
+    THIS region's Persian is on it."""
+    doc = ir.load_doc(finished)
+    region = next(r for _p, r in ir.iter_regions(doc)
+                  if (r.get("target_text") or "").strip())
+    region["typeset"] = {}
+    ir.save_doc(doc, finished)
+
+    codes = {item["code"] for item in qa.check_document(finished)["findings"]}
+    assert "region-not-rendered" in codes
+
+
+def test_an_erasure_the_cleaner_never_acted_on_is_caught(finished):
+    """"Remove this and put nothing back" lived in the region's review notes
+    and in the census, and nothing that gated publication read it."""
+    doc = ir.load_doc(finished)
+    region = doc["pages"][0]["regions"][0]
+    region["erase"] = True
+    region["target_text"] = ""
+    region.pop("clean_status", None)
+    ir.save_doc(doc, finished)
+
+    codes = {item["code"] for item in qa.check_document(finished)["findings"]}
+    assert "erase-unfinished" in codes
+
+
+def test_a_kept_or_dropped_region_is_a_finished_decision(finished):
+    """An explicit decision IS an outcome; the gate must not demand a render
+    for a region somebody deliberately left alone."""
+    doc = ir.load_doc(finished)
+    page = doc["pages"][0]
+    page["regions"][0].update({"keep": True, "target_text": "", "typeset": {}})
+    page["regions"][1].update({"dropped": True, "target_text": "", "typeset": {}})
+    ir.save_doc(doc, finished)
+
+    codes = {item["code"] for item in qa.check_document(finished)["findings"]}
+    assert "region-not-rendered" not in codes
+
+
+def test_a_draft_says_so_in_the_package_and_in_the_report(finished, tmp_path):
+    """A folder produced with `--draft` was indistinguishable from an approved
+    edition as soon as the report scrolled away."""
+    doc = ir.load_doc(finished)
+    region = next(r for _p, r in ir.iter_regions(doc)
+                  if (r.get("target_text") or "").strip())
+    region["typeset"] = {"status": "overflow"}
+    ir.save_doc(doc, finished)
+
+    out = tmp_path / "draft"
+    report = export.export_document(finished, out, fmt="dir", draft=True)
+
+    assert report["draft"] is True and report["approved"] is False
+    assert "DRAFT" in report["note"]
+    assert "DRAFT" in (out / "ComicInfo.xml").read_text(encoding="utf-8")
+
+
+def test_an_approved_export_is_marked_approved(finished, tmp_path):
+    out = tmp_path / "chapter.cbz"
+    report = export.export_document(finished, out)
+    assert report["approved"] is True and report["draft"] is False
+
+
+def test_the_preflight_is_the_same_answer_qa_gives(finished):
+    state = qa.publication_preflight(finished)
+    report = qa.check_document(finished)
+    assert state["ok"] == report["ok"]

@@ -193,3 +193,47 @@ $PY $SKILL_DIR/scripts/revayat-comic.py detect --doc $WORK/comic.json --pages p0
 
 Then look at `work/crops/p0007/overview.png`. Most of what looks like a mystery
 in a JSON report is obvious in the picture.
+
+## `export` says the chapter does not pass publication QA
+
+It runs the whole gate now, not its own narrower question. Before, it asked
+only "is there a rendered file for every page that wants one", so a chapter
+whose render was stale, whose lines had overflowed, or whose erasures had never
+been cleaned went into a package without `qa` ever running.
+
+```bash
+revayat-comic qa --doc work/comic.json
+```
+
+Fix what it names and export again. `--draft` still ships what is there —
+and says so in the report *and* in the package's `ComicInfo.xml`, so a draft
+cannot be mistaken for an approved edition later.
+
+## `stale-stage`, on a stage I definitely ran
+
+The result is real; what changed is one of its inputs. Each stage records the
+page-by-page facts it was made from, so:
+
+- correcting an approved Persian line stales `typeset` for that page, and only
+  that page;
+- correcting a polarity stales `masks`, and does **not** stale the worksheet —
+  a reply is filed against ids, boxes, kinds and orientations, and a polarity
+  is none of those;
+- re-running `mask` stales `clean`, which stales `typeset`;
+- locking a glossary name stales `translate`.
+
+Re-run the stage it names. Running it with no change rewrites identical bytes,
+so doing it twice costs nothing and settles nothing wrongly.
+
+`stage-unverified` is different: that stage was stamped by an older build, so
+its freshness cannot be judged at all. Run it once and the question is answered
+— it is never a reason to translate a chapter again.
+
+## `clean-refused`
+
+`clean` had no repair for a solid free-lettering patch and left the original
+lettering on the page. The region takes no Persian overlay — drawing one would
+ship two layers of text in one balloon — and publication is blocked. Give it
+`--external`, a working `--provider`, or re-run
+`mask --free-lettering glyphs` for that page.
+

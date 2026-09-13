@@ -1,0 +1,349 @@
+{
+  "scheme": 1,
+  "note": "Source lines written for this set, not taken from any published comic. See README.md for what that means and what it does not.",
+  "cases": [
+    {
+      "id": "neg-01",
+      "language": "ja",
+      "source": "行かないって言っただろ。",
+      "gloss": "I told you I'm NOT going.",
+      "difficulty": [
+        "plot-critical-negation"
+      ],
+      "units": 2,
+      "must_preserve": {
+        "negation": true
+      },
+      "accept": [
+        "گفتم که نمی‌روم.",
+        "بهت گفتم نمی‌آم.",
+        "گفتم نمیام که."
+      ],
+      "balloon": [
+        0.3,
+        0.12
+      ]
+    },
+    {
+      "id": "neg-02",
+      "language": "ko",
+      "source": "아무도 그 얘긴 안 했어.",
+      "gloss": "Nobody said that.",
+      "difficulty": [
+        "plot-critical-negation",
+        "ambiguous-pronoun"
+      ],
+      "units": 2,
+      "must_preserve": {
+        "negation": true
+      },
+      "accept": [
+        "هیچ‌کس این را نگفت.",
+        "کسی همچین چیزی نگفت."
+      ],
+      "balloon": [
+        0.3,
+        0.12
+      ]
+    },
+    {
+      "id": "num-01",
+      "language": "ja",
+      "source": "三時十五分、七番ホーム。",
+      "gloss": "Three fifteen, platform seven.",
+      "difficulty": [
+        "numeric-only-text"
+      ],
+      "units": 2,
+      "must_preserve": {
+        "numbers": [
+          [
+            "3",
+            "سه"
+          ],
+          [
+            "15",
+            "۱۵",
+            "ربع",
+            "پانزده"
+          ],
+          [
+            "7",
+            "هفت"
+          ]
+        ]
+      },
+      "accept": [
+        "ساعت ۳:۱۵، سکوی ۷.",
+        "سه و ربع، سکوی هفت."
+      ],
+      "balloon": [
+        0.26,
+        0.1
+      ]
+    },
+    {
+      "id": "num-02",
+      "language": "zh",
+      "source": "第12层，左边第三扇门。",
+      "gloss": "Twelfth floor, third door on the left.",
+      "difficulty": [
+        "numeric-only-text"
+      ],
+      "units": 2,
+      "must_preserve": {
+        "numbers": [
+          [
+            "12",
+            "دوازده"
+          ],
+          [
+            "3",
+            "سوم",
+            "سه"
+          ]
+        ]
+      },
+      "accept": [
+        "طبقهٔ ۱۲، سومین در سمت چپ.",
+        "طبقه دوازده، در سوم از چپ."
+      ],
+      "balloon": [
+        0.3,
+        0.12
+      ]
+    },
+    {
+      "id": "sarc-01",
+      "language": "en",
+      "source": "Oh, brilliant. Really. Well done.",
+      "gloss": "Sarcastic: it was not brilliant.",
+      "difficulty": [
+        "sarcasm"
+      ],
+      "units": 3,
+      "must_preserve": {},
+      "accept": [
+        "آفرین. واقعاً. دمت گرم.",
+        "به‌به. چه کار قشنگی."
+      ],
+      "balloon": [
+        0.28,
+        0.12
+      ],
+      "human_only": true
+    },
+    {
+      "id": "sub-01",
+      "language": "ja",
+      "source": "俺は言ってない。",
+      "gloss": "*I* didn't say it — contrastive subject.",
+      "difficulty": [
+        "omitted-subject",
+        "plot-critical-negation"
+      ],
+      "units": 2,
+      "must_preserve": {
+        "negation": true,
+        "contrastive_subject": true
+      },
+      "accept": [
+        "من که نگفتم.",
+        "من نگفتم."
+      ],
+      "balloon": [
+        0.24,
+        0.1
+      ]
+    },
+    {
+      "id": "pron-01",
+      "language": "ja",
+      "source": "彼、まだあそこにいるの？",
+      "gloss": "Is he still there? The drawing shows who and where.",
+      "difficulty": [
+        "ambiguous-pronoun"
+      ],
+      "units": 2,
+      "must_preserve": {},
+      "accept": [
+        "هنوز اونجاست؟",
+        "هنوز همان‌جاست؟"
+      ],
+      "balloon": [
+        0.28,
+        0.12
+      ],
+      "human_only": true
+    },
+    {
+      "id": "form-01",
+      "language": "ja",
+      "source": "やめてください、先輩。",
+      "gloss": "Polite, to a senior. Relationship matters.",
+      "difficulty": [
+        "honorifics",
+        "tu-vous"
+      ],
+      "units": 2,
+      "must_preserve": {},
+      "accept": [
+        "لطفاً بس کنید، سِنپای.",
+        "بس کنید، سِنپای."
+      ],
+      "balloon": [
+        0.28,
+        0.12
+      ],
+      "human_only": true
+    },
+    {
+      "id": "form-02",
+      "language": "ja",
+      "source": "やめろ。",
+      "gloss": "Blunt, to an equal or a junior. Same instruction as form-01.",
+      "difficulty": [
+        "tu-vous"
+      ],
+      "units": 1,
+      "must_preserve": {},
+      "accept": [
+        "بس کن.",
+        "ولم کن."
+      ],
+      "balloon": [
+        0.18,
+        0.1
+      ],
+      "human_only": true
+    },
+    {
+      "id": "cont-01a",
+      "language": "ja",
+      "source": "あのとき君が",
+      "gloss": "First half of a sentence that continues in cont-01b.",
+      "difficulty": [
+        "interrupted-balloon"
+      ],
+      "units": 1,
+      "continues_into": "cont-01b",
+      "must_preserve": {},
+      "accept": [
+        "اون موقع تو…",
+        "آن وقت تو…"
+      ],
+      "balloon": [
+        0.24,
+        0.1
+      ]
+    },
+    {
+      "id": "cont-01b",
+      "language": "ja",
+      "source": "…何も言わなかったから。",
+      "gloss": "Second half: '...said nothing.' Negation lives here.",
+      "difficulty": [
+        "interrupted-balloon",
+        "plot-critical-negation"
+      ],
+      "units": 1,
+      "continues_from": "cont-01a",
+      "must_preserve": {
+        "negation": true
+      },
+      "accept": [
+        "…چون هیچی نگفتی.",
+        "…چیزی نگفتی، برای همین."
+      ],
+      "balloon": [
+        0.3,
+        0.12
+      ]
+    },
+    {
+      "id": "ell-01",
+      "language": "ja",
+      "source": "……別に。",
+      "gloss": "A held pause, then a dismissal. The pause is the line.",
+      "difficulty": [
+        "ellipsis"
+      ],
+      "units": 1,
+      "must_preserve": {
+        "ellipsis": true
+      },
+      "accept": [
+        "…هیچی.",
+        "……هیچی."
+      ],
+      "balloon": [
+        0.18,
+        0.1
+      ]
+    },
+    {
+      "id": "name-01",
+      "language": "ja",
+      "source": "ハルカは来なかった。",
+      "gloss": "A name, and a negation.",
+      "difficulty": [
+        "names",
+        "plot-critical-negation"
+      ],
+      "units": 2,
+      "must_preserve": {
+        "negation": true,
+        "terms": [
+          "هاروکا"
+        ]
+      },
+      "accept": [
+        "هاروکا نیامد.",
+        "هاروکا نیومد."
+      ],
+      "balloon": [
+        0.28,
+        0.12
+      ]
+    },
+    {
+      "id": "mod-01",
+      "language": "en",
+      "source": "You might still make it.",
+      "gloss": "Might, not will. The modality is the whole line.",
+      "difficulty": [
+        "modality"
+      ],
+      "units": 1,
+      "must_preserve": {},
+      "accept": [
+        "شاید هنوز برسی.",
+        "ممکنه هنوز برسی."
+      ],
+      "balloon": [
+        0.26,
+        0.1
+      ],
+      "human_only": true
+    },
+    {
+      "id": "fit-01",
+      "language": "ja",
+      "source": "まったく、こんなところで何をしているんだ、君は。",
+      "gloss": "A long line in a small balloon. Fit is the axis under test.",
+      "difficulty": [
+        "visual-fit"
+      ],
+      "units": 2,
+      "must_preserve": {},
+      "accept": [
+        "آخه اینجا چه کار می‌کنی تو؟",
+        "اینجا چه کار می‌کنی؟"
+      ],
+      "balloon": [
+        0.2,
+        0.09
+      ]
+    }
+  ]
+}

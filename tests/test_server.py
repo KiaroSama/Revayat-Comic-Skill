@@ -536,3 +536,99 @@ def test_persian_and_japanese_survive_the_pipe(stdio_client, detected):
     sheet = next((ir.doc_dir(detected) / "worksheets").glob("*.txt"))
     assert sheet.read_text(encoding="utf-8").strip()
 
+
+# --- R12: a stage that fails is an answer, not the end of the conversation ---
+
+def test_a_corrupt_archive_does_not_end_the_mcp_conversation(stdio_client,
+                                                             tmp_path):
+    """Only `FileNotFoundError` and `ValueError` were contained, so a corrupt
+    archive (`zipfile.BadZipFile`) ended the loop and the client waited for a
+    reply that was never coming. Driven through the real subprocess: containing
+    it in-process proves nothing about the transport."""
+    broken = tmp_path / "broken.cbz"
+    broken.write_bytes(b"PK\x03\x04 this is not an archive at all")
+
+    stdio_client.request("initialize", protocolVersion="2025-03-26",
+                         capabilities={}, clientInfo={"name": "probe"})
+    reply = stdio_client.request(
+        "tools/call", name="import",
+        arguments={"args": ["--source", str(broken),
+                            "--out", str(tmp_path / "work")]})
+    outcome = json.loads(reply["result"]["content"][0]["text"])
+    assert outcome["ok"] is False and outcome["error"]
+
+    # And the loop is still there.
+    assert stdio_client.request("ping")["result"] == {}
+
+
+def test_a_directory_where_a_file_belongs_does_not_end_it_either(stdio_client,
+                                                                 tmp_path):
+    """The same door, a different exception: a directory where a document
+    belongs raises `IsADirectoryError` or `PermissionError` depending on the
+    platform, and neither was contained."""
+    folder = tmp_path / "a-folder.json"
+    folder.mkdir()
+
+    stdio_client.request("initialize", protocolVersion="2025-03-26",
+                         capabilities={}, clientInfo={"name": "probe"})
+    reply = stdio_client.request("tools/call", name="detect",
+                                 arguments={"args": ["--doc", str(folder)]})
+    assert json.loads(reply["result"]["content"][0]["text"])["ok"] is False
+    assert stdio_client.request("ping")["result"] == {}
+
+
+@pytest.mark.parametrize("message,expect", [
+    ({"jsonrpc": "1.0", "id": 1, "method": "ping"}, "JSON-RPC 2.0"),
+    ({"jsonrpc": "2.0", "id": {}, "method": "ping"}, "id is a string"),
+    ({"jsonrpc": "2.0", "id": None, "method": "ping"}, "needs an id"),
+    ({"jsonrpc": "2.0", "id": 1, "method": 7}, "method must be a string"),
+    ({"jsonrpc": "2.0", "id": 1}, "method must be a string"),
+])
+def test_a_malformed_envelope_is_answered_not_dropped(message, expect):
+    """A NULL id is a malformed request, not a notification — and treating the
+    two the same left a client waiting for a reply that was never coming."""
+    reply = server.handle(message)
+    assert reply is not None, "the client would wait for ever"
+    assert expect in reply["error"]["message"], reply
+
+
+def test_a_notification_is_still_unanswered():
+    assert server.handle({"jsonrpc": "2.0", "method": "ping"}) is None
+
+
+def test_an_oversized_stdio_line_is_refused_without_being_parsed():
+    """A stage's arguments are a few hundred bytes; a client that sends a
+    megabyte on one line is malfunctioning or hostile."""
+    import io as _io
+
+    line = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping",
+                       "params": {"pad": "x" * (server.MAX_BODY_BYTES + 10)}})
+    out = _io.StringIO()
+    server.serve_mcp(_io.StringIO(line + "\n"), out)
+    reply = json.loads(out.getvalue().strip())
+    assert "at most" in reply["error"]["message"]
+
+
+def test_a_rejected_post_closes_rather_than_leaving_its_body_behind(http_server):
+    """The body is still in the socket. On a keep-alive connection the next
+    read starts in the middle of it, and those bytes are parsed as the next
+    request — so a rejected call could be followed by a nonsense one the client
+    never sent."""
+    import http.client
+    import urllib.parse
+
+    base, _token = http_server
+    parts = urllib.parse.urlsplit(base)
+    connection = http.client.HTTPConnection(parts.hostname, parts.port,
+                                            timeout=30)
+    try:
+        connection.request("POST", "/tools/detect",
+                           body=json.dumps({"args": ["--doc", "x"]}),
+                           headers={"X-Revayat-Token": "wrong",
+                                    "Content-Type": "application/json"})
+        response = connection.getresponse()
+        assert response.status == 401
+        response.read()
+        assert response.getheader("Connection", "").lower() == "close"
+    finally:
+        connection.close()

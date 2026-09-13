@@ -15,6 +15,9 @@ import falint
 import masks
 import pageir as ir
 import qa
+import stages
+import watermark
+import typeset
 
 
 
@@ -269,9 +272,13 @@ def test_strict_makes_warnings_blocking(finished):
     doc = ir.load_doc(finished)
     _, region = next(iter(ir.iter_regions(doc)))
     region["target_text"] = "كتاب"          # an Arabic kaf: a typography warning
+    # Re-stamped, because changing approved Persian correctly marks the page
+    # rendered from the old text as stale — and this test is about strict mode,
+    # not about freshness.
+    stages.stamp_stage(doc, "typeset", {"placed": 1})
     ir.save_doc(doc, finished)
 
-    assert qa.check_document(finished)["ok"]
+    assert qa.check_document(finished)["ok"], qa.check_document(finished)["findings"]
     assert not qa.check_document(finished, strict=True)["ok"]
 
 
@@ -649,3 +656,92 @@ def test_qa_reports_a_render_older_than_the_translation_it_shows(finished):
     assert stale, [item["code"] for item in report["findings"]]
     assert not report["ok"], "a stale render is an error, not a note"
     assert any(item["where"] == "typeset" for item in stale), stale
+
+
+# --- R8: the mask says what it was built as, and a refusal is a barrier -------
+
+def test_masking_two_pages_differently_keeps_both_answers(translated):
+    """One flag was recorded for the whole document at the end of the run, so
+    masking page A solid and then page B with glyphs left a flag describing
+    neither — and `clean` read it and gave page A the cleaners a solid patch
+    must never reach."""
+    doc = ir.load_doc(translated)
+    first, second = doc["pages"][0]["id"], doc["pages"][1]["id"]
+
+    masks.build_document(translated, pages=[first], solid_free=True)
+    masks.build_document(translated, pages=[second], solid_free=False)
+
+    doc = ir.load_doc(translated)
+    assert doc["pages"][0]["free_lettering_mask"] == "solid"
+    assert doc["pages"][1]["free_lettering_mask"] == "glyphs"
+    assert clean.mask_mode(doc["pages"][0], "glyphs") == "solid"
+    assert clean.mask_mode(doc["pages"][1], "solid") == "glyphs"
+
+
+def test_remasking_a_page_overrules_what_the_last_clean_recorded(translated):
+    """A flag left by an earlier clean contradicted masks that had since been
+    rebuilt: the page said `glyphs` because that is how it was cleaned last
+    time, while the masks on disk were solid."""
+    doc = ir.load_doc(translated)
+    page_id = doc["pages"][0]["id"]
+    masks.build_document(translated, pages=[page_id], solid_free=False)
+    clean.clean_document(translated, pages=[page_id])
+
+    masks.build_document(translated, pages=[page_id], solid_free=True)
+
+    page = ir.load_doc(translated)["pages"][0]
+    assert clean.mask_mode(page, "glyphs") == "solid"
+
+
+def test_a_kept_or_dropped_region_is_not_given_cleaning_authority(translated):
+    """Authority comes from the decisions that stand now. Masking a region the
+    reader kept put artwork inside the area the cleaner may rewrite, and inside
+    the denominator the preservation proof divides by."""
+    doc = ir.load_doc(translated)
+    page = doc["pages"][0]
+    page["regions"][0]["keep"] = True
+    page["regions"][1]["dropped"] = True
+    ir.save_doc(doc, translated)
+
+    report = masks.build_document(translated, pages=[page["id"]])
+
+    page = ir.load_doc(translated)["pages"][0]
+    assert page["regions"][0]["mask"] is None
+    assert page["regions"][1]["mask"] is None
+    assert report["pages"][0]["not_masked"] == 2
+
+
+def test_an_unrepaired_region_takes_no_persian_and_fails_the_gate(finished):
+    """`fill: keep` alone reads as "the reader wanted this left in the
+    artwork", so the region took a translated overlay and shipped with the
+    source lettering underneath it."""
+    doc = ir.load_doc(finished)
+    region = doc["pages"][0]["regions"][0]
+    region["clean_status"] = "refused"
+    region["target_text"] = "بس کن"
+    ir.save_doc(doc, finished)
+
+    report = typeset.typeset_document(finished, pages=[doc["pages"][0]["id"]])
+    assert region["id"] in report["refused_clean"], report
+
+    codes = {item["code"] for item in qa.check_document(finished)["findings"]}
+    assert "clean-refused" in codes
+
+
+def test_a_watermark_box_does_not_break_the_reading_order(finished):
+    """An erase box is ink to remove, not text to read. It carried the
+    constructor's zero and the contract failed on every page that had been
+    marked — a gate firing on correct work."""
+    before = {item["code"] for item in qa.check_document(finished)["findings"]}
+    assert "reading-order-broken" not in before
+
+    watermark.mark_document(finished, [4, 4, 30, 12], label="stamp")
+
+    after = qa.check_document(finished)
+    assert "reading-order-broken" not in {item["code"]
+                                          for item in after["findings"]}
+    marked = next(r for r in ir.load_doc(finished)["pages"][0]["regions"]
+                  if r.get("erase"))
+    # Still given a stable number of its own, after everything already there,
+    # and nothing that was already numbered was moved.
+    assert marked["reading_order"] >= 1

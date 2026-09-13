@@ -635,3 +635,69 @@ def test_blank_lines_do_not_become_empty_rows():
     empty line in the middle of a balloon."""
     assert typeset._tokens("بله\n\n\nنه\n") == [["بله"], ["نه"]]
     assert typeset._tokens("   \n  ") == []
+
+
+# --- R9: one region's permission is not another's ----------------------------
+
+def test_a_failed_region_does_not_erase_the_ones_already_set(finished):
+    """The rollback restored the page as it was before ANY region drew, so one
+    balloon that did not fit erased the finished translation of every balloon
+    whose ink shared a rectangle with it — and reported only its own
+    overflow."""
+    doc = ir.load_doc(finished)
+    page = doc["pages"][0]
+    regions = [r for r in page["regions"]
+               if not r.get("dropped") and r.get("mask_box")]
+    if len(regions) < 2:
+        pytest.skip("this fixture has only one maskable region")
+
+    regions[0]["target_text"] = "بله"
+    # A sentence nothing will fit, in the region that is set second.
+    regions[1]["target_text"] = " ".join(["هیچ‌کس نمی‌داند او کجا رفته است"] * 8)
+    ir.save_doc(doc, finished)
+
+    report = typeset.typeset_document(finished, pages=[page["id"]])
+    assert regions[1]["id"] in report["overflow"], report
+
+    doc = ir.load_doc(finished)
+    survived = ir.find_region(doc, regions[0]["id"])
+    assert survived["typeset"].get("status") == "ok", survived["typeset"]
+
+    # And its ink is really on the page: the first region's balloon differs
+    # from the cleaned page it was drawn onto.
+    root = ir.doc_dir(finished)
+    page = doc["pages"][0]
+    cleaned = np.asarray(ir.load_image(root / page["clean"]).convert("RGB"))
+    final = np.asarray(ir.load_image(root / page["final"]).convert("RGB"))
+    x, y, w, h = survived["mask_box"]
+    assert (cleaned[y:y + h, x:x + w] != final[y:y + h, x:x + w]).any(), (
+        "the surviving region's Persian was rolled back with its neighbour's")
+
+
+def test_ink_that_lands_in_the_next_balloon_is_not_authorised(finished):
+    """The authority was one page-wide union of every region's area, so ink
+    from one balloon landing inside the next was authorised — by the
+    neighbour's permission, which is not this region's to spend."""
+    doc = ir.load_doc(finished)
+    page = doc["pages"][0]
+    regions = [r for r in page["regions"]
+               if not r.get("dropped") and r.get("mask_box")]
+    if len(regions) < 2:
+        pytest.skip("this fixture has only one maskable region")
+
+    # Move the second region's box on top of the first, so anything the first
+    # one spills is inside an area the union would have allowed.
+    regions[1]["mask_box"] = list(regions[0]["mask_box"])
+    regions[1]["balloon"] = None
+    for region in regions:
+        region["target_text"] = "بله"
+    ir.save_doc(doc, finished)
+
+    typeset.typeset_document(finished, pages=[page["id"]])
+
+    # Whatever the outcome, no region may report ink outside its OWN area as
+    # acceptable: the page-wide union is gone.
+    for region in ir.load_doc(finished)["pages"][0]["regions"]:
+        record = region.get("typeset") or {}
+        if record.get("outside_authorised"):
+            assert record["status"] == "overflow", record

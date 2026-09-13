@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-import zipfile
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -30,7 +29,7 @@ import falint
 import masks as mask_tools
 import pageir as ir
 import stages
-from pageir import IMAGE_SUFFIXES
+from pageir import IMAGE_SUFFIXES  # noqa: F401 - `package.py` reads it from here
 import providers
 
 #: Every finding this module can produce. Keeping the list here rather than
@@ -50,8 +49,16 @@ CODES = {
     "archive-invalid": "error",
     "archive-page-count": "error",
     "archive-page-size": "error",
+    "archive-duplicate-page": "error",
     "source-text-survived": "error",
     "stale-stage": "error",
+    "clean-refused": "error",
+    "region-not-rendered": "error",
+    "erase-unfinished": "error",
+    "stage-unverified": "warning",
+    "policy-conflict": "warning",
+    "annotation-unplaced": "warning",
+    "compressed-variant": "warning",
     "mask-excessive": "warning",
     "duplicate-translation": "warning",
     "low-confidence-region": "warning",
@@ -327,13 +334,96 @@ def check_document(doc_path: str | Path, *, strict: bool = False) -> dict[str, A
         # does — what happened to all of them.
         "states": ir.state_census(doc),
     }
-    for stage, reason in stages.stale_stages(doc).items():
-        # `typeset` here is the one that ships a wrong page: the render on disk
-        # was made from Persian somebody has since corrected. The others are
+    # Only what the render depends on. A previous session's `export` is not a
+    # prerequisite of checking the current pages, and reporting it blocked a
+    # corrected chapter from being verified before it was packaged again.
+    for stage, reason in stages.stale_stages(doc, needed_for="typeset").items():
+        # `typeset` is the one that ships a wrong page: the render on disk was
+        # made from Persian somebody has since corrected. The others are
         # reported for the same reason at a lower cost.
         findings.add("stale-stage", stage,
-                     f"the `{stage}` result is out of date: {reason}. "
+                     f"the `{stage}` result is out of date — {reason}. "
                      f"Re-run `{stage}` before publishing")
+    for page in doc["pages"]:
+        for region in page.get("regions", []):
+            if region.get("dropped") or region.get("keep"):
+                continue          # an explicit decision IS an outcome
+            if region.get("erase"):
+                # "Remove this and put nothing back" is finished when the
+                # cleaner has acted. It lived in the region's review notes and
+                # in the census, and nothing that gated publication read it.
+                if region.get("clean_status") not in ("cleaned",):
+                    findings.add(
+                        "erase-unfinished", region["id"],
+                        "this region is marked for erasure and the cleaner has "
+                        "not acted on it. Run `clean` before publishing")
+                continue
+            if not (region.get("target_text") or "").strip():
+                continue          # `untranslated-region` already covers this
+            if not ir.translatable(region, policy):
+                # The same question `typeset` asks. A sound effect under
+                # `--sfx-policy keep` stays in the artwork by decision, and
+                # demanding a render for it makes the gate fire on correct
+                # work — which is how a gate teaches people to ignore it.
+                continue
+            if policy in ("bilingual", "annotate") and region["kind"] == "sfx":
+                continue          # `annotation-unplaced` covers the gloss
+            status = (region.get("typeset") or {}).get("status")
+            if status != "ok":
+                # A page file existing proves a page was written. It does not
+                # prove that THIS region's Persian is on it, and a region whose
+                # render overflowed or was never attempted shipped inside a
+                # page that looked finished.
+                findings.add(
+                    "region-not-rendered", region["id"],
+                    f"this region has approved Persian and its render is "
+                    f"{status or 'missing'}. Run `typeset`, or shorten the "
+                    f"line until it fits")
+
+    for _page, region in ir.iter_regions(doc):
+        if region.get("clean_status") == "refused":
+            # `clean` had no repair for a solid free-lettering patch and left
+            # the original lettering on the page. It was recorded in the
+            # region's review notes and nowhere a gate looked, so the chapter
+            # was approved with the source text still in the artwork.
+            findings.add(
+                "clean-refused", region["id"],
+                "the artwork here was never repaired — `clean` had no repair "
+                "for this patch. Give it `--external`, a working `--provider`, "
+                "or re-run `mask --free-lettering glyphs` for this page")
+
+    for page in doc["pages"]:
+        for gloss in page.get("annotations") or []:
+            # `bilingual` and `annotate` promise the original AND the Persian.
+            # Nothing here reserves a place for the second one, so it is held
+            # rather than printed over the first.
+            findings.add(
+                "annotation-unplaced", gloss["region"],
+                f"a {meta.get('sfx_policy')} gloss was produced and has "
+                f"nowhere to go: {gloss['fa'][:40]}. Place it by hand, or use "
+                f"`--sfx-policy translate` to replace the effect instead")
+
+    for _page, region in ir.iter_regions(doc):
+        full = (region.get("target_full") or "").strip()
+        shown = (region.get("target_text") or "").strip()
+        if full and full != shown and "compressed-variant" not in (
+                region.get("review_ack") or []):
+            # Not a judgement about the shortening — only a person can make
+            # that one. The pair is surfaced so it is made, instead of the
+            # shorter line quietly becoming the translation.
+            findings.add(
+                "compressed-variant", region["id"],
+                f"this line was shortened to fit: {shown[:40]!r} stands for "
+                f"{full[:60]!r}. Read both, then `reviewed: compressed-variant`")
+
+    conflict = ir.sfx_conflict(meta)
+    if conflict:
+        findings.add("policy-conflict", "meta", conflict)
+    for stage, reason in stages.unverified_stages(doc).items():
+        # A warning, not an error. A chapter finished by an older build is not
+        # evidence of anything wrong, and demanding it be translated again to
+        # satisfy new bookkeeping would be a defect of the upgrade.
+        findings.add("stage-unverified", stage, reason)
 
     seen_translations: dict[str, list[str]] = defaultdict(list)
 
@@ -361,9 +451,14 @@ def check_document(doc_path: str | Path, *, strict: bool = False) -> dict[str, A
         # it leaves a gap every time — requiring contiguity here made this fire on
         # all ten pages of the first real chapter, which is how a gate teaches
         # people to ignore it.
+        # An erase box is ink to remove, not text to read: a watermark has no
+        # place in the order a reader takes the balloons in. It carried the
+        # constructor's zero, and the contract then failed on every page that
+        # had been marked — so the gate fired on correct work, which is how a
+        # gate teaches people to ignore it.
         orders = [region.get("reading_order") or 0
                   for region in page.get("regions", [])
-                  if not region.get("dropped")]
+                  if not region.get("dropped") and not region.get("erase")]
         if orders and (min(orders) < 1 or len(set(orders)) != len(orders)):
             findings.add(
                 "reading-order-broken", page["id"],
@@ -497,7 +592,12 @@ def check_document(doc_path: str | Path, *, strict: bool = False) -> dict[str, A
                 findings.add("not-persian", region["id"],
                              f"target text is not Persian: {target[:40]}")
 
-            for issue in falint.lint_text(target):
+            # A `zwnj-review` the reader has settled — they confirmed the
+            # two words really are two words — must not be demanded again
+            # on every run. Asking forever leaves two ways out: make the
+            # unsafe edit, or stop running the gate.
+            for issue in falint.lint_text(
+                    target, acknowledged=region.get("review_ack") or ()):
                 if issue["code"] in {"untranslated", "source-script-left"}:
                     continue  # already reported above, with better detail
                 findings.add("typography", region["id"],
@@ -554,120 +654,34 @@ def check_document(doc_path: str | Path, *, strict: bool = False) -> dict[str, A
     }
 
 
-# --------------------------------------------------------------------------- #
-# Package checks
-# --------------------------------------------------------------------------- #
 
-def _page_size(payload: bytes) -> tuple[int, int] | None:
-    """The image's dimensions, or ``None`` when those bytes are not an image.
+def publication_preflight(doc_path: str | Path) -> dict[str, Any]:
+    """May this chapter be published, and if not, why not.
 
-    Only the header is parsed — `Image.open` is lazy — so this costs almost
-    nothing per page and still catches the thing name-matching cannot: a file
-    called `p0002.png` that is not a PNG at all.
+    One answer, so that `qa` and `export` cannot disagree. They did: `export`
+    asked its own narrower question — is there a rendered file for every page
+    that wants one — and a chapter whose render was stale, whose lines had
+    overflowed, or whose erasures had never been cleaned went straight into a
+    package without the gate ever running.
     """
-    import io
-
-    from PIL import Image
-
-    try:
-        with Image.open(io.BytesIO(payload)) as image:
-            return image.size
-    except Exception:
-        return None
-
-
-def _check_pages(findings: Findings, where: str, sizes: list[tuple[str, bytes]],
-                 doc: dict[str, Any]) -> None:
-    """Open every page the package claims to have, and measure it.
-
-    The check used to be a suffix match on a name. Measured against a package
-    built by hand: bytes that are not an image passed, a *directory* entry named
-    `p0002.png/` passed (its `Path(...).suffix` is `.png`), and a page at the
-    wrong size passed. Only the name-ordering test did real work.
-    """
-    expected = [(page["width"], page["height"]) for page in doc["pages"]]
-    for index, (name, payload) in enumerate(sizes):
-        size = _page_size(payload)
-        if size is None:
-            findings.add("archive-invalid", where,
-                         f"{name} is not an image the reader can open")
-            continue
-        if index < len(expected) and size != expected[index]:
-            findings.add(
-                "archive-page-size", where,
-                f"{name} is {size[0]}x{size[1]}; the document says page "
-                f"{index + 1} is {expected[index][0]}x{expected[index][1]}",
-            )
+    report = check_document(doc_path)
+    blocking = [item for item in report["findings"]
+                if item["severity"] == "error"]
+    return {
+        "ok": not blocking,
+        "blocking": blocking[:20],
+        "blocking_count": len(blocking),
+        "next": ("run `qa --doc <document>` for the whole list, fix what it "
+                 "names, and export again. `--draft` ships what is there now "
+                 "and says so." if blocking else None),
+    }
 
 
 def check_package(package: str | Path, doc_path: str | Path) -> dict[str, Any]:
-    package = Path(package)
-    doc = ir.load_doc(Path(doc_path))
-    findings = Findings()
-    expected = len(doc["pages"])
+    """Kept here because `qa package` is where every caller looks for it."""
+    from package import check_package as _check
 
-    if not package.exists():
-        findings.add("archive-invalid", package.name, "the file does not exist")
-        return _package_report(findings, package, expected, 0)
-
-    found = 0
-    if package.suffix.lower() in {".cbz", ".zip"}:
-        if not zipfile.is_zipfile(package):
-            findings.add("archive-invalid", package.name, "not a valid ZIP archive")
-        else:
-            with zipfile.ZipFile(package) as archive:
-                bad = archive.testzip()
-                if bad:
-                    findings.add("archive-invalid", package.name,
-                                 f"corrupt member: {bad}")
-                # `info.is_dir()`, not the name: a member called `p0002.png/`
-                # is a directory, and `Path("p0002.png/").suffix` is `.png`, so
-                # counting by name alone let one stand in for a page.
-                names = sorted(
-                    info.filename for info in archive.infolist()
-                    if not info.is_dir()
-                    and Path(info.filename).suffix.lower() in IMAGE_SUFFIXES
-                )
-                found = len(names)
-                _check_pages(findings, package.name,
-                             [(name, archive.read(name)) for name in names], doc)
-                # Order is the whole point of a comic archive, and a reader that
-                # sorts by name gets it wrong unless the names sort correctly.
-                if names != sorted(names):
-                    findings.add("archive-invalid", package.name,
-                                 "page names do not sort into reading order")
-    elif package.suffix.lower() == ".pdf":
-        pymupdf = ir.require("pymupdf", "pymupdf", "verifying a PDF")
-        try:
-            with pymupdf.open(str(package)) as document:
-                found = document.page_count
-        except Exception as error:
-            findings.add("archive-invalid", package.name, f"cannot open: {error}")
-    else:
-        children = sorted(
-            child for child in package.iterdir()
-            if child.is_file() and child.suffix.lower() in IMAGE_SUFFIXES
-        ) if package.is_dir() else []
-        found = len(children)
-        _check_pages(findings, package.name,
-                     [(child.name, child.read_bytes()) for child in children], doc)
-
-    if found != expected:
-        findings.add("archive-page-count", package.name,
-                     f"{found} page(s) in the package, {expected} in the document")
-    return _package_report(findings, package, expected, found)
-
-
-def _package_report(findings: Findings, package: Path, expected: int,
-                    found: int) -> dict[str, Any]:
-    errors = [item for item in findings.items if item["severity"] == "error"]
-    return {
-        "ok": not errors,
-        "package": str(package),
-        "pages_expected": expected,
-        "pages_found": found,
-        "findings": findings.items,
-    }
+    return _check(package, doc_path)
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -285,6 +285,13 @@ def _post_form(path: str, fields: dict[str, str],
     return _send(path, content_type, body, timeout)
 
 
+#: Reasons a generation stopped that mean the text is not a whole answer.
+#: `stop` and an absent reason are the good cases; `length` is the one that
+#: silently produced half a sentence.
+_INCOMPLETE = frozenset({"length", "content_filter", "max_tokens", "refusal",
+                         "error"})
+
+
 class HostedTranslation:
     """Persian for one source string, from any OpenAI-compatible chat endpoint.
 
@@ -325,7 +332,19 @@ class HostedTranslation:
         choices = answer.get("choices") or []
         if not choices:
             return None
-        text = (choices[0].get("message", {}).get("content") or "").strip()
+        choice = choices[0]
+
+        # Why the model stopped. `length` means the answer was cut off at the
+        # token limit — a half sentence, which read as a complete short line
+        # and went into the document as an approved translation. `content_filter`
+        # and a `refusal` are not translations either. Declining returns the
+        # region to the reader, which is the right place for all three.
+        reason = (choice.get("finish_reason") or "").lower()
+        message = choice.get("message") or {}
+        if reason in _INCOMPLETE or message.get("refusal"):
+            return None
+
+        text = (message.get("content") or "").strip()
         return (text, HOSTED_CONFIDENCE) if text else None
 
 

@@ -266,6 +266,12 @@ are missing from the package.
 >     the user has the right to remove: `references/watermarks.md`.
 >   - `kind: sfx` / `sign` / `narration` / `thought` when it is misclassified
 >   - `speaker: <short stable name>` — the same name every time, on every page
+>   - `fa_full: <the full-meaning Persian>` — when `fa:` above is a
+>     shortened variant that had to fit the balloon. Both are kept, and
+>     `qa` raises `compressed-variant` so somebody reads the pair.
+>   - `reviewed: <lint code>` — a lint you have looked at and settled, so
+>     the gate stops asking. `reviewed: zwnj-review` on a line where `می`
+>     is wine and not the verb prefix.
 >   - `propose: <name>, <name>` — a name or term this balloon *mentions*
 >     but does not say. It reaches the glossary without claiming somebody
 >     else is talking.
@@ -429,6 +435,14 @@ $PY $SKILL_DIR/scripts/revayat-comic.py qa check --doc $WORK/comic.json
 | `artwork-modified` | pixels changed outside the authorised mask | do not ship; re-run clean and typeset for that page |
 | `source-text-survived` | the mask missed part of the lettering, so the original script is still on the cleaned page | re-run `mask` with a larger `--grow` for that page, then `clean` |
 | `stale-stage` | a finished stage's result no longer matches what it was made from — an approved line was corrected after the page was rendered, or a stage it depends on has run since | re-run the stage it names, then `qa` |
+| `clean-refused` | `clean` had no repair for this patch and left the original lettering on the page | give it `--external`, a working `--provider`, or re-run `mask --free-lettering glyphs` for that page |
+| `region-not-rendered` | this region has approved Persian and its render is missing or overflowed | run `typeset`, or shorten the line until it fits |
+| `erase-unfinished` | a region is marked for erasure and the cleaner has not acted on it | run `clean` before publishing |
+| `annotation-unplaced` | a `bilingual`/`annotate` gloss was produced and nothing reserves a place for it | place it by hand, or use `--sfx-policy translate` to replace the effect instead |
+| `compressed-variant` | a line was shortened to fit and the full-meaning version is recorded beside it | read both, then mark it `reviewed: compressed-variant` |
+| `archive-duplicate-page` | two pages in the package are byte-identical where the export wrote two different ones | re-run `export`; if it repeats, a page failed to write |
+| `stage-unverified` | a stage was stamped by an older build, so its freshness cannot be judged | re-run the stage it names once |
+| `policy-conflict` | `title_policy.sfx` names a different policy from `meta.sfx_policy`, which is the one every stage obeys | make them agree, or word the policy so it does not name another one |
 | `source-modified` | an original page file was edited after import | restore it, or re-import |
 | `page-missing` / `page-size-changed` | an output is gone or resized | re-run the stage that makes it |
 | `untranslated-region` | a region has no Persian | translate it, or `drop: yes` |

@@ -26,7 +26,7 @@ import argparse
 import re
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 import pageir as ir
 import stages
@@ -77,7 +77,32 @@ _AMBIGUOUS_SUFFIXES = ("ترین", "تری", "تر")
 #: a conjugated verb, and a Persian verb carries a personal ending, so a
 #: following word that ends in one is joined and anything else is reported.
 #: `می روم` joins; `می ناب` ("fine wine") does not.
-_VERB_ENDING = "مویدنهٔ"
+#: `می` is two words in Persian. It is the imperfective prefix — `می‌روم` — and
+#: it is also the noun *wine*. The two are written identically and only the
+#: NEXT word separates them.
+#:
+#: The previous rule joined `می` to anything ending in one of م و ی د ن ه, on
+#: the theory that those are conjugation endings. They are also the last letter
+#: of ordinary adjectives and nouns, so `می شیرین را نوشید` (*he drank the sweet
+#: wine*) became `می‌شیرین`, and so did `می کهنه` (*old wine*) and `می گران`
+#: (*expensive wine*). A guess that changes the meaning of a sentence is worse
+#: than no rule, because the reader is never asked.
+#:
+#: So: a closed list of the conjugated forms that actually follow the prefix.
+#: Narrow, checkable, and extended by adding a word — never by widening a
+#: pattern. Everything outside it is a `zwnj-review` for a person to settle.
+_MI_STEMS = (
+    "رو", "کن", "شو", "خواه", "توان", "دان", "گوی", "بین", "آی", "گیر",
+    "ده", "خور", "زن", "برم", "بر", "آور", "افت", "رس", "مان", "نویس",
+    "خوان", "پرس", "ترس", "فهم", "شناس", "ایست", "نشین", "گرد", "کش",
+    "دار", "گذار", "ساز", "شکن", "بند", "پوش", "خند", "گری",
+)
+#: The person endings those stems take. `می‌روم`, `می‌روی`, `می‌رود`, …
+_MI_ENDINGS = ("م", "ی", "د", "یم", "ید", "ند", "")
+
+#: Every form the rule will join, built once.
+MI_VERBS = frozenset(
+    stem + ending for stem in _MI_STEMS for ending in _MI_ENDINGS)
 
 _SUFFIX_SPACE = re.compile(
     rf"([{PERSIAN_LETTER}]{{2,}}) +({'|'.join(_ZWNJ_SUFFIXES)})\b"
@@ -85,14 +110,15 @@ _SUFFIX_SPACE = re.compile(
 _PREFIX_SPACE = re.compile(
     rf"\b({'|'.join(_ZWNJ_PREFIXES)}) +([{PERSIAN_LETTER}]{{2,}})"
 )
-#: `می` followed by something that conjugates. Applied.
+#: `می` followed by a form this project can name as a verb. Applied.
 _MI_VERB = re.compile(
-    rf"\b(می) +([{PERSIAN_LETTER}]{{2,}}[{_VERB_ENDING}])\b"
+    rf"\b(می) +({'|'.join(sorted(MI_VERBS, key=len, reverse=True))})\b"
 )
 #: What is left over for a reader to decide.
 _AMBIGUOUS_JOIN = re.compile(
     rf"[{PERSIAN_LETTER}]{{2,}} +(?:{'|'.join(_AMBIGUOUS_SUFFIXES)})\b"
-    rf"|\bمی +(?![{PERSIAN_LETTER}]{{2,}}[{_VERB_ENDING}]\b)[{PERSIAN_LETTER}]{{2,}}"
+    rf"|\bمی +(?!(?:{'|'.join(sorted(MI_VERBS, key=len, reverse=True))})\b)"
+    rf"[{PERSIAN_LETTER}]{{2,}}"
 )
 
 _PERSIAN_PUNCT = "،؛؟!:.»…"
@@ -187,19 +213,63 @@ def _fix_segment(text: str, options: Options, persian_line: bool) -> str:
     return _MULTI_SPACE.sub(" ", text)
 
 
-def _fix_once(text: str, options: Options) -> str:
-    persian_line = bool(_HAS_PERSIAN.search(text))
-    pieces: list[str] = []
+def segments(text: str):
+    """`(is_protected, piece)` across the whole line, in order.
+
+    ONE lexer, used by the fixer and by the linter. They had one each: the
+    fixer left a URL alone and the linter then reported the Arabic letters
+    inside it as `arabic-forms`, demanding an edit the fixer would never make
+    and QA would never stop asking for.
+    """
     last = 0
     for match in _PROTECTED.finditer(text):
-        pieces.append(_fix_segment(text[last:match.start()], options, persian_line))
+        if match.start() > last:
+            yield False, text[last:match.start()]
         # A URL, an email address or a Latin word, byte for byte. Folding an
         # Arabic kaf, converting a digit or pairing a quote inside one of these
         # produces a dead link that still looks like a link.
-        pieces.append(match.group(0))
+        yield True, match.group(0)
         last = match.end()
-    pieces.append(_fix_segment(text[last:], options, persian_line))
-    return "".join(pieces)
+    if last < len(text):
+        yield False, text[last:]
+
+
+def unprotected(text: str) -> str:
+    """The line with every protected span blanked, for a check to read."""
+    return "".join(" " * len(piece) if guarded else piece
+                   for guarded, piece in segments(text))
+
+
+def _pair_quotes(text: str, options: Options) -> str:
+    """Turn `"…"` into `«…»` across the whole line, protected spans included.
+
+    Pairing happened inside each unprotected piece, so a quotation that has a
+    Latin word in it — `گفت: "سلام Bob"` — was two pieces with one mark each
+    and neither could find its partner. The marks are rewritten in place; not a
+    byte between them is touched.
+    """
+    if not options.quotes:
+        return text
+    blanked = unprotected(text)
+    out = list(text)
+    opening = None
+    for index, char in enumerate(blanked):
+        if char not in '"\u201c\u201d':
+            continue
+        if opening is None:
+            opening = index
+            continue
+        out[opening], out[index] = "«", "»"
+        opening = None
+    return "".join(out)
+
+
+def _fix_once(text: str, options: Options) -> str:
+    persian_line = bool(_HAS_PERSIAN.search(text))
+    text = _pair_quotes(text, options)
+    return "".join(
+        piece if guarded else _fix_segment(piece, options, persian_line)
+        for guarded, piece in segments(text))
 
 
 def fix_line(text: str, options: Options) -> str:
@@ -232,24 +302,37 @@ _DOUBLE_PUNCT = re.compile(r"([،؛])\1+")
 _ARABIC_LEFTOVER = re.compile(r"[يكىـ٠-٩]")
 
 
-def lint_text(text: str) -> list[dict[str, str]]:
+def lint_text(text: str, *, acknowledged: Sequence[str] = ()) -> list[dict[str, str]]:
+    """What a reader still has to decide about this line.
+
+    `acknowledged` are codes somebody has already looked at and settled — a
+    `zwnj-review` on a word they confirmed is two words. Without it strict QA
+    asked for the same unsafe edit on every run, and the only ways to silence
+    it were to make the edit or to stop running the gate.
+    """
     issues: list[dict[str, str]] = []
     if not (text or "").strip():
         return issues
+    settled = set(acknowledged or ())
 
     def note(code: str, detail: str) -> None:
-        issues.append({"code": code, "detail": detail[:140]})
+        if code not in settled:
+            issues.append({"code": code, "detail": detail[:140]})
 
-    if _ARABIC_LEFTOVER.search(text):
+    # Everything below reads the line with URLs, emails and Latin words blanked
+    # out — the same spans the fixer refuses to touch. Reporting an Arabic kaf
+    # inside a URL asked for an edit that would break the link.
+    visible = unprotected(text)
+    if _ARABIC_LEFTOVER.search(visible):
         note("arabic-forms", "Arabic yeh/kaf/tatweel or Arabic-Indic digits remain")
-    opens, closes = text.count("«"), text.count("»")
+    opens, closes = visible.count("«"), visible.count("»")
     if opens != closes:
         note("guillemets", f"unbalanced Persian quotes: {opens} « vs {closes} »")
-    if '"' in text or "“" in text or "”" in text:
+    if '"' in visible or "“" in visible or "”" in visible:
         note("latin-quotes", "Latin quotation marks in Persian dialogue")
-    if _DOUBLE_PUNCT.search(text):
+    if _DOUBLE_PUNCT.search(visible):
         note("double-punctuation", "repeated punctuation mark")
-    ambiguous = _AMBIGUOUS_JOIN.search(text)
+    ambiguous = _AMBIGUOUS_JOIN.search(visible)
     if ambiguous:
         note("zwnj-review",
              f"`{ambiguous.group(0)}` may want a ZWNJ, or may be two words "
@@ -299,7 +382,8 @@ def lint_document(doc_path: str | Path) -> dict[str, Any]:
     for _, region in ir.iter_regions(doc):
         if region.get("dropped"):
             continue
-        for issue in lint_text(region.get("target_text") or ""):
+        for issue in lint_text(region.get("target_text") or "",
+                               acknowledged=region.get("review_ack") or ()):
             findings.append({"region": region["id"], **issue})
     by_code: dict[str, int] = {}
     for finding in findings:

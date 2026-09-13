@@ -400,6 +400,32 @@ TITLE_POLICY_KEYS = ("honorifics", "names", "sfx", "slang", "profanity",
                      "register")
 
 
+#: The four values `meta.sfx_policy` may take. `title_policy.sfx` is prose for
+#: the translator and may say anything; when it happens to NAME one of these
+#: and names a different one, the translator and the renderer are being given
+#: opposite instructions and somebody has to be told.
+SFX_POLICIES = ("keep", "translate", "bilingual", "annotate")
+
+
+def sfx_conflict(meta: dict[str, Any]) -> str | None:
+    """A description of the disagreement between the two places SFX is set.
+
+    Precedence is not in doubt — `meta.sfx_policy` is the enum every stage
+    obeys, and the prose cannot override it — but silence was the wrong answer:
+    a title whose policy read "translate" while the document said "keep" had
+    the reader translating effects the renderer then left in the artwork.
+    """
+    enum = (meta.get("sfx_policy") or "keep").strip().lower()
+    prose = str((meta.get("title_policy") or {}).get("sfx") or "").lower()
+    named = [name for name in SFX_POLICIES if name in prose]
+    if not named or enum in named:
+        return None
+    return (f"`title_policy.sfx` says {' and '.join(named)} while "
+            f"`meta.sfx_policy` is {enum!r}, which is the one every stage "
+            f"obeys. Make them agree, or word the policy so it does not name "
+            f"another one.")
+
+
 def title_policy(meta: dict[str, Any]) -> dict[str, str]:
     """The title's standing decisions, empty entries left out."""
     written = meta.get("title_policy") or {}

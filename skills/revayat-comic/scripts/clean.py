@@ -195,12 +195,17 @@ def _from_provider(provider, base, page, root, np, report) -> Any:
 def mask_mode(page: dict[str, Any], document_mode: str) -> str:
     """Which free-lettering mask **this page** was built with.
 
-    `mask` records one flag for the whole document, so masking a second page
-    with a different `--free-lettering` setting overwrites the first page's
-    answer and the flag then describes neither of them. A page that carries its
-    own answer is believed over the document's; a page that does not falls back
-    to it — and `clean` writes back what it acted on, so a later run for another
-    page cannot rewrite the history of this one.
+    `mask` recorded one flag for the whole document, so masking a second page
+    with a different `--free-lettering` setting overwrote the first page's
+    answer and the flag then described neither of them. The builder writes the
+    value onto each page as it builds that page's masks, which is the only
+    moment it is known; a page that has never been masked by a build that did
+    that falls back to the document-wide flag.
+
+    `clean` does NOT write this. It used to, and a flag left by an earlier
+    clean then contradicted masks that had since been rebuilt — the page said
+    `glyphs` because that is how it was cleaned last time, while the masks on
+    disk were solid.
     """
     return page.get("free_lettering_mask") or document_mode
 
@@ -347,6 +352,13 @@ def clean_page(
             # page every gate now believes was cleaned.
             if solid_patch:
                 region["fill"] = "keep"
+                # A barrier, not a note. `fill: keep` alone reads as "the
+                # reader wanted this left in the artwork", which is a decision
+                # somebody made — and the region then took a translated overlay
+                # and shipped, with the source lettering underneath it. This
+                # says what actually happened, and `typeset` and `qa` both
+                # refuse to treat it as cleaned.
+                region["clean_status"] = "refused"
                 if SOLID_REFUSAL not in region.setdefault("review", []):
                     region["review"].append(SOLID_REFUSAL)
                 counts["refused"] += 1
@@ -355,6 +367,7 @@ def clean_page(
 
         base[y:y + h, x:x + w] = _composite(window, repaired, mask, np)
         region["fill"] = strategy
+        region["clean_status"] = "cleaned"
         if colour is not None:
             region["fill_colour"] = list(colour)
         counts[strategy] += 1
@@ -364,9 +377,9 @@ def clean_page(
     relative = f"clean/{page['id']}.png"
     ir.save_image(Image.fromarray(base), root / relative)
     page["clean"] = relative
-    # On the page, not in `meta`: what governed this page stays true of this
-    # page whatever the next `mask` run writes for another one.
-    page["free_lettering_mask"] = "solid" if solid_free else "glyphs"
+    # Deliberately NOT writing `free_lettering_mask` here. `mask` owns it: it
+    # is a fact about the masks on disk, and a value left behind by an earlier
+    # clean contradicted masks that had since been rebuilt.
     return counts
 
 
@@ -429,7 +442,9 @@ def clean_document(
         # answerable from the document months later.
         stamp["provider"] = provider
         stamp["provider_calls"] = provider_report
-    stages.stamp_stage(doc, "clean", stamp)
+    stages.stamp_stage(doc, "clean", stamp,
+                       options={"external": bool(external_dir),
+                                "provider": provider}, pages=pages)
     ir.save_doc(doc, doc_path)
 
     heavy = [entry["page"] for entry in per_page if entry["inpaint"] > entry["flat"]]

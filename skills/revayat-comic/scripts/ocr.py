@@ -40,6 +40,21 @@ import providers
 MIN_CONFIDENCE = 0.65
 
 
+def crop_identity(page: dict[str, Any], region: dict[str, Any]) -> str:
+    """What the crop for this region is a crop OF.
+
+    Region ids are ordinals and survive a re-detection, so `p0001/r002.png`
+    from before the boxes moved was still on disk and still matched the name.
+    The BALLOON is in here too: the cropper pads to it, so a balloon traced
+    differently produces a different picture from the same box — and the old
+    name could not tell those apart either.
+    """
+    return ir.sha256_bytes(
+        f"{page['sha256']}|{region['bbox']}|{region.get('orientation')}|"
+        f"{region.get('balloon')}|{region.get('polarity')}"
+        .encode("utf-8"))[:8]
+
+
 def _crop_path(root: Path, page: dict[str, Any], region: dict[str, Any],
                page_image) -> Path:
     """One region, written where an engine can open it by path.
@@ -52,9 +67,7 @@ def _crop_path(root: Path, page: dict[str, Any], region: dict[str, Any],
     # ids are ordinals and survive a re-detection, so `p0001/r002.png` from
     # before the boxes moved was still on disk and still matched the name —
     # and the engine read the old picture of a different part of the page.
-    where = ir.sha256_bytes(
-        f"{page['sha256']}|{region['bbox']}|{region.get('orientation')}"
-        .encode("utf-8"))[:8]
+    where = crop_identity(page, region)
     target = root / "ocr" / page["id"] / f"{region['id']}-{where}.png"
     if not target.exists():
         crop = crops._crop_for(page_image, region,
@@ -107,7 +120,17 @@ def read_document(
             # The previous version called the engine again and let a differing
             # answer overwrite a good one, which made two runs of the same
             # command produce two different documents.
-            if providers.completed(region, "ocr", "source_text"):
+            # Asked BEFORE the call, and about the crop this run would make —
+            # the skip used to happen before anything consulted the crop name
+            # at all, so a region whose box had moved was resumed against a
+            # reading of a different part of the page.
+            identity = providers.request_identity(
+                crop=crop_identity(page, region), provider=provider,
+                language=language, vision=vision,
+                orientation=region.get("orientation") if orientation_aware
+                else None)
+            if providers.completed(region, "ocr", "source_text",
+                                   identity=identity):
                 counts["resumed"] += 1
                 page_counts["resumed"] += 1
                 continue
@@ -125,7 +148,8 @@ def read_document(
                                     timeout=timeout, name=provider, **extra)
             before = (region.get("source_text") or "").strip()
             outcome = providers.apply(region, "source_text", result,
-                                      min_confidence=min_confidence)
+                                      min_confidence=min_confidence,
+                                      identity=identity)
             counts[outcome] += 1
             page_counts[outcome] += 1
             if outcome == "needs_review" and result.ok and before:
@@ -158,9 +182,15 @@ def read_document(
                 disagreements.append(row)
 
         per_page.append({"page": page["id"], **page_counts})
+        # Saved per page, for the same reason translation is: an interrupted
+        # run must not throw away the pages it has already read.
+        ir.save_doc(doc, doc_path)
 
     stages.stamp_stage(doc, "ocr", {"provider": provider, "totals": counts,
-                                "orientation_aware": orientation_aware})
+                                    "orientation_aware": orientation_aware},
+                       options={"provider": provider, "vision": vision,
+                                "min_confidence": min_confidence},
+                       pages=pages)
     ir.save_doc(doc, doc_path)
 
     return {

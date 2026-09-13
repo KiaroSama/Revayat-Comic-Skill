@@ -178,6 +178,7 @@ original's SHA-256 is re-checked at the end.
 | `detect.py` | panels, balloons in both polarities, free lettering |
 | `masks.py` | glyph shapes clipped to the balloon interior |
 | `crops.py` | the overview and crop sheets the reader looks at |
+| `sheet.py` | the sheet a reader fills in: header, glossary table, blocks |
 | `worksheet.py` | the `@@` protocol, and every named way a reply can be wrong |
 | `glossary.py` | names and terms, and the drift check |
 | `falint.py` | Persian typography, mechanically |
@@ -185,6 +186,7 @@ original's SHA-256 is re-checked at the end.
 | `typefont.py` | the Persian face, and the shaping engine |
 | `typeset.py` | balloon-shaped fitting, wrapping, rendering |
 | `qa.py` | the gate, including the pixel-preservation proof |
+| `package.py` | verifying what actually shipped against what the export wrote |
 | `export.py` | CBZ, PDF, folder |
 | `lettering.py` | matching a drawn sound effect's slant, arc and recession |
 | `providers.py` | the optional second-opinion boundary, and its fakes |

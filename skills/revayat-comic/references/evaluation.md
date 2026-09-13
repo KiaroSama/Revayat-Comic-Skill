@@ -26,8 +26,16 @@ nobody can check, which defeats the point.
 Twenty to forty pages is enough to be useful. Two hundred sentence pairs with
 no images is not a substitute.
 
-**There is no such set in this repository.** Adding one is a decision about
-rights that belongs to whoever owns the material, not to this skill.
+**There is a starter set in this repository**, at `evaluation/`: fifteen
+cases across Japanese, Korean, Chinese and English, each with several
+acceptable Persian renderings, plus a page generated for each one and a
+scorer that grades the axes separately and refuses to produce a total.
+
+Its source lines were written for it rather than taken from a published
+comic, and its pages are drawn rather than scanned. That is what makes it
+shareable and it is also its limit: it measures translation, not detection
+on a real scan. Adding pages you have the right to share is one field in
+`evaluation/cases.json` — see `evaluation/README.md`.
 
 ## The cases worth collecting
 

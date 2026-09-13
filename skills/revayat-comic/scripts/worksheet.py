@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import copy
 import hashlib
+import json
 import re
 import sys
 from pathlib import Path
@@ -45,230 +46,89 @@ from typing import Any, Sequence
 
 import pageir as ir
 import stages
+from replies import (  # noqa: F401 - re-exported: the protocol and the
+    ACTIONS,                          # parser have always been reached
+    BOX,                              # through `worksheet`, and the CLI,
+    FIELD,                            # the transport and every test do.
+    FIELDS,
+    HEADER,
+    PROPOSALS,
+    _add_region,
+    _apply,
+    _apply_page,
+    parse_worksheet,
+    reply_digest,
+)
+from sheet import (  # noqa: F401 - re-exported: `worksheet.page_worksheet`
+    STAMP_SCHEME,                          # is the name every caller and
+    page_worksheet,                        # every test already uses.
+)
 
-HEADER = re.compile(r"^@@\s+(?P<id>\+?[A-Za-z0-9_#-]+)(?:\s+(?P<rest>.*))?$")
-FIELD = re.compile(
-    r"^(?P<name>src|fa|kind|speaker|propose|note|drop|keep|erase|box"
-    r"|polarity)"
-    r"\s*:\s?(?P<value>.*)$")
-
-#: `box: x y w h`, in the PAGE's own pixels. `overview.png` is drawn at most
-#: is drawn at, so a reader can take the numbers straight off it.
-BOX = re.compile(r"^\s*(\d+)[ ,]+(\d+)[ ,]+(\d+)[ ,]+(\d+)\s*$")
 FINGERPRINT = re.compile(r"^#\s*fingerprint:\s*(?P<value>[0-9a-f]{64})\s*$", re.M)
 
-FIELDS = ("src", "fa", "kind", "speaker", "propose", "note", "drop", "keep",
-          "erase", "box", "polarity")
 
-#: `propose: Anna, the Iron Gate` — a comma in either script separates them.
-PROPOSALS = re.compile(r"[,\u060c]")
 
-_DIRECTION_WORDS = {
-    "rtl": "right to left (Japanese order: the rightmost balloon is first)",
-    "ltr": "left to right",
-}
 
 
 # --------------------------------------------------------------------------- #
 # Writing
 # --------------------------------------------------------------------------- #
 
-def _rows(pairs: list[tuple[str, dict[str, Any]]]) -> list[str]:
-    """One line per entry, wide enough for the longest of them.
+#: Marks a reply whose `# fingerprint:` is a page fingerprint under the current
+#: algorithm. A reply without it was written by an older build, whose stamp was
+#: computed a different way and cannot be compared with this one.
+SCHEME_LINE = re.compile(r"^#\s*scheme:\s*(?P<value>\d+)\s*$", re.M)
 
-    Nothing is clipped. The columns used to be a fixed 21 characters, so a
-    long name was printed as most of itself — a binding spelling that was
-    not the spelling, which is worse than no table at all.
+
+def _stamp_state(reply: Path, pages: dict[str, dict[str, Any]],
+                 document_stamp: str) -> str:
+    """``fresh`` | ``stale`` | ``legacy`` | ``unstamped``.
+
+    Three answers, because two were not enough. A stamp from an older build is
+    not the same claim as a stamp that disagrees: the old algorithm hashed the
+    whole document, so after the move to per-page hashes every genuinely old
+    reply matched nothing and the reader was told to translate the chapter
+    again. `legacy` is taken on trust exactly once and re-stamped on the way
+    out, and it is reported rather than passed over in silence.
     """
-    source_width = max(len(source) for source, _ in pairs)
-    target_width = max(len(entry.get("target", "")) for _, entry in pairs)
-    lines = [
-        f"#   {'source':<{source_width}}  {'Persian':<{target_width}}  role",
-        f"#   {'-' * source_width}  {'-' * target_width}  {'-' * 18}",
-    ]
-    for source, entry in pairs:
-        lines.append(
-            f"#   {source:<{source_width}}  "
-            f"{entry.get('target', ''):<{target_width}}  "
-            f"{entry.get('role', '')}"
-        )
-    return lines
-
-
-def _glossary_table(doc: dict[str, Any], limit: int = 40) -> list[str]:
-    """The names table, with the binding rows separated from the guesses.
-
-    Everything with a `target` used to be printed under a heading saying it
-    was binding, including the entries the scan proposed and nobody had
-    approved. A translator told a guess is binding spells the rest of the
-    chapter to match it. And the whole thing stopped at 40 rows with
-    nothing said, so enough guesses pushed the one approved term off the
-    end — which is why the cap now falls on the guesses only.
-    """
-    entries = doc.get("glossary", {}).get("entries", {})
-    with_target = [(source, entry) for source, entry in entries.items()
-                   if entry.get("target")]
-    binding = [pair for pair in with_target if pair[1].get("locked")]
-    suggested = [pair for pair in with_target if not pair[1].get("locked")]
-    if not with_target:
-        return []
-
-    lines: list[str] = []
-    if binding:
-        lines += [
-            "# Names and terms — these are binding. Use exactly the "
-            "Persian given.",
-            "#",
-        ]
-        lines += _rows(binding)
-        lines.append("#")
-
-    room = max(0, limit - len(binding))
-    shown = suggested[:room]
-    if shown:
-        lines += [
-            "# Proposed by the scan and not binding — nobody has approved "
-            "these.",
-            "# Use one if it is right; if it is wrong, just translate "
-            "normally.",
-            "#",
-        ]
-        lines += _rows(shown)
-        lines.append("#")
-    hidden = len(suggested) - len(shown)
-    if hidden:
-        lines.append(f"#   … and {hidden} more suggestion(s) not shown.")
-        lines.append("#")
-    return lines
-
-
-def page_worksheet(doc: dict[str, Any], page: dict[str, Any], fingerprint: str) -> str:
-    meta = doc["meta"]
-    direction = meta.get("reading_direction", "rtl")
-    regions = page.get("regions", [])
-
-    lines = [
-        f"# {meta.get('title') or 'comic'} — page {page['id']} "
-        f"({page['index'] + 1} of {len(doc['pages'])})",
-        # This PAGE's fingerprint. A document-wide one made a correction on
-        # any page declare every other page's finished reply stale.
-        f"# fingerprint: {fingerprint}",
-        # The overview is downscaled to fit OVERVIEW_MAX_SIDE, so on a tall page
-        # a box measured on it is NOT in the page's pixels. Everything used to
-        # say it was, which meant a visually correct box erased a different part
-        # of the artwork. The conversion is printed here, where the reader is.
-        *([
-            f"# This page is {page['width']}x{page['height']}. overview.png is "
-            f"drawn at {page.get('overview_scale', 1.0):.3f} of that, so divide "
-            f"any box you measure on it by that number before writing a `box:`.",
-            "#",
-        ] if page.get("overview_scale", 1.0) < 0.999 else []),
-        "#",
-        "# Look at these before writing anything:",
-        f"#   {page.get('overview', '(run crops first)')}",
-    ]
-    for sheet in page.get("sheets", []):
-        lines.append(f"#   {sheet}")
-    lines += [
-        "#",
-        f"# Source language: {meta.get('source_language')}   "
-        f"target: {meta.get('target_language')}",
-        f"# Reading order: {_DIRECTION_WORDS.get(direction, direction)}",
-        f"# Sound effects: {meta.get('sfx_policy', 'keep')}",
-        "#",
-    ]
-    # Standing decisions for this title, if somebody has made any. On the page
-    # the reader is looking at, because a policy filed somewhere else is a
-    # policy that gets re-decided per chapter.
-    policy = ir.title_policy(meta)
-    if policy:
-        lines.append("# This title has settled:")
-        for key, value in policy.items():
-            lines.append(f"#   {key}: {value}")
-        lines.append("#")
-    lines += [
-        "# Fill in `src:` with what the balloon actually says, and `fa:` with the",
-        "# Persian. Keep every `@@` line exactly as it is. A field continues on",
-        "# the following lines until the next field or the next `@@`.",
-        "#",
-        "# Optional corrections — use them when the crop shows the detector was",
-        "# wrong. You can see the page; it could not.",
-        "#   kind:    speech | thought | narration | sfx | sign | unknown",
-        "#   speaker: a short stable name, the same one every time",
-        "#   propose: a name or term this balloon MENTIONS but does not say —",
-        "#            `propose: Anna` for \"did you see Anna?\". Several are",
-        "#            separated by commas. This is NOT who is talking.",
-        "#   drop:    yes   — there is no text here at all",
-        "#   keep:    yes   — there IS text, leave it in the artwork",
-        "#   erase:   yes   — remove this and put nothing back (a watermark,",
-        "#                    a site stamp, a scan credit). Only for marks you",
-        "#                    have the right to remove.",
-        "#",
-        "# Something the detector missed entirely? Add it. Free lettering is",
-        "# the weak case, adjacent balloons sometimes come back as one region,",
-        "# and a whole panel is occasionally taken for a balloon — so a page can",
-        "# be missing text that is plainly there in overview.png.",
-        "#",
-        "#   @@ +bump sfx horizontal",
-        "#   box: 742 436 58 24        <- x y w h, in the page's own pixels,",
-        "#                                measured on overview.png — see the",
-        "#                                scale note above if there is one",
-        "#   src: BUMP",
-        "#   fa: تلپ",
-        "#",
-        "# Add `polarity: dark` when the lettering is white on black. After a",
-        "# merge that added regions, run `mask` again before `clean`.",
-        "#",
-    ]
-    lines += _glossary_table(doc)
-
-    for region in regions:
-        lines.append("")
-        lines.append(f"@@ {region['id']} {region['kind']} {region['orientation']}")
-        if region.get("panel"):
-            lines.append(f"# panel {region['panel']}, "
-                         f"reading order {region.get('reading_order')}")
-        if region.get("confidence", 1.0) < 0.5:
-            lines.append("# low-confidence detection — check the crop; "
-                         "`drop: yes` if there is no text")
-        lines.append(f"src: {region.get('source_text', '')}")
-        lines.append(f"fa: {region.get('target_text', '')}")
-        if region.get("speaker"):
-            lines.append(f"speaker: {region['speaker']}")
-        if region.get("proposed"):
-            lines.append(f"propose: {', '.join(region['proposed'])}")
-        # Decisions already taken are written back out. An ABSENT field resets
-        # them at the next merge, so a rebuilt worksheet silently undid every
-        # `drop`, `keep` and `erase` a reader had reviewed — and the notes with
-        # them. A worksheet has to be a faithful picture of the page.
-        if region.get("dropped"):
-            lines.append("drop: yes")
-        if region.get("keep"):
-            lines.append("keep: yes")
-        if region.get("erase"):
-            lines.append("erase: yes")
-        for note in region.get("review", []):
-            lines.append(f"note: {note}")
-    return "\n".join(lines) + "\n"
+    text = ir.read_text(reply)
+    stamped = FINGERPRINT.search(text)
+    if not stamped:
+        return "unstamped"
+    value = stamped.group("value")
+    page = pages.get(reply.name.split(".", 1)[0])
+    if page is not None and value == ir.page_fingerprint(page):
+        return "fresh"
+    if value == document_stamp:
+        return "fresh"          # the document-wide stamp this build still writes
+    if not SCHEME_LINE.search(text):
+        return "legacy"
+    return "stale"
 
 
 def _is_stale(reply: Path, pages: dict[str, dict[str, Any]],
               document_stamp: str) -> bool:
-    """Whether a finished worksheet was written against different regions.
+    return _stamp_state(reply, pages, document_stamp) == "stale"
 
-    Compared against the page it belongs to. A stamp equal to the document-wide
-    hash is accepted as well: worksheets already on disk carry that, and telling
-    a reader their finished work is stale because the scheme changed underneath
-    them would be the same defect wearing a different hat.
+
+def _restamp(path: Path, page: dict[str, Any]) -> None:
+    """Point a consumed reply at the page as it is now.
+
+    Any accepted correction that moves a box, reclassifies a region or adds one
+    changes that page's fingerprint, so the reply just merged looked stale to
+    the very next merge and the reader was told to redo work they had only
+    corrected. `reply_digest` reads the parsed blocks, so rewriting this header
+    does not change what the reply is recorded as saying.
     """
-    stamped = FINGERPRINT.search(ir.read_text(reply))
-    if not stamped:
-        return False
-    value = stamped.group("value")
-    if value == document_stamp:
-        return False
-    page = pages.get(reply.name.split(".", 1)[0])
-    return page is None or value != ir.page_fingerprint(page)
+    text = ir.read_text(path)
+    stamp = f"# fingerprint: {ir.page_fingerprint(page)}"
+    text = (FINGERPRINT.sub(stamp, text, count=1) if FINGERPRINT.search(text)
+            else stamp + "\n" + text)
+    if SCHEME_LINE.search(text):
+        text = SCHEME_LINE.sub(f"# scheme: {STAMP_SCHEME}", text, count=1)
+    else:
+        text = text.replace(stamp, f"{stamp}\n# scheme: {STAMP_SCHEME}", 1)
+    ir.write_text(path, text)
 
 
 def build_document(
@@ -285,7 +145,14 @@ def build_document(
     fingerprint = ir.fingerprint(doc)
     by_id = {page["id"]: page for page in doc["pages"]}
 
+    # Only the pages this build is about. A completed reply for page 7 going
+    # stale is a fact about page 7, and it stopped `worksheet build --pages
+    # p0002` — a page the reader had never touched — from being written at all.
     existing = sorted(folder.glob("*.done.txt")) if folder.exists() else []
+    if pages:
+        wanted = set(pages)
+        existing = [path for path in existing
+                    if path.name.split(".", 1)[0] in wanted]
     stale = [path.name for path in existing
              if _is_stale(path, by_id, fingerprint)]
     if stale and not force:
@@ -299,6 +166,13 @@ def build_document(
                 "certain the regions did not move."
             ),
         }
+
+    # Where the replies live, so every later guard looks in the right place.
+    # A reader who keeps them elsewhere got an empty answer from all of them:
+    # the folder was not there, so nothing was unmerged, so nothing refused.
+    if out:
+        doc.setdefault("meta", {})["worksheets"] = str(folder)
+        ir.save_doc(doc, doc_path)
 
     written: list[str] = []
     empty: list[str] = []
@@ -332,269 +206,20 @@ def build_document(
 # Reading
 # --------------------------------------------------------------------------- #
 
-def parse_worksheet(text: str) -> dict[str, dict[str, str]]:
-    """``{region id: {field: value}}``. Unknown lines continue the last field."""
-    blocks: dict[str, dict[str, str]] = {}
-    current: dict[str, str] | None = None
-    field: str | None = None
-
-    for raw in text.splitlines():
-        header = HEADER.match(raw)
-        if header:
-            region_id = header.group("id")
-            current = blocks.setdefault(region_id, {"_seen": 0})
-            current["_seen"] = int(current.get("_seen", 0)) + 1
-            # `@@ <id> <kind> <orientation>`. For an existing region these are
-            # echoed back from the document and ignored; for an added one they
-            # are the only place the kind is written, so they are kept.
-            words = (header.group("rest") or "").split()
-            if words and words[0] in ir.REGION_KINDS:
-                current["_kind"] = words[0]
-            if len(words) > 1 and words[1] in ir.ORIENTATIONS:
-                current["_orientation"] = words[1]
-            field = None
-            continue
-        if current is None:
-            continue
-        if raw.lstrip().startswith("#"):
-            continue
-        match = FIELD.match(raw)
-        if match:
-            field = match.group("name")
-            current[field] = match.group("value").strip()
-            continue
-        if field is not None:
-            # A continuation line. Keep the newline: a balloon that breaks its
-            # own line does so for a reason, and the typesetter may honour it.
-            current[field] = (current[field] + "\n" + raw.strip()).strip()
-    return blocks
-
-
-def _apply(region: dict[str, Any], block: dict[str, str],
-           report: dict[str, list[str]]) -> bool:
-    if block.get("drop", "").strip().lower() in {"yes", "true", "1"}:
-        region["dropped"] = True
-        region["target_text"] = ""
-        region["source_text"] = ""
-        # Forget what an earlier run did to it. A region dropped after it had
-        # already been cleaned and typeset kept that run's `fill` and `typeset`
-        # records, and those stale values then spoke for a region nobody was
-        # cleaning any more.
-        region["fill"] = "none"
-        region["typeset"] = {}
-        report["dropped"].append(region["id"])
-        return True
-
-    # Real lettering the reader wants left in the artwork — a shop sign, a
-    # logo, an effect the policy would otherwise translate. `drop` would have
-    # said "there is no text here", which is a different claim and made
-    # `stats.states` count real text as a false detection. It still runs
-    # through the shared metadata below: a kept region can be reclassified,
-    # given a speaker and annotated like any other, and returning early here
-    # silently threw all three away.
-    kept = block.get("keep", "").strip().lower() in {"yes", "true", "1"}
-    if kept:
-        region["keep"] = True
-    else:
-        region.pop("keep", None)
-
-    # Ink the reader wants gone with nothing put in its place — a watermark, a
-    # site stamp, a scan credit. The three existing answers all say something
-    # else: `drop` claims there is no ink there, `keep` leaves it drawn, and a
-    # `fa:` line puts Persian over it. None of them is "remove this".
-    erased = block.get("erase", "").strip().lower() in {"yes", "true", "1"}
-    if erased and kept:
-        report["conflicting_actions"].append(
-            f"{region['id']}: both `keep: yes` and `erase: yes`")
-        erased = False
-    if erased:
-        region["erase"] = True
-    else:
-        region.pop("erase", None)
-
-    source = block.get("src", "").strip()
-    target = block.get("fa", "").strip()
-    kind = block.get("kind", "").strip().lower()
-    speaker = block.get("speaker", "").strip()
-    proposed = [name.strip() for name
-                in PROPOSALS.split(block.get("propose", "")) if name.strip()]
-    note = block.get("note", "").strip()
-
-    if kind:
-        if kind not in ir.REGION_KINDS:
-            report["bad_kind"].append(f"{region['id']}: {kind}")
-        elif kind != region["kind"]:
-            region["kind"] = kind
-            report["reclassified"].append(f"{region['id']} -> {kind}")
-    if speaker:
-        region["speaker"] = speaker
-    if proposed:
-        # Replaces rather than accumulates, like every other field here: a
-        # worksheet is a picture of the page, and a merge run twice must not
-        # leave the same name in the list twice.
-        region["proposed"] = proposed
-    if note:
-        # Only once. Merging the same reply twice is an ordinary thing to do —
-        # and it appended the note again each time, so a page re-merged three
-        # times carried the same sentence three times.
-        notes = region.setdefault("review", [])
-        if note not in notes:
-            notes.append(note)
-
-    region["source_text"] = source
-    region["dropped"] = False
-
-    if kept:
-        region["target_text"] = ""
-        region["fill"] = "none"
-        region["typeset"] = {}
-        # A keep IS a review — the reader looked at the region and decided.
-        # Without this the decision reads as "never reviewed": `qa` warns
-        # `low-confidence-region` on it and a later `detect` run is free to
-        # renumber it away.
-        region["locked"] = True
-        report["kept"].append(region["id"])
-        return True
-
-    if erased:
-        region["target_text"] = ""
-        region["typeset"] = {}
-        # Deliberately NOT `fill = "none"`. That is what `keep` sets to tell the
-        # cleaner to leave the pixels alone, and it is the opposite of what this
-        # asks for: an erase region goes through the ordinary tier ladder —
-        # flat fill, classical inpaint, then a provider — like any other masked
-        # region. Leaving `fill` unset is what lets `clean` pick.
-        region["locked"] = True
-        report["erased"].append(region["id"])
-        return True
-
-    region["target_text"] = target
-    # Locking stops a later `detect` run from renumbering a region a human or a
-    # reading model has already committed a translation to.
-    region["locked"] = bool(source or target)
-    return bool(target)
-
-
-def _next_region_id(page: dict[str, Any]) -> str:
-    """The next free `pNNNNrMMM` on this page."""
-    used = 0
-    for region in page.get("regions", []):
-        _, _, tail = region["id"].partition("r")
-        if tail.isdigit():
-            used = max(used, int(tail))
-    return f"{page['id']}r{used + 1:03d}"
-
-
-def _add_region(page: dict[str, Any], slug: str, block: dict[str, str],
-                report: dict[str, Any]) -> bool:  # noqa: C901 - one flow, read top to bottom
-    """Create a region the detector never found, from a `box:` the reader read.
-
-    The counterpart to `drop`, and the page needs both. Detection returns the
-    balloons it is sure of; free lettering it is not sure of at all, adjacent
-    balloons sometimes come back welded into one region, and a panel is
-    occasionally taken for a balloon and swallows everything drawn inside it.
-    Each of those loses text that is plainly there on the page, and until this
-    existed the reader could see it and had no way to say so.
-    """
-    label = f"{page['id']}:{slug}"
-    match = BOX.match(block.get("box", ""))
-    if not match:
-        report["bad_added_regions"].append(f"{label}: needs `box: x y w h`")
-        return False
-
-    x, y, w, h = (int(value) for value in match.groups())
-    width, height = page.get("width") or 0, page.get("height") or 0
-    if w < 2 or h < 2:
-        report["bad_added_regions"].append(f"{label}: box is {w}x{h}")
-        return False
-    bbox = ir.clamp_bbox([x, y, w, h], width, height) if width and height else [x, y, w, h]
-    if bbox[2] < 2 or bbox[3] < 2:
-        report["bad_added_regions"].append(f"{label}: box falls outside the page")
-        return False
-
-    kind = (block.get("kind") or block.get("_kind") or "sfx").strip().lower()
-    if kind not in ir.REGION_KINDS:
-        report["bad_kind"].append(f"{label}: {kind}")
-        return False
-
-    # A worksheet is merged more than once — after a correction, after a
-    # shortened translation. The `+slug` is the reader's name for the box, so it
-    # identifies the region on every later merge; without that, each merge made
-    # another copy and reported the previous ones as regions the worksheet had
-    # forgotten.
-    existing = next((r for r in page.get("regions", [])
-                     if r.get("added_as") == slug), None)
-    if existing is not None:
-        if existing["bbox"] != bbox:
-            existing["bbox"] = bbox
-            existing["balloon"] = None      # re-derived by `mask` from the new box
-        existing["kind"] = kind
-        _apply(existing, block, report)
-        return bool((existing.get("target_text") or "").strip())
-
-    region = ir.new_region(
-        _next_region_id(page), bbox, kind=kind,
-        orientation=block.get("_orientation")
-        or ("vertical" if bbox[3] > 1.6 * bbox[2] else "horizontal"),
-        # Named `reader` on purpose: this box came from someone looking at the
-        # page, so `detect` must not treat it as one of its own guesses.
-        detector="reader", confidence=1.0,
-    )
-    region["balloon"] = None
-    region["added_as"] = slug
-    region["polarity"] = "dark" if block.get("polarity", "").strip().lower() == "dark" else "light"
-    region["locked"] = True
-    page.setdefault("regions", []).append(region)
-    _apply(region, block, report)
-    report["added"].append(f"{region['id']} ({slug})")
-    return bool((region.get("target_text") or "").strip())
-
-
-def reply_digest(text: str) -> str:
-    """A stable name for one finished worksheet's contents."""
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
-
-
-def _apply_page(page: dict[str, Any], blocks: dict[str, dict[str, str]],
-                report: dict[str, list[str]], policy: str, direction: str,
-                additions: list[str], covered: set[str]) -> int:
-    """One page's reply, applied to `page`. Returns how many regions it filled.
-
-    Separate from `merge_document` so the same work can be done against a copy
-    and thrown away if the reply turns out not to be about this page.
-    """
-    merged = 0
-    for region in page.get("regions", []):
-        if region["id"] in covered:
-            continue
-        block = blocks.get(region["id"])
-        if block is None:
-            report["missing_regions"].append(region["id"])
-            continue
-        if _apply(region, block, report):
-            merged += 1
-        elif not region.get("dropped") and ir.translatable(region, policy):
-            report["empty_translation"].append(region["id"])
-
-    for slug in additions:
-        if _add_region(page, slug[1:] or "added", blocks[slug], report):
-            merged += 1
-    if additions:
-        # A new box changes what comes before what, and it has no mask yet.
-        ir.assign_reading_order(page, direction)
-    return merged
-
-
 def merge_document(
     doc_path: str | Path,
     worksheets: str | Path | None = None,
     *,
+    pages: Sequence[str] | None = None,
     force: bool = False,
 ) -> dict[str, Any]:
     doc_path = Path(doc_path)
     doc = ir.load_doc(doc_path)
     root = ir.doc_dir(doc_path)
-    folder = Path(worksheets) if worksheets else root / "worksheets"
+    folder = (Path(worksheets) if worksheets
+              else Path(doc["meta"].get("worksheets") or root / "worksheets"))
+    if worksheets:
+        doc["meta"]["worksheets"] = str(folder)
     # Kept only so a worksheet stamped by an older build is still recognised;
     # staleness itself is decided per page. See `_is_stale`.
     document_stamp = ir.fingerprint(doc)
@@ -620,14 +245,18 @@ def merge_document(
         "bad_added_regions": [],
         "erased": [],
         "conflicting_actions": [],
+        "duplicate_fields": [],
+        "legacy_worksheets": [],
+        "unchanged": [],
     }
 
-    by_page = {page["id"]: page for page in doc["pages"]}
+    by_page = {page["id"]: page for page in doc["pages"]
+               if not pages or page["id"] in set(pages)}
     consumed: list[Path] = []
     #: Which report lists mean "this page's reply did not fully land".
     trouble = ("missing_regions", "unknown_regions", "duplicate_regions",
                "empty_translation", "bad_added_regions",
-               "conflicting_actions")
+               "conflicting_actions", "duplicate_fields", "bad_kind")
     list_keys = [key for key, value in report.items() if isinstance(value, list)]
     for page_id, page in by_page.items():
         path = folder / f"{page_id}.done.txt"
@@ -636,8 +265,21 @@ def merge_document(
             continue
 
         text = ir.read_text(path)
-        if _is_stale(path, by_page, document_stamp) and not force:
+        state = _stamp_state(path, by_page, document_stamp)
+        if state == "stale" and not force:
             report["stale_worksheets"].append(page_id)
+            continue
+        if state == "legacy":
+            report["legacy_worksheets"].append(page_id)
+
+        digest = reply_digest(text)
+        if page.get("worksheet_digest") == digest and page.get("worksheet_clean"):
+            # This exact reply has already landed whole. Applying it again would
+            # overwrite `falint`'s normalised Persian with the raw text the
+            # reader typed, which is how a correction to a half-space got
+            # undone by a merge that changed nothing else.
+            report["unchanged"].append(page_id)
+            consumed.append(path)
             continue
 
         blocks = parse_worksheet(text)
@@ -646,6 +288,9 @@ def merge_document(
         for region_id, block in blocks.items():
             if int(block.get("_seen", 1)) > 1:
                 page_report["duplicate_regions"].append(region_id)
+            repeated = block.get("_duplicate_fields", "")
+            for name in sorted({n for n in repeated.split(",") if n}):
+                page_report["duplicate_fields"].append(f"{region_id}: {name}")
         additions = sorted(key for key in blocks if key.startswith("+"))
         page_report["unknown_regions"] += sorted(set(blocks) - known - set(additions))
 
@@ -668,9 +313,16 @@ def merge_document(
         # or it asks for two opposite things. `missing_regions` and
         # `empty_translation` are NOT here — translating part of a page and
         # coming back to it is the ordinary way this work gets done.
+        # One outcome, used for all three questions: does this page commit,
+        # is it clean, and does the command exit non-zero. They disagreed —
+        # a `keep: yes` beside an `erase: yes` refused the page and still
+        # reported `ok`, and an invalid `kind:` left the page "clean".
         refused = (page_report["duplicate_regions"]
                    + page_report["unknown_regions"]
-                   + page_report["conflicting_actions"])
+                   + page_report["conflicting_actions"]
+                   + page_report["duplicate_fields"]
+                   + page_report["bad_kind"]
+                   + page_report["bad_added_regions"])
         for key, values in page_report.items():
             report[key] += values
         if refused:
@@ -687,7 +339,7 @@ def merge_document(
         # way to ask "is this page merged" was "does it hold any Persian yet" —
         # which says yes to a page whose reply was edited afterwards, and yes to
         # one whose reply was only half applied.
-        candidate["worksheet_digest"] = reply_digest(text)
+        candidate["worksheet_digest"] = digest
         candidate["worksheet_clean"] = not any(
             page_report[key] for key in trouble)
         page.clear()
@@ -695,22 +347,16 @@ def merge_document(
         report["merged"] += merged
         consumed.append(path)
 
-    if report["added"]:
-        # Adding a region changes THAT page's fingerprint, which would make the
-        # worksheet just merged look stale to the *next* merge — the reader
-        # would be told to re-translate work they had only added to. Re-stamp
-        # what was consumed, so the loop stays closed. A page nobody added to
-        # keeps the stamp it already had.
-        for path in consumed:
-            page = by_page.get(path.name.split(".", 1)[0])
-            if page is None:
-                continue
-            text = ir.read_text(path)
-            if FINGERPRINT.search(text):
-                ir.write_text(path, FINGERPRINT.sub(
-                    f"# fingerprint: {ir.page_fingerprint(page)}", text, count=1))
+    # Every consumed reply, not only the ones that added a region. A `kind:`
+    # correction moves the page fingerprint just as surely as a new box does,
+    # and it merged once and then reported itself stale on the next run.
+    for path in consumed:
+        page = by_page.get(path.name.split(".", 1)[0])
+        if page is not None:
+            _restamp(path, page)
 
-    stages.stamp_stage(doc, "worksheet", {"merged": report["merged"]})
+    stages.stamp_stage(doc, "worksheet", {"merged": report["merged"]},
+                       pages=list(by_page))
     ir.save_doc(doc, doc_path)
 
     blocking = (
@@ -718,6 +364,7 @@ def merge_document(
         or report["unknown_regions"] or report["duplicate_regions"]
         or report["stale_worksheets"] or report["empty_translation"]
         or report["bad_kind"] or report["bad_added_regions"]
+        or report["conflicting_actions"] or report["duplicate_fields"]
     )
     report["ok"] = not blocking
     if report["added"]:
@@ -734,12 +381,43 @@ def status(doc_path: str | Path, worksheets: str | Path | None = None) -> dict[s
     root = ir.doc_dir(doc_path)
     folder = Path(worksheets) if worksheets else root / "worksheets"
 
+    by_id = {page["id"]: page for page in doc["pages"]}
+    document_stamp = ir.fingerprint(doc)
     expected = [page["id"] for page in doc["pages"] if page.get("regions")]
-    done = [page_id for page_id in expected if (folder / f"{page_id}.done.txt").exists()]
+
+    present, merged, stale, legacy, edited = [], [], [], [], []
+    for page_id in expected:
+        path = folder / f"{page_id}.done.txt"
+        if not path.exists():
+            continue
+        present.append(page_id)
+        state = _stamp_state(path, by_id, document_stamp)
+        if state == "stale":
+            stale.append(page_id)
+            continue
+        if state == "legacy":
+            legacy.append(page_id)
+        page = by_id[page_id]
+        if not page.get("worksheet_clean"):
+            continue
+        if page.get("worksheet_digest") == reply_digest(ir.read_text(path)):
+            merged.append(page_id)
+        else:
+            # Answered, merged, and then edited again — which "does it exist"
+            # could not tell from "is it in the document".
+            edited.append(page_id)
+
     return {
         "pages_with_text": len(expected),
-        "translated": len(done),
-        "remaining": [page_id for page_id in expected if page_id not in set(done)],
+        # Kept: the number every earlier report and every doc calls this.
+        "translated": len(present),
+        "present": present,
+        "merged": merged,
+        "edited_since_merge": edited,
+        "stale": stale,
+        "legacy_stamp": legacy,
+        "remaining": [page_id for page_id in expected
+                      if page_id not in set(present)],
     }
 
 
@@ -770,7 +448,10 @@ def main(argv: list[str] | None = None) -> int:
         ir.emit(status(args.doc, args.worksheets))
         return 0
 
-    report = merge_document(args.doc, args.worksheets, force=args.force)
+    report = merge_document(
+        args.doc, args.worksheets,
+        pages=[p for p in args.pages.split(",") if p] or None,
+        force=args.force)
     ir.emit(report)
     return 0 if report["ok"] else 1
 

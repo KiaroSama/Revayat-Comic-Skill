@@ -19,6 +19,58 @@ So look at both images the worksheet names, in this order:
 
 Then write the worksheet. `src:` is what the balloon says. `fa:` is the Persian.
 
+## Three passes, in this order
+
+One pass that reads, writes and fits at the same time is where meaning gets
+lost: the sentence is being shortened before it has been understood. Do them
+separately, and do not start the next one until the last is finished.
+
+**1 — Read.** Transcribe every balloon from the page, with the drawing in
+front of you. Who is speaking, who they are speaking to, what the panel shows,
+where a sentence continues into the next balloon. Nothing is translated yet.
+
+**2 — Write.** Persian, in that character's voice, as though it had been
+written in Persian. Ignore the balloon's size completely at this stage. A
+sentence written to fit is a sentence written twice, and the second one is
+always worse.
+
+**3 — Check, then fit.** Put the source and your Persian side by side and go
+through the list below. Only then look at whether it fits, and fix that as a
+layout problem first — see *Length*.
+
+## What has to survive the trip
+
+Go through these one at a time against the source. Each is something an
+automated translation loses first, and each changes what the page says:
+
+| | |
+| --- | --- |
+| **negation** | one dropped `ない` inverts the scene |
+| **modality** | *must*, *might*, *should* and *can* are four different claims |
+| **conditions** | an *if* that becomes a *when* is a promise |
+| **numbers** | quantities, dates, ages, prices, floor numbers |
+| **agency** | who did it, and whether they meant to |
+| **referents** | which *he*, which *it*, which *there* — the drawing usually says |
+| **irony** | a line meant at face value says its opposite |
+| **emotional force** | loud is not rude; quiet is not calm |
+| **hesitation** | `……` is a pause, a refusal, or a held breath — never nothing |
+| **names and honorifics** | per the title policy below, never a guess and never quietly dropped |
+
+**Cover the semantic units, not the sentence count.** One Japanese sentence may
+become two Persian ones, or the reverse. What may not happen is a unit going
+missing: if the source says three things, the Persian says three things.
+
+**Do not apply a rule where the page has an answer.** Persian drops subjects
+freely, so *dropping the subject* is not a rule — keep it wherever it is
+contrastive (`من نگفتم` when somebody else did). Narration is not automatically
+past tense. Slang does not follow from a character's age or a balloon's shape.
+
+**A rendering you chose once is not a dictionary.** `そうか` is `که این‌طور` in
+the panel where it is a quiet realisation and something else where it is a flat
+acknowledgement. Put a decision in the glossary only when it is genuinely a
+term — a name, a technique, a place — not when it is a phrase whose reading
+depends on the panel.
+
 ## Register is most of the job
 
 Comic dialogue is speech, not prose. The commonest failure in a machine
@@ -68,9 +120,11 @@ reports a region as overflowing, try them in this order:
 1. **A line break.** A newline inside `fa:` is honoured — the fitter treats it
    as a hard break and sets the balloon on two lines. Often the words were
    already right and only the shape was wrong.
-2. **A shorter wording** that still carries everything in *Fidelity is not
-   literalness* below. Put the original in `note:` so the choice stays
-   reviewable; a shortening nobody can see is a shortening nobody can check.
+2. **A shorter wording** that still carries everything in *What has to survive
+   the trip* above. Put the full-meaning version in `fa_full:` — the sheet
+   keeps both, and `qa` raises `compressed-variant` so somebody reads the pair
+   before the shorter one becomes the translation. A shortening nobody can
+   compare is a shortening nobody can check.
 
 Never a summary, never a dropped clause, and never a smaller font — the size
 floor holds for a reason.
@@ -203,6 +257,27 @@ Four fields fix what it got wrong:
   on every page. This is what makes a character sound like one person.
 - `propose:` — a name or term this balloon only *mentions*. It reaches the
   glossary the same way, without claiming the wrong person is speaking.
+
+## Uncertainty, and who decided
+
+Three things are kept apart on purpose, and a reviewer needs to be able to tell
+which is which:
+
+- **the machine's draft** — whatever `translate` wrote, recorded in the
+  region's `provenance` with the provider that produced it;
+- **the approved translation** — `fa:`, which is what ships;
+- **the compressed variant** — `fa:` when `fa_full:` is set beside it.
+
+Say so when you are not sure. `note:` on the region carries a question to
+whoever reviews the chapter, and `reviewed:` is how they answer a lint the tool
+raised. Neither is a failure: a marked uncertainty that somebody resolves is
+worth more than a confident line nobody checked.
+
+Relationships are written down, not inferred. `meta.cast` holds each
+character's register, voice, pronouns and relationships **when a person has
+written them**, and `context` passes them through untouched; nothing infers how
+somebody talks from their line count. Record where a relationship came from
+(a panel, a later chapter, the author) so a later reader can weigh it.
 
 ## What never to do
 
