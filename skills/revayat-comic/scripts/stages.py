@@ -43,7 +43,8 @@ import pageir as ir
 #: hash that now means something else.
 SCHEME = "3"
 
-#: Facets each stage reads. `policy` is document-wide; the rest are per page.
+#: Facets each stage reads. `policy` and `constraints` are document-wide; the
+#: rest are per page.
 STAGE_INPUTS: dict[str, tuple[str, ...]] = {
     "detect": ("page",),
     # Marking precedes masking and cleaning: it reads the artwork and adds
@@ -52,11 +53,11 @@ STAGE_INPUTS: dict[str, tuple[str, ...]] = {
     "crops": ("geometry",),
     "ocr": ("geometry",),
     # The worksheet header carries the glossary table and the title policy.
-    "worksheet": ("geometry", "policy"),
+    "worksheet": ("geometry", "constraints"),
     # Translation reads the glossary as a hard constraint and the title policy
     # as a standing decision. It depended on neither, so locking a name left
     # every line translated before the lock looking current.
-    "translate": ("geometry", "source", "policy"),
+    "translate": ("geometry", "source", "constraints"),
     "glossary": ("source", "text"),
     "falint": ("text",),
     "masks": ("render", "policy"),
@@ -161,11 +162,32 @@ def _page_facet(page: dict[str, Any], name: str) -> str:
 
 
 def _policy_facet(doc: dict[str, Any]) -> str:
-    """The standing decisions every page is translated and rendered under."""
+    """The standing decisions a RENDER obeys.
+
+    Deliberately narrow. This once held the glossary as well, and the glossary
+    is a translation constraint that masking and cleaning know nothing about —
+    so running `glossary scan`, which is the stage whose whole job is to fill
+    that table in, reported the masks of every page as out of date. A gate that
+    fires on the correct order of operations is a gate people learn to ignore.
+    """
     meta = doc.get("meta", {})
     digest = hashlib.sha256()
-    for key in ("sfx_policy", "free_lettering_mask", "reading_direction",
-                "target_language", "source_language"):
+    for key in ("sfx_policy", "free_lettering_mask", "reading_direction"):
+        digest.update(f"{key}={meta.get(key)!r}|".encode("utf-8"))
+    return digest.hexdigest()
+
+
+def _constraints_facet(doc: dict[str, Any]) -> str:
+    """The standing decisions a TRANSLATION obeys.
+
+    The glossary, the title policy and the two languages. A change here
+    invalidates the worksheet that prints the table and the machine translation
+    that was constrained by it — and nothing downstream of the words, because
+    what a render depends on is the words themselves.
+    """
+    meta = doc.get("meta", {})
+    digest = hashlib.sha256()
+    for key in ("target_language", "source_language"):
         digest.update(f"{key}={meta.get(key)!r}|".encode("utf-8"))
     digest.update(f"title={_stable(ir.title_policy(meta))}|".encode("utf-8"))
     # The canonical location, which is `glossary.entries`. `meta.glossary` was
@@ -194,8 +216,12 @@ def page_revision(doc: dict[str, Any], stage: str, page: dict[str, Any], *,
     digest = hashlib.sha256()
     digest.update(f"scheme={SCHEME}|stage={stage}|".encode("utf-8"))
     for facet in STAGE_INPUTS.get(stage, ()):
-        value = (_policy_facet(doc) if facet == "policy"
-                 else _page_facet(page, facet))
+        if facet == "policy":
+            value = _policy_facet(doc)
+        elif facet == "constraints":
+            value = _constraints_facet(doc)
+        else:
+            value = _page_facet(page, facet)
         digest.update(f"{facet}={value}|".encode("utf-8"))
     digest.update(f"options={_stable(options)}|".encode("utf-8"))
     for need in sorted(STAGE_NEEDS.get(stage, ())):

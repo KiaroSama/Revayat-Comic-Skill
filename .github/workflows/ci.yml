@@ -121,10 +121,14 @@ jobs:
         with:
           python-version: "3.10"
 
-      - name: Install a Persian-capable font
+      # The same font and RAR reader the main test job installs: this job runs
+      # the whole suite, so a skip here is the same loss of coverage it is
+      # there — and `check_skips.py` refuses a RAR skip on Linux.
+      - name: Install a Persian-capable font and a RAR reader
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends fonts-noto-core
+          sudo apt-get install -y --no-install-recommends \
+            fonts-noto-core unar libarchive-tools
 
       # The LOWEST version each floor allows, resolved by asking pip for it.
       - name: Install the floors
@@ -133,7 +137,7 @@ jobs:
           python -m pip install --only-binary=:all: \
             "pillow==10.0.*" "numpy==1.24.*" "opencv-python-headless==4.8.*" \
             "pymupdf==1.24.*" "arabic-reshaper==3.0.*" "python-bidi==0.4.*" \
-            pytest pytest-timeout
+            pytest pytest-timeout rarfile
           python -m pip list --format=freeze > floor-versions.txt
           cat floor-versions.txt
 
