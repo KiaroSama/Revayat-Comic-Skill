@@ -27,12 +27,16 @@ FORMATS = ("cbz", "pdf", "dir")
 
 
 def _resolve(root: Path, page: dict[str, Any]) -> tuple[Path, str]:
-    """The most finished version of this page that exists, and which it is."""
-    for key in ("final", "clean", "image"):
-        relative = page.get(key)
-        if relative and (root / relative).exists():
-            return root / relative, key
-    raise FileNotFoundError(f"no image for {page['id']}")
+    """The most finished version of this page that exists, and which it is.
+
+    The order lives in `regions` because the gate measures against it: what
+    this resolves to has to be the same thing `required_artifact` is compared
+    with, or the fallback is invisible again.
+    """
+    found = ir.shipped_artifact(root, page)
+    if found is None:
+        raise FileNotFoundError(f"no image for {page['id']}")
+    return found
 
 
 def _page_source(root: Path, page: dict[str, Any]) -> Path:

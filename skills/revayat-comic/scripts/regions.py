@@ -34,7 +34,55 @@ SFX_KEEP_POLICIES = frozenset({"keep", "bilingual", "annotate"})
 
 #: What a page carries because work was done ON its regions. Every one of them
 #: is meaningless once the last region is gone.
-DERIVED_FROM_REGIONS = ("clean", "final", "writable", "delivery")
+DERIVED_FROM_REGIONS = ("clean", "cleaning", "final", "writable", "delivery")
+
+#: Most finished first. This is the order `export` resolves a page in, and the
+#: scale `required_artifact` is measured against.
+ARTIFACT_ORDER = ("final", "clean", "image")
+
+
+def required_artifact(page: dict[str, Any]) -> str:
+    """The LEAST finished file this page's own decisions allow it to ship.
+
+    `export` ships the most finished file that exists, and that fallback is
+    silent. A page whose watermark was erased and whose cleaned image then went
+    missing shipped the original — the stamp back on it, the reader's approved
+    erasure undone — counted as an untouched page and reported as nothing at
+    all. The render had a gate for this (`page-not-rendered`); erasure and
+    cleaning had none, because the gate was written around Persian.
+
+    Four kinds of page, one scale:
+
+    * carries Persian -> `final`, because a render is what puts it there;
+    * the cleaner acted -> `clean`, whether or not anything was written back;
+    * kept by policy, dropped, or no regions at all -> `image`, the immutable
+      page that was imported.
+
+    `fill` is the proof the cleaner acted, for the same reason `region_state`
+    uses it: a reader's intent to erase is not evidence that anything was
+    erased.
+    """
+    live = [region for region in page.get("regions", [])
+            if not region.get("dropped")]
+    if any((region.get("target_text") or "").strip() for region in live):
+        return "final"
+    if any(region.get("fill") not in (None, "none", "keep") for region in live):
+        return "clean"
+    return "image"
+
+
+def shipped_artifact(root: "Any", page: dict[str, Any]) -> "Any":
+    """The most finished version of this page that exists, and which it is.
+
+    `(Path, key)`, or `None` when the page has no image at all. One definition,
+    because `export` resolving it one way and the gate assuming another is how
+    a fallback becomes invisible.
+    """
+    for key in ARTIFACT_ORDER:
+        relative = page.get(key)
+        if relative and (root / relative).exists():
+            return root / relative, key
+    return None
 
 
 def restore_blank_page(page: dict[str, Any]) -> list[str]:

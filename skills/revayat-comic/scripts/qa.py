@@ -27,6 +27,7 @@ from typing import Any
 
 import falint
 import masks as mask_tools
+import certify
 import pageir as ir
 import stages
 from pageir import IMAGE_SUFFIXES  # noqa: F401 - `package.py` reads it from here
@@ -55,6 +56,7 @@ CODES = {
     "clean-refused": "error",
     "region-not-rendered": "error",
     "erase-unfinished": "error",
+    "page-not-cleaned": "error",
     "delivery-mismatch": "error",
     "delivery-unverified": "warning",
     "stage-unverified": "warning",
@@ -313,62 +315,6 @@ def visual_review(doc_path: str | Path, *, provider: str,
     }
 
 
-def _certify_delivery(findings: "Findings", root: Path, page: dict[str, Any],
-                      final: str) -> None:
-    """Are the bytes on disk the ones the render committed?
-
-    `typeset` signs the finished page, the writable mask it drew inside and the
-    cleaned page it drew onto. This re-reads all three. It is deliberately a
-    question about provenance and not about content: no OCR, no "does this look
-    like Persian" — only whether what is about to be packaged is what the
-    recorded run produced. A page swapped for its own cleaned copy, a mask
-    rebuilt under a finished render, a hand-edited PNG dropped in afterwards:
-    every one of them changes a hash and none of them changes a status.
-    """
-    delivery = page.get("delivery") or {}
-    if not delivery:
-        # Rendered by a build that did not sign its output. A warning, for the
-        # same reason `stage-unverified` is one: a chapter finished by an older
-        # build is not evidence of anything wrong, and making people re-render
-        # to satisfy new bookkeeping would be a defect of the upgrade.
-        findings.add(
-            "delivery-unverified", page["id"],
-            "this page was rendered before finished pages were signed, so "
-            "there is nothing to check the file against. Re-run `typeset` to "
-            "certify it")
-        return
-
-    if list(delivery.get("size") or ()) != [page["width"], page["height"]]:
-        findings.add(
-            "delivery-mismatch", page["id"],
-            f"the render was committed at "
-            f"{'x'.join(str(n) for n in delivery.get('size') or ('?', '?'))} "
-            f"and the page is now {page['width']}x{page['height']}")
-
-    for name, relative in (("final", final), ("clean", page.get("clean")),
-                           ("writable", page.get("writable"))):
-        recorded = delivery.get(name)
-        if not recorded:
-            continue
-        if not relative:
-            findings.add(
-                "delivery-mismatch", page["id"],
-                f"the render committed a {name} page and the document no "
-                f"longer names one. Re-run `typeset`")
-            continue
-        path = root / relative
-        if not path.exists():
-            findings.add(
-                "delivery-mismatch", page["id"],
-                f"{relative} was part of the finished render and is gone")
-        elif ir.sha256_file(path) != recorded:
-            findings.add(
-                "delivery-mismatch", page["id"],
-                f"{relative} is not the file this page was finished with — "
-                f"it was replaced after `typeset` ran. Re-run `typeset`, or "
-                f"restore the page it rendered")
-
-
 def check_document(doc_path: str | Path, *, strict: bool = False,
                    limit: int | None = 60) -> dict[str, Any]:
     doc_path = Path(doc_path)
@@ -529,24 +475,21 @@ def check_document(doc_path: str | Path, *, strict: bool = False,
         # `ok: true` — under `--strict` as well — while carrying nine
         # translated regions and no output at all. Draft work is legitimate;
         # calling it finished is not.
-        wants_render = any(
-            (region.get("target_text") or "").strip()
-            for region in page.get("regions", [])
-            if not region.get("dropped")
-        )
+        #
+        # Both questions below are asked of EVERY page, whether or not it
+        # carries Persian: what this page is required to ship, and whether the
+        # cleaned image is still the one the cleaner produced. An erase-only
+        # chapter reaches neither `typeset` nor anything that used to look at
+        # its bytes.
+        certify.certify_artifact(findings, root, page)
+        certify.certify_cleaning(findings, root, page)
         final = page.get("final")
-        if wants_render and not (final and (root / final).exists()):
-            findings.add(
-                "page-not-rendered", page["id"],
-                "this page carries Persian that has never been drawn onto "
-                "it; run `typeset` before calling the chapter finished",
-            )
         if final:
             final_path = root / final
             if not final_path.exists():
                 findings.add("page-missing", page["id"], f"{final} is gone")
             else:
-                _certify_delivery(findings, root, page, final)
+                certify.certify_delivery(findings, root, page, final)
                 mask_name = page.get("writable") or page.get("mask")
                 changed, total, worst = compare_outside_mask(
                     original, final_path, root / mask_name if mask_name else None
