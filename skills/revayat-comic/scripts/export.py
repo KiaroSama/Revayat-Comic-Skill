@@ -126,22 +126,52 @@ def _scratch(beside: Path, label: str) -> Path:
     raise RuntimeError(f"could not find an unused scratch name beside {beside}")
 
 
+def _pixel_digest(payload: bytes) -> str:
+    """A hash of what the page LOOKS like, not of how it was packed.
+
+    A PDF re-wraps every image it is given, so the encoded bytes on the way out
+    are not the encoded bytes on the way in and an exact comparison could not
+    be made at all — which is why a PDF carried no hash, and why an exported
+    chapter replaced by an unrelated image of the same shape passed every
+    check it had.
+    """
+    import io
+
+    from PIL import Image
+
+    try:
+        with Image.open(io.BytesIO(payload)) as image:
+            return ir.sha256_bytes(image.convert("RGB").tobytes())
+    except Exception:      # pragma: no cover - an unreadable page fails earlier
+        return ""
+
+
 def _shipped(page: dict[str, Any], name: str, payload: bytes,
              quality: int) -> dict[str, Any]:
     """One manifest row: what this page was shipped as.
 
-    `lossy` matters to the check that reads it back. A re-encoded JPEG will
-    never hash to the bytes on disk, so an exact comparison is only meaningful
-    where nothing was re-encoded — and saying which is which is the difference
-    between a real check and one that has to be switched off.
+    `sha256` is the hash of the bytes THIS EXPORT WROTE, whatever they are —
+    the re-encoded JPEG, not the PNG it came from — so it is always comparable.
+    It was gated behind `lossy` on the theory that a re-encoded page "will
+    never hash to the bytes on disk", which is true of the source file and not
+    of the payload recorded here: the effect was that every JPEG page in a
+    package went unverified.
+
+    `lossy` survives as truthful metadata about the encoding, and the flag was
+    also inverted — a JPEG, the one lossy thing this writes, was recorded as
+    lossless.
+
+    `pixels` is the hash of the decoded image, which survives a container
+    re-wrapping the bytes. It is what a PDF can be checked against.
     """
     return {
         "page": page["id"],
         "name": name,
         "sha256": ir.sha256_bytes(payload),
+        "pixels": _pixel_digest(payload),
         "width": page["width"],
         "height": page["height"],
-        "lossy": quality > 0 and not name.lower().endswith((".jpg", ".jpeg")),
+        "lossy": name.lower().endswith((".jpg", ".jpeg")),
     }
 
 
@@ -229,14 +259,29 @@ def _export_pdf(doc: dict[str, Any], root: Path, out: Path,
     out.parent.mkdir(parents=True, exist_ok=True)
     document = pymupdf.open()
     try:
-        for page in doc["pages"]:
+        manifest: list[dict[str, Any]] = []
+        for index, page in enumerate(doc["pages"]):
             source = _page_source(root, page)
             payload, _ = _encode(source, source.name, quality)
             rect = pymupdf.Rect(0, 0, page["width"], page["height"])
             new_page = document.new_page(width=page["width"], height=page["height"])
             new_page.insert_image(rect, stream=payload)
+            manifest.append({"page": page["id"], "name": f"{index + 1:04d}",
+                             "width": page["width"], "height": page["height"],
+                             # What the page looks like. The encoded bytes are
+                             # the PDF's to choose; the pixels are not.
+                             "pixels": _pixel_digest(payload),
+                             "lossy": True})
+        title = doc["meta"].get("title", "")
         document.set_metadata({
-            "title": doc["meta"].get("title", ""),
+            # DRAFT in the package itself, not only in the report. A PDF
+            # produced with `--draft` was indistinguishable from an approved
+            # edition the moment the terminal scrolled away, and a PDF is the
+            # format people forward.
+            "title": f"[DRAFT] {title}".strip() if draft else title,
+            "subject": ("DRAFT — this package did not pass publication QA"
+                        if draft else ""),
+            "keywords": "revayat-comic draft" if draft else "revayat-comic",
             "producer": doc["meta"].get("tool", ""),
         })
         # Saved beside the destination and moved into place, so a write that
@@ -250,13 +295,7 @@ def _export_pdf(doc: dict[str, Any], root: Path, out: Path,
     finally:
         staging.unlink(missing_ok=True)
     return {"format": "pdf", "path": str(out), "pages": len(doc["pages"]),
-            # A PDF re-wraps every page, so there are no shipped bytes to hash.
-            # The dimensions are still checkable, and they are what a reader
-            # sees.
-            "manifest": [{"page": page["id"], "name": f"{index + 1:04d}",
-                          "width": page["width"], "height": page["height"],
-                          "lossy": True}
-                         for index, page in enumerate(doc["pages"])]}
+            "draft": draft, "manifest": manifest}
 
 
 def _pending_path(doc_path: Path) -> Path:
