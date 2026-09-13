@@ -47,26 +47,27 @@ def japanese_chapter(tmp_path):
     return Path(report["document"])
 
 
-def test_a_japanese_page_gives_up_its_text_and_its_effect(japanese_chapter):
-    """Every piece of lettering on the page, and the column read as a column.
+def test_a_japanese_page_gives_up_its_balloons_and_its_effect(japanese_chapter):
+    """Both balloons and the drawn effect, on a page drawn with a real face.
 
     The column is the one that matters: it is the case `orientation` exists
     for, and it is measured from the ink rather than assumed from the language.
 
-    **What is asserted is what the page contains, not how many balloons the
-    detector recognised around it.** This fixture draws with whatever CJK face
-    the machine has, and the faces differ enough to change that: on Noto Sans
-    CJK the vertical column comes back as free lettering — found, and found
-    vertical — where on MS Gothic it comes back inside a balloon. Balloon
-    detection on a page like this is a closed finding in this project, with
-    eleven measurements and 119 labelled balloons behind it: the page does not
-    carry the information locally, and the best any method reached was F1 0.57.
-    Asserting a balloon COUNT here would be asserting which face the runner
-    has.
+    **The counts are real assertions again.** For a while this test held only
+    that the page gave up its three pieces of lettering, because the vertical
+    balloon was found on one machine's face and not on another's. That was a
+    fixture defect, not a fact about Japanese: the balloon was the right size,
+    the right shape and in the right place, and held 1.19% of ink against the
+    detector's 1.5% floor, because it was padded half a character around glyphs
+    a narrow face draws much thinner than their em. `tests_support` pads it
+    tight now and the margin is measured — see the comment there.
     """
     totals = detect.detect_document(japanese_chapter)["totals"]
     doc = ir.load_doc(japanese_chapter)
     regions = doc["pages"][0]["regions"]
+    # What was found, in the failure message: this fixture draws with whatever
+    # CJK face the machine has, and a bare `assert 1 == 2` says nothing about
+    # WHICH balloon a runner lost.
     found = ", ".join(
         f"{region['kind']}/{region['orientation']} at {region['bbox']} "
         f"conf={region.get('confidence', 0):.2f}"
@@ -74,22 +75,13 @@ def test_a_japanese_page_gives_up_its_text_and_its_effect(japanese_chapter):
     where = f"{totals} — {found}"
 
     assert totals["panels"] == 4, where
-    # Three pieces of lettering: the column, the horizontal line, the effect.
-    # None of them may go missing, whatever kind each is classified as.
-    assert totals["regions"] == 3, where
+    assert totals["speech"] == 2, where
+    assert totals["sfx"] == 1, f"the katakana effect was not found: {where}"
 
-    tall = [r for r in regions if r["orientation"] == "vertical"]
-    wide = [r for r in regions if r["orientation"] == "horizontal"]
-    assert tall, f"the column read across: {where}"
-    assert len(wide) == 2, where
-    # The column, by its shape: taller than it is wide, and in the first panel.
-    column = tall[0]
-    assert column["bbox"][3] > 2 * column["bbox"][2], where
-
-    # At least one of them is a balloon this face let the detector see. A page
-    # of Japanese where NOTHING reads as speech is a detector regression, and
-    # that is the part that does not depend on the face.
-    assert totals["speech"] >= 1, where
+    orientations = {r["id"]: r["orientation"] for r in regions
+                    if r["kind"] == "speech"}
+    assert "vertical" in orientations.values(), f"the column read across: {where}"
+    assert "horizontal" in orientations.values(), where
 
 
 def test_the_dakuten_does_not_cost_the_effect_its_detection():
@@ -155,3 +147,33 @@ def test_the_column_is_taller_than_it_is_wide(japanese_chapter):
                   if r["orientation"] == "vertical")
     _, _, width, height = column["bbox"]
     assert height > width * 1.5
+
+
+def test_the_vertical_balloon_holds_enough_ink_for_a_narrow_face():
+    """THE REGRESSION, at the level it actually happens.
+
+    A balloon's interior must hold at least `ink_min` of ink or the detector
+    does not believe it is a balloon. This fixture's vertical one is the tight
+    case: a thin column of hiragana in a tall ellipse, and how much ink that is
+    depends on the face the runner has. Measured here on the page this fixture
+    really draws, against the threshold that really rejects it — so padding it
+    generously again fails here rather than on one runner's Japanese test.
+    """
+    import cv2
+    import numpy as np
+
+    page = japanese_page()
+    gray = cv2.cvtColor(np.asarray(page), cv2.COLOR_RGB2GRAY)
+    candidates = [balloon
+                  for balloon in detect._balloon_candidates(
+                      gray, detect.DEFAULTS, invert=False)
+                  # The first panel, top-left, which is where the column is.
+                  if balloon["bbox"][0] < page.width // 2
+                  and balloon["bbox"][1] < page.height // 2]
+
+    assert candidates, "no balloon around the vertical column at all"
+    column = max(candidates, key=lambda balloon: balloon["bbox"][3])
+    # A face narrower than this one puts proportionally less ink in the same
+    # balloon, so a share that only just clears the floor here is a balloon
+    # that disappears on another machine. Held at a third above it.
+    assert column["ink_share"] >= detect.DEFAULTS["ink_min"] * 1.33, column
