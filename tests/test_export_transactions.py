@@ -8,6 +8,7 @@ rebuild was not touched".
 from __future__ import annotations
 
 import shutil
+from pathlib import Path
 import zipfile
 
 import pytest
@@ -175,21 +176,39 @@ def test_a_failed_document_save_leaves_a_recoverable_record(finished, tmp_path,
     assert not pending.exists()
 
 
-def test_a_pending_stamp_is_applied_on_the_next_run(finished, tmp_path):
-    out = tmp_path / "chapter.cbz"
-    export.export_document(finished, out)
-    assert ir.load_doc(finished)["stages"]["export"]["manifest"]
+def _journal(doc_path):
+    return doc_path.with_name(doc_path.name + ".export-pending.json")
 
-    ir.write_text(finished.with_name(finished.name + ".export-pending.json"),
-                  ir.dumps({"result": {"format": "cbz", "path": "somewhere",
-                                       "manifest": []},
-                            "options": {"format": "cbz", "quality": 0,
-                                        "draft": False}}) + "\n")
+
+def _interrupted(doc_path, out, monkeypatch):
+    """A real journal, left behind the way an interrupted export leaves one.
+
+    The package lands and the document cannot be written, which is the gap the
+    record exists for. Written by the pipeline rather than invented here: a
+    record this file makes up is a record nothing would ever produce.
+    """
+    monkeypatch.setattr(ir, "save_doc",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("full")))
+    with pytest.raises(OSError):
+        export.export_document(doc_path, out)
+    monkeypatch.undo()
+    assert _journal(doc_path).is_file() and Path(out).exists()
+
+
+def test_a_pending_stamp_is_applied_on_the_next_run(finished, tmp_path,
+                                                    monkeypatch):
+    """Written before the package and removed after the document, so one left
+    behind is an export interrupted between the two. It is applied when — and
+    only when — the document it describes and the bytes it published are both
+    still there."""
+    out = tmp_path / "chapter.cbz"
+    _interrupted(finished, out, monkeypatch)
 
     applied = export.reconcile_pending(finished)
 
     assert applied is not None
-    assert ir.load_doc(finished)["stages"]["export"]["path"] == "somewhere"
+    assert ir.load_doc(finished)["stages"]["export"]["path"] == str(out)
+    assert not _journal(finished).exists()
 
 
 def test_a_clean_export_leaves_no_pending_record(finished, tmp_path):
@@ -201,3 +220,151 @@ def test_a_clean_export_leaves_no_pending_record(finished, tmp_path):
         finished.name + ".export-pending.json").exists()
     with zipfile.ZipFile(out) as archive:
         assert archive.namelist()
+
+
+# --------------------------------------------------------------------------- #
+# The journal is written BEFORE the bytes it describes.
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.parametrize("name", ["chapter.cbz", "chapter.pdf", "edition"])
+def test_nothing_is_published_before_the_recovery_record_exists(
+        finished, tmp_path, monkeypatch, name):
+    """The writer promoted the package and the journal was written afterwards,
+    so a failure in that gap left new bytes at the destination, the previous
+    manifest in the document, and nothing anywhere saying the two disagreed.
+
+    Failing the journal write is the same instant as being killed there."""
+    out = tmp_path / name
+    real = ir.write_text
+
+    def refuse(path, *args, **kwargs):
+        if str(path).endswith(".export-pending.json"):
+            raise OSError("full")
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(ir, "write_text", refuse)
+
+    with pytest.raises(OSError):
+        export.export_document(finished, out)
+
+    # A folder destination is created before anything is encoded, and an empty
+    # folder is not a published edition. What must not exist is a page.
+    landed = sorted(out.iterdir()) if out.is_dir() else [out] if out.exists() else []
+    assert not landed, "the package was published with no way back"
+
+
+def test_a_journal_for_another_generation_of_the_document_is_not_applied(
+        finished, tmp_path, monkeypatch):
+    """`reconcile_pending` stamped whatever the record said. A chapter changed
+    since is a different edition, and certifying it with the old export's
+    manifest is the cross-generation claim the journal exists to prevent."""
+    _interrupted(finished, tmp_path / "chapter.cbz", monkeypatch)
+    doc = ir.load_doc(finished)
+    doc["meta"]["title"] = "a different edition"
+    ir.save_doc(doc, finished)
+
+    assert export.reconcile_pending(finished) is None
+    assert "manifest" not in (ir.load_doc(finished).get("stages", {})
+                              .get("export") or {})
+
+
+def test_a_journal_whose_package_never_landed_is_not_applied(finished,
+                                                             tmp_path,
+                                                             monkeypatch):
+    """The other half: the destination holds nothing this export wrote."""
+    out = tmp_path / "chapter.cbz"
+    _interrupted(finished, out, monkeypatch)
+    out.unlink()
+
+    assert export.reconcile_pending(finished) is None
+
+
+def test_a_journal_whose_package_was_replaced_is_not_applied(finished,
+                                                             tmp_path,
+                                                             monkeypatch):
+    out = tmp_path / "chapter.cbz"
+    _interrupted(finished, out, monkeypatch)
+    out.write_bytes(b"not the package that was published")
+
+    assert export.reconcile_pending(finished) is None
+
+
+def test_a_rejected_journal_is_kept_as_evidence(finished, tmp_path,
+                                                monkeypatch):
+    """Refusing to apply it is not a reason to destroy it: it is the only
+    record of what the interrupted run was doing."""
+    out = tmp_path / "chapter.cbz"
+    _interrupted(finished, out, monkeypatch)
+    out.unlink()
+
+    export.reconcile_pending(finished)
+
+    kept = list(finished.parent.glob("*.export-conflict*.json"))
+    assert kept, "the evidence was thrown away"
+    assert not _journal(finished).exists()
+
+
+def test_a_rejected_journal_does_not_block_the_next_export(finished, tmp_path,
+                                                           monkeypatch):
+    """A refusal that cannot be cleared is a trap. The next export produces its
+    own coherent edition."""
+    out = tmp_path / "chapter.cbz"
+    _interrupted(finished, out, monkeypatch)
+    out.unlink()
+
+    export.export_document(finished, tmp_path / "again.cbz")
+
+    stamp = ir.load_doc(finished)["stages"]["export"]
+    assert stamp["path"] == str(tmp_path / "again.cbz")
+
+
+# --------------------------------------------------------------------------- #
+# Two writers at one destination
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.parametrize("name", ["chapter.cbz", "chapter.pdf", "edition"])
+def test_a_second_writer_at_the_same_destination_is_refused(finished, tmp_path,
+                                                            name):
+    """A random scratch name made ownership a fact and serialization
+    impossible: two exports of one chapter to one destination each wrote their
+    own staging file and both promoted, last writer winning, neither knowing
+    the other existed."""
+    out = tmp_path / name
+    live = export.staging_path(out)
+    live.parent.mkdir(parents=True, exist_ok=True)
+    live.write_bytes(b"another writer is here")
+
+    with pytest.raises(RuntimeError, match="already"):
+        export.export_document(finished, out)
+
+    assert live.read_bytes() == b"another writer is here"
+
+
+# --------------------------------------------------------------------------- #
+# What the chapter is made of
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.parametrize("what", ["region-mask", "crops", "worksheets"])
+def test_the_working_assets_are_never_exported_over(finished, tmp_path, what):
+    """`_dependencies` knew page-level images only. A region mask, the crops a
+    reader is looking at and the worksheets carrying their replies are all
+    files the chapter is made of, and exporting onto them destroys work the
+    package cannot be used to rebuild."""
+    import crops as crops_stage
+    import worksheet
+
+    root = ir.doc_dir(finished)
+    crops_stage.build_document(finished)
+    worksheet.build_document(finished)
+    page = ir.load_doc(finished)["pages"][0]
+
+    target = {
+        "region-mask": root / next(region["mask"] for region in page["regions"]
+                                   if region.get("mask")),
+        "crops": root / "crops" / page["id"],
+        "worksheets": ir.worksheet_folder(finished, ir.load_doc(finished)),
+    }[what]
+
+    with pytest.raises(ValueError):
+        export.export_document(finished, target,
+                               fmt="dir" if target.is_dir() else "cbz")

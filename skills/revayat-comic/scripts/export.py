@@ -13,12 +13,16 @@ copied through byte for byte.
 from __future__ import annotations
 
 import argparse
-import sys
+import contextlib
+import os
 import shutil
+import sys
 import zipfile
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+import journal
 import pageir as ir
 import stages
 from pageir import IMAGE_SUFFIXES
@@ -72,13 +76,44 @@ def _dependencies(doc: dict[str, Any], root: Path, doc_path: Path) -> set[Path]:
         if candidate.exists():
             found.add(candidate.resolve())
     for page in doc.get("pages", []):
-        for key in ("image", "clean", "final", "mask", "writable"):
-            relative = page.get(key)
+        named = [page.get(key) for key in
+                 ("image", "clean", "final", "mask", "writable")]
+        # Region masks were missing, and they are the largest set of files
+        # here: `masks/<page>/r0003.png` is what authorised every pixel the
+        # cleaner changed, and an export onto one destroys evidence the
+        # package cannot be used to rebuild.
+        named += [region.get("mask") for region in page.get("regions", [])]
+        for relative in named:
             if isinstance(relative, str) and relative:
                 candidate = root / relative
                 if candidate.exists():
                     found.add(candidate.resolve())
     return found
+
+
+def _working_folders(doc: dict[str, Any], root: Path,
+                     doc_path: Path) -> set[Path]:
+    """Directories the chapter is made of, so their contents need no listing.
+
+    A folder holding a file this chapter is made of is a folder this export
+    must not write into — which covers every region mask under `masks/<page>/`
+    without walking a single one of them.
+
+    `crops` and the worksheets are here explicitly because they are the two the
+    DOCUMENT does not name: a reader is looking at those crops and typing into
+    those worksheets, and an export over either loses work in progress that
+    exists nowhere else.
+
+    The working folder itself is deliberately excluded. `work/out/chapter.cbz`
+    is an ordinary place to put a chapter, and refusing the whole tree because
+    `comic.json` sits at the top of it would forbid it.
+    """
+    root = root.resolve()
+    folders = {path.parent for path in _dependencies(doc, root, doc_path)}
+    folders.add(root / "crops")
+    folders.add(ir.worksheet_folder(doc_path, doc).resolve())
+    return {folder for folder in folders
+            if folder != root and root in folder.parents and folder.is_dir()}
 
 
 def _refuse_collisions(doc: dict[str, Any], root: Path, doc_path: Path,
@@ -98,6 +133,14 @@ def _refuse_collisions(doc: dict[str, Any], root: Path, doc_path: Path,
             "destroy what the export is reading. Pick a different --out."
         )
 
+    for folder in _working_folders(doc, root, doc_path):
+        if target == folder or folder in target.parents:
+            raise ValueError(
+                f"{out} is inside {folder}, which holds files the chapter is "
+                "made of. Exporting there would write over the work. Pick a "
+                "different --out."
+            )
+
     if fmt == "dir":
         # A folder export writes `0001.png`, `0002.png`… Those are legal page
         # names, so a chapter whose own pages are named that way has its
@@ -113,21 +156,53 @@ def _refuse_collisions(doc: dict[str, Any], root: Path, doc_path: Path,
         return
 
 
-def _scratch(beside: Path, label: str) -> Path:
-    """A scratch path this export owns.
+def staging_path(out: Path) -> Path:
+    """Where an export assembles the bytes it is about to publish.
 
-    `<name>.part` was predictable, so two exports of the same chapter wrote to
-    the same file and an operator's own `<name>.part` was overwritten and then
-    deleted. A random suffix makes ownership a fact.
+    Deterministic, because this path is also the lock. A random suffix made
+    ownership a fact and serialization impossible: two exports of one chapter
+    to one destination each wrote their own staging file and both promoted,
+    the last writer winning, with neither knowing the other existed.
+
+    The name is ours — `.revayat-part`, not `.part` — so claiming it cannot
+    collide with an operator's own working file, which is what the random
+    suffix was introduced to avoid.
     """
-    import secrets
+    return out.with_name(out.name + ".revayat-part")
 
-    for _ in range(8):
-        candidate = beside.with_name(
-            f"{beside.name}.{label}-{secrets.token_hex(6)}")
-        if not candidate.exists():
-            return candidate
-    raise RuntimeError(f"could not find an unused scratch name beside {beside}")
+
+def _kept_path(out: Path) -> Path:
+    """Where a folder export holds the previous edition while it promotes."""
+    return out.with_name(out.name + ".revayat-kept")
+
+
+@contextlib.contextmanager
+def _claim(path: Path, *, directory: bool) -> Iterator[Path]:
+    """Take exclusive ownership of a scratch path, or refuse.
+
+    Created with `O_EXCL` — or `mkdir` without `exist_ok`, which is the same
+    guarantee — so the claim either succeeds or says somebody else is writing
+    here. Released on every path, and only ever the path this made.
+    """
+    try:
+        if directory:
+            path.mkdir(parents=True, exist_ok=False)
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+    except FileExistsError:
+        raise RuntimeError(
+            f"{path} already exists, so another export is writing "
+            f"{path.parent} or a previous one was killed there. Wait for it "
+            f"to finish, or delete {path} and try again."
+        ) from None
+    try:
+        yield path
+    finally:
+        if directory:
+            shutil.rmtree(path, ignore_errors=True)
+        else:
+            path.unlink(missing_ok=True)
 
 
 def _pixel_digest(payload: bytes) -> str:
@@ -179,15 +254,16 @@ def _shipped(page: dict[str, Any], name: str, payload: bytes,
     }
 
 
-def _export_cbz(doc: dict[str, Any], root: Path, out: Path,
-                quality: int, draft: bool = False) -> dict[str, Any]:
+def _export_cbz(doc: dict[str, Any], root: Path, out: Path, quality: int,
+                draft: bool, commit: Any) -> dict[str, Any]:
     written = 0
     manifest: list[dict[str, Any]] = []
     out.parent.mkdir(parents=True, exist_ok=True)
     # Written to a temporary name and moved into place, so an interrupted export
     # cannot leave a half-written archive that opens and is missing chapters.
-    staging = _scratch(out, "part")
-    try:
+    # The claim releases it on every path, so an encoding failure half way
+    # through leaves the previous package untouched and no debris beside it.
+    with _claim(staging_path(out), directory=False) as staging:
         with zipfile.ZipFile(staging, "w", zipfile.ZIP_DEFLATED) as archive:
             for page in doc["pages"]:
                 source = _page_source(root, page)
@@ -199,11 +275,11 @@ def _export_cbz(doc: dict[str, Any], root: Path, out: Path,
             archive.writestr(
                 "ComicInfo.xml", _comic_info(doc, draft).encode("utf-8")
             )
+        # The archive is complete and nothing is published. This is the one
+        # moment at which the recovery record can be written before the bytes
+        # it describes exist at the destination.
+        commit(manifest, {out.name: ir.sha256_file(staging)})
         staging.replace(out)
-    finally:
-        # An encoding failure half way through leaves the previous package
-        # untouched and no debris beside it.
-        staging.unlink(missing_ok=True)
     return {"format": "cbz", "path": str(out), "pages": written,
             "manifest": manifest}
 
@@ -257,8 +333,8 @@ def _comic_info(doc: dict[str, Any], draft: bool = False) -> str:
     )
 
 
-def _export_pdf(doc: dict[str, Any], root: Path, out: Path,
-                quality: int, draft: bool = False) -> dict[str, Any]:
+def _export_pdf(doc: dict[str, Any], root: Path, out: Path, quality: int,
+                draft: bool, commit: Any) -> dict[str, Any]:
     pymupdf = ir.require("pymupdf", "pymupdf", "writing a PDF")
     out.parent.mkdir(parents=True, exist_ok=True)
     document = pymupdf.open()
@@ -290,48 +366,44 @@ def _export_pdf(doc: dict[str, Any], root: Path, out: Path,
         })
         # Saved beside the destination and moved into place, so a write that
         # fails part way cannot replace a good package with a truncated one.
-        staging = _scratch(out, "part")
-        document.save(str(staging), garbage=3, deflate=True)
+        # The claim is taken and released inside this `try`, so a save that
+        # raises removes its own scratch and touches nothing else.
+        with _claim(staging_path(out), directory=False) as staging:
+            document.save(str(staging), garbage=3, deflate=True)
+            commit(manifest, {out.name: ir.sha256_file(staging)})
+            staging.replace(out)
     finally:
         document.close()
-    try:
-        staging.replace(out)
-    finally:
-        staging.unlink(missing_ok=True)
     return {"format": "pdf", "path": str(out), "pages": len(doc["pages"]),
             "draft": draft, "manifest": manifest}
 
 
-def _pending_path(doc_path: Path) -> Path:
-    """Where an export records the stamp it is about to commit."""
-    return doc_path.with_name(doc_path.name + ".export-pending.json")
-
-
 def reconcile_pending(doc_path: str | Path) -> dict[str, Any] | None:
-    """Apply a stamp a previous export wrote out but could not commit.
+    """Apply the stamp of an export that published but could not record it.
 
-    The package and the document that describes it are two writes, and the
-    second one can fail — a full disk, a document open elsewhere. Then the
-    folder holds this edition and `comic.json` describes the last one, and
-    `qa package` compares the new files against the old manifest and reports
-    them all as wrong.
+    Returns the record it applied, or `None` — which means either that there
+    was nothing to reconcile, or that what was there could not be trusted.
 
-    So the stamp is staged beside the document BEFORE the output is published
-    and removed once it is committed. One left behind is the record of an
-    interrupted export, and this puts it in.
+    It used to stamp whatever the record said. That certified a document which
+    had changed since with an older export's manifest: a chapter described by
+    one generation and made of the bytes of another, every internal hash
+    agreeing. `journal.verifies` is the difference — the document this edition
+    was made from, and the bytes it published, both still exactly as recorded.
     """
     doc_path = Path(doc_path)
-    pending = _pending_path(doc_path)
-    if not pending.is_file():
+    record = journal.read(doc_path)
+    if record is None:
         return None
-    import json
+    refused = journal.verifies(doc_path, record)
+    if refused:
+        journal.reject(doc_path, refused)
+        return None
 
-    record = json.loads(ir.read_text(pending))
     doc = ir.load_doc(doc_path)
     stages.stamp_stage(doc, "export", record["result"],
                        options=record["options"])
     ir.save_doc(doc, doc_path)
-    pending.unlink(missing_ok=True)
+    journal.clear(doc_path)
     return record
 
 
@@ -374,8 +446,8 @@ def _restore(out: Path, replaced: Path, promoted: list[str],
     return intact
 
 
-def _export_dir(doc: dict[str, Any], root: Path, out: Path,
-                quality: int, draft: bool = False) -> dict[str, Any]:
+def _export_dir(doc: dict[str, Any], root: Path, out: Path, quality: int,
+                draft: bool, commit: Any) -> dict[str, Any]:
     out.mkdir(parents=True, exist_ok=True)
     manifest: list[dict[str, Any]] = []
 
@@ -405,62 +477,88 @@ def _export_dir(doc: dict[str, Any], root: Path, out: Path,
     # way — an unreadable page, a full disk — leaves the previous export whole
     # instead of a mixture of two. Moved file by file rather than swapping the
     # folder, because anything else the operator keeps in there is not ours.
-    staging = _scratch(out, "part")
-    staging.mkdir(parents=True, exist_ok=False)
-    replaced = _scratch(out, "kept")
+    with _claim(staging_path(out), directory=True) as staging:
+        _assemble(doc, root, staging, quality, draft, manifest)
+        # Every file is assembled and none of it is published. This is the one
+        # moment at which the recovery record can be written before the bytes
+        # it describes exist at the destination.
+        commit(manifest, {child.name: ir.sha256_file(child)
+                          for child in sorted(staging.iterdir())})
+        _promote(out, staging)
+    return {"format": "dir", "path": str(out), "pages": len(doc["pages"]),
+            "manifest": manifest}
+
+
+def _assemble(doc: dict[str, Any], root: Path, staging: Path, quality: int,
+              draft: bool, manifest: list[dict[str, Any]]) -> None:
+    """Encode the whole chapter into the staging folder."""
+    for page in doc["pages"]:
+        source = _page_source(root, page)
+        name = f"{page['index'] + 1:04d}{source.suffix.lower()}"
+        payload, name = _encode(source, name, quality)
+        ir.write_bytes(staging / name, payload)
+        manifest.append(_shipped(page, name, payload, quality))
+    ir.write_text(staging / "ComicInfo.xml", _comic_info(doc, draft))
+
+
+def _promote(out: Path, staging: Path) -> None:
+    """Move the assembled edition in, with the previous one held aside.
+
+    Promoting file by file and hoping was enough for the first failure: a
+    `replace` that raised half way through left some pages from this chapter
+    and the rest from the last one, in a folder that looked finished.
+    """
+    replaced = _kept_path(out)
     # Set before the try, because the cleanup below reads it on every path —
     # including a failure that happens before a single file has been promoted.
     rolled_back = True
+    replaced.mkdir(parents=True, exist_ok=False)
+    promoted: list[str] = []
+    backed_up: list[str] = []
     try:
-        for page in doc["pages"]:
-            source = _page_source(root, page)
-            name = f"{page['index'] + 1:04d}{source.suffix.lower()}"
-            payload, name = _encode(source, name, quality)
-            ir.write_bytes(staging / name, payload)
-            manifest.append(_shipped(page, name, payload, quality))
-        ir.write_text(staging / "ComicInfo.xml", _comic_info(doc, draft))
-
-        # Promoted with the previous edition of each file held aside until
-        # every one has landed. Promoting file by file and hoping was enough
-        # for the first failure: a `replace` that raised half way through left
-        # some pages from this chapter and the rest from the last one, in a
-        # folder that looked finished.
-        replaced.mkdir(parents=True, exist_ok=False)
-        promoted: list[str] = []
-        backed_up: list[str] = []
-        try:
-            for child in sorted(staging.iterdir()):
-                target = out / child.name
-                if target.exists():
-                    target.replace(replaced / child.name)
-                    # Journalled HERE, before the promotion that may fail.
-                    # Recording it afterwards meant the one file whose
-                    # promotion raised had its previous edition moved aside,
-                    # left out of the rollback list, and then deleted by the
-                    # `finally` below — the operator's current file destroyed
-                    # by a failure that changed nothing else.
-                    backed_up.append(child.name)
-                child.replace(target)
-                promoted.append(child.name)
-        except BaseException:
-            rolled_back = _restore(out, replaced, promoted, backed_up)
-            raise
+        for child in sorted(staging.iterdir()):
+            target = out / child.name
+            if target.exists():
+                target.replace(replaced / child.name)
+                # Journalled HERE, before the promotion that may fail.
+                # Recording it afterwards meant the one file whose promotion
+                # raised had its previous edition moved aside, left out of the
+                # rollback list, and then deleted by the `finally` below — the
+                # operator's current file destroyed by a failure that changed
+                # nothing else.
+                backed_up.append(child.name)
+            child.replace(target)
+            promoted.append(child.name)
+    except BaseException:
+        rolled_back = _restore(out, replaced, promoted, backed_up)
+        raise
     finally:
-        shutil.rmtree(staging, ignore_errors=True)
         if rolled_back:
             shutil.rmtree(replaced, ignore_errors=True)
-    return {"format": "dir", "path": str(out), "pages": len(doc["pages"]),
-            "manifest": manifest}
 
 
 def export_document(
     doc_path: str | Path, out: str | Path, *, fmt: str | None = None,
     quality: int = 0, draft: bool = False,
 ) -> dict[str, Any]:
+    """Publish the chapter, and record the edition that was published.
+
+    Two locks, in this order everywhere: the workspace first — this run reads
+    every asset and writes the document, and a `clean` or `typeset` running
+    beside it would change what is being packaged half way through — and then
+    the destination, claimed by the writer as its staging path. One order, so
+    two exports of two chapters into one folder cannot hold half of each
+    other's.
+    """
     doc_path = Path(doc_path)
+    with ir.workspace_lock(ir.doc_dir(doc_path), what="export"):
+        return _publish(doc_path, Path(out).expanduser(), fmt, quality, draft)
+
+
+def _publish(doc_path: Path, out: Path, fmt: str | None, quality: int,
+             draft: bool) -> dict[str, Any]:
     doc = ir.load_doc(doc_path)
     root = ir.doc_dir(doc_path)
-    out = Path(out).expanduser()
 
     if fmt is None:
         suffix = out.suffix.lower()
@@ -507,9 +605,22 @@ def export_document(
             "say so page by page."
         )
 
+    options = {"format": fmt, "quality": quality, "draft": draft}
+    committed: dict[str, Any] = {}
+
+    def commit(manifest: list[dict[str, Any]],
+               published: dict[str, str]) -> None:
+        """Record the transaction, between assembling it and publishing it."""
+        committed["result"] = {"format": fmt, "path": str(out),
+                               # What was shipped, so `qa package` can check
+                               # the package against it rather than against a
+                               # sort of its own file names.
+                               "manifest": manifest}
+        journal.write(doc_path, destination=out, published=published,
+                      result=committed["result"], options=options)
+
     writers = {"cbz": _export_cbz, "pdf": _export_pdf, "dir": _export_dir}
-    report = writers[fmt](doc, root, out, quality, draft)
-    staged_stamp = _pending_path(doc_path)
+    report = writers[fmt](doc, root, out, quality, draft, commit)
 
     # Counted from what was actually written, not from what the document says
     # exists. A recorded `final` whose file has been deleted is not a
@@ -541,19 +652,11 @@ def export_document(
             f"{report['original_pages']} page(s) had no translated text and "
             "were exported exactly as they arrived."
         )
-    result = {"format": fmt, "path": str(out),
-              # What was shipped, so `qa package` can check the package
-              # against it rather than against a sort of its own file names.
-              "manifest": report.get("manifest") or []}
-    options = {"format": fmt, "quality": quality, "draft": draft}
-    # Staged first, committed second, removed third. A crash between the
-    # package landing and the document being saved used to leave the two
-    # permanently disagreeing with nothing on disk that said so.
-    ir.write_text(staged_stamp, ir.dumps({"result": result,
-                                          "options": options}) + "\n")
-    stages.stamp_stage(doc, "export", result, options=options)
+    # Exactly what the journal recorded, so the stamp and the record can never
+    # describe two different editions.
+    stages.stamp_stage(doc, "export", committed["result"], options=options)
     ir.save_doc(doc, doc_path)
-    staged_stamp.unlink(missing_ok=True)
+    journal.clear(doc_path)
     return report
 
 
