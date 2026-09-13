@@ -234,16 +234,23 @@ def japanese_page(width: int = 1000, height: int = 1500):
     column_text = "\u3084\u3081\u308d\u3063\u3066"          # やめろって
     cx = px0 + panel_w * 0.52
     top = py0 + 60 * scale
-    pad_y = 34 * scale
-    # Sized in EMS, because "a manga balloon is drawn around its text with a
-    # margin of roughly half a character" is a statement about characters, not
-    # about ink. Sizing it from the ink instead produced, on a face whose
-    # hiragana are much narrower than their em, a 57-pixel sliver: the column
-    # was still detected, and detected as lettering with no balloon around it.
+    pad_y = 16 * scale
+    # Sized in EMS and sized TIGHT, and the second half is the one that took
+    # three attempts to find. The detector requires a balloon interior to hold
+    # at least `ink_min` (1.5%) of ink. A face whose hiragana are much narrower
+    # than their em — Noto Sans CJK — puts 1.19% into a balloon padded half a
+    # character on each side, and the balloon stops being a balloon: right
+    # size, right shape, right place, not enough ink.
     #
-    # The column occupies one em across; the furigana sit about one em to its
-    # right; so the text block is about two ems wide, and half a character on
-    # each side of that is what the ellipse holds.
+    # Measured by squeezing a wide face horizontally, which is what a narrow
+    # face amounts to here. At squeezes from 1.0 down to 0.5 — narrower than
+    # any real face — the padding below holds 4.35% to 1.90%, against a floor
+    # of 1.5%. Padding it any tighter is worse, not better: at 0.15 em the ink
+    # starts touching the outline and the interior stops being one component.
+    #
+    # This function's own docstring warned about it before the fixture
+    # committed it: "a fixture that leaves more says more about the fixture
+    # than the page."
     em = font.size
     furigana = []
     if small is not None:
@@ -251,9 +258,9 @@ def japanese_page(width: int = 1000, height: int = 1500):
         for glyph in "\u3061\u304b\u3089":                    # ちから
             furigana.append(((cx + 42 * scale, ry), glyph))
             ry += 21 * scale
-    right = cx + (2.0 * em if furigana else 1.0 * em)
-    draw.ellipse([cx - 0.5 * em, top - pad_y,
-                  right + 0.5 * em, top + step * len(column_text) + pad_y],
+    right = cx + (1.65 * em if furigana else 1.0 * em)
+    draw.ellipse([cx - 0.22 * em, top - pad_y,
+                  right + 0.22 * em, top + step * len(column_text) + pad_y],
                  fill=WHITE, outline=BLACK, width=outline)
     y = top
     for glyph in column_text:
