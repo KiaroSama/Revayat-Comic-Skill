@@ -35,6 +35,7 @@ import contextlib
 import importlib
 import io
 import json
+import math
 import secrets
 import socket
 import sys
@@ -200,6 +201,21 @@ def run(name: str, args: list[str] | None = None) -> dict[str, Any]:
                 "error": f"args must be a list of strings, not "
                          f"{type(args).__name__} — "
                          f'e.g. ["--doc", "work/comic.json"]'}
+    # And every element. `str()` on an object produces `{'doc': 'x'}` as one
+    # argument, which argparse can only describe by quoting it back, and on
+    # `None` produces the four letters `None` — a path a stage then tries to
+    # open. A nested shape is the caller's mistake and saying which element is
+    # wrong costs nothing.
+    for index, value in enumerate(args):
+        if isinstance(value, str):
+            continue
+        if isinstance(value, (int, float)) and not isinstance(value, bool) \
+                and math.isfinite(value):
+            continue
+        return {"ok": False, "stage": stage,
+                "error": f"args[{index}] is a {type(value).__name__}; every "
+                         f"argument has to be a string or a number — "
+                         f'e.g. ["--doc", "work/comic.json"]'}
     args = [str(a) for a in args]
 
     module = importlib.import_module(stage_module(stage))
@@ -306,6 +322,14 @@ def handle(message: dict[str, Any]) -> dict[str, Any] | None:
     # as the id produced a reply no client could match to anything.
     has_id = "id" in message
     request_id = message.get("id")
+    # `Infinity` and `NaN` are numbers to Python and not JSON at all: the
+    # standard library reads them by default and writes them back out, so a
+    # reply carrying one is a line the client cannot parse — and the request it
+    # answers is never matched to anything.
+    if (has_id and isinstance(request_id, float)
+            and not math.isfinite(request_id)):
+        return _error(None, -32600,
+                      "a JSON-RPC id has to be a finite number")
     if (has_id and request_id is not None
             and not isinstance(request_id, (str, int, float))):
         return _error(None, -32600,
