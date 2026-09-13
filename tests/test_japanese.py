@@ -54,16 +54,25 @@ def test_a_japanese_page_gives_up_its_balloons_and_its_effect(japanese_chapter):
     and it is measured from the ink rather than assumed from the language.
     """
     totals = detect.detect_document(japanese_chapter)["totals"]
-    assert totals["panels"] == 4
-    assert totals["speech"] == 2
-    assert totals["sfx"] == 1, "the katakana effect was not found"
-
     doc = ir.load_doc(japanese_chapter)
     regions = doc["pages"][0]["regions"]
+    # What was found, in the failure message. This fixture draws with whatever
+    # CJK face the machine has, and the faces differ enough that a bare
+    # `assert 1 == 2` says nothing about WHICH balloon a runner lost.
+    found = ", ".join(
+        f"{region['kind']}/{region['orientation']} at {region['bbox']} "
+        f"conf={region.get('confidence', 0):.2f}"
+        for region in regions)
+    where = f"{totals} — {found}"
+
+    assert totals["panels"] == 4, where
+    assert totals["speech"] == 2, where
+    assert totals["sfx"] == 1, f"the katakana effect was not found: {where}"
+
     orientations = {r["id"]: r["orientation"] for r in regions
                     if r["kind"] == "speech"}
-    assert "vertical" in orientations.values(), "the column read as horizontal"
-    assert "horizontal" in orientations.values()
+    assert "vertical" in orientations.values(), f"the column read across: {where}"
+    assert "horizontal" in orientations.values(), where
 
 
 def test_the_dakuten_does_not_cost_the_effect_its_detection():
