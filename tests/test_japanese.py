@@ -145,12 +145,17 @@ def test_the_column_is_taller_than_it_is_wide(japanese_chapter):
     assert height > width * 1.5
 
 
-def _thinned(page, erode: int):
-    """The same page with its lettering eroded — a lighter face, deterministically.
+def _lightened(page, keep: float):
+    """The same page with its lettering thinned to `keep` of its ink.
 
-    Thinning the strokes is what a light CJK face amounts to as far as balloon
-    detection is concerned, and doing it here means the regression below does
-    not depend on which faces the runner happens to carry.
+    Not "eroded by N pixels": N pixels off a heavy gothic face is a light face,
+    and N pixels off an already-light one is a blank page — which is exactly
+    what a fixed kernel did when this test first ran on a runner carrying Noto
+    Sans CJK. Thinning to a share of the original ink is the same condition
+    whatever face the machine has.
+
+    Returns `(page, achieved share)`; the caller asserts against a page it
+    knows the weight of.
     """
     import cv2
     import numpy as np
@@ -158,16 +163,25 @@ def _thinned(page, erode: int):
 
     array = np.asarray(page.convert("L"))
     ink = np.where(array < 128, np.uint8(255), np.uint8(0))
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (erode, erode))
-    thinner = cv2.erode(ink, kernel)
-    out = np.asarray(page).copy()
+    total = float(ink.sum()) or 1.0
+
+    best, achieved = ink, 1.0
+    for size in range(2, 10):
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size))
+        thinner = cv2.erode(ink, kernel)
+        share = float(thinner.sum()) / total
+        if share < keep:
+            break
+        best, achieved = thinner, share
+
+    out = np.asarray(page.convert("RGB")).copy()
     out[ink > 0] = 255                      # lift every mark off the page
-    out[thinner > 0] = 0                    # and put the thinned ones back
-    return Image.fromarray(out)
+    out[best > 0] = 0                       # and put the thinned ones back
+    return Image.fromarray(out), achieved
 
 
-@pytest.mark.parametrize("erode", [0, 2, 3])
-def test_a_balloon_full_of_thin_strokes_is_still_a_balloon(erode):
+@pytest.mark.parametrize("keep", [1.0, 0.6, 0.4])
+def test_a_balloon_full_of_thin_strokes_is_still_a_balloon(keep):
     """THE REGRESSION, at the level it actually happens.
 
     `_fill_lettering` absorbs a hole into the balloon interior only when its
@@ -179,10 +193,10 @@ def test_a_balloon_full_of_thin_strokes_is_still_a_balloon(erode):
     that was the right size, the right shape and in the right place was
     rejected for holding 0.19% ink.
 
-    Measured, by eroding this fixture's own strokes:
+    Measured on this fixture, thinning its own strokes:
 
-        before the fix   erode=0: 0.0463   erode=3: 0.00007   <- the cliff
-        after            erode=0: 0.0631   erode=3: 0.0280
+        before the fix   full weight: 0.0463   thinned: 0.00007   <- a cliff
+        after            full weight: 0.0631   thinned: 0.0280
 
     `_balloon_candidates` asks for the component PLUS what it encloses now,
     which is what a balloon's interior means and needs no threshold at all.
@@ -191,8 +205,9 @@ def test_a_balloon_full_of_thin_strokes_is_still_a_balloon(erode):
     import numpy as np
 
     page = japanese_page()
-    if erode:
-        page = _thinned(page, erode)
+    if keep < 1.0:
+        page, achieved = _lightened(page, keep)
+        assert achieved <= 1.0
     gray = cv2.cvtColor(np.asarray(page.convert("RGB")), cv2.COLOR_RGB2GRAY)
 
     column = [balloon
@@ -204,8 +219,8 @@ def test_a_balloon_full_of_thin_strokes_is_still_a_balloon(erode):
               and balloon["bbox"][3] > balloon["bbox"][2]]
 
     assert column, (
-        f"the column's balloon disappeared at erode={erode}; thin strokes are "
-        f"a light face, not a missing balloon")
+        f"the column's balloon disappeared with its strokes thinned to "
+        f"{keep:.0%} of their ink; a lighter face is not a missing balloon")
     assert column[0]["ink_share"] >= detect.DEFAULTS["ink_min"], column
 
 
