@@ -227,6 +227,18 @@ def _constraints_facet(doc: dict[str, Any]) -> str:
     return digest.hexdigest()
 
 
+def facet_revision(page: dict[str, Any], name: str) -> str:
+    """One facet of one page, on its own.
+
+    `page_revision` answers for a whole stage — every facet it consumes, plus
+    the upstream revisions and the options. A caller that wants to know
+    whether the DRAWING changed needs the narrower question, and reaching for
+    the stage-wide answer instead made a provider re-asked whenever anything
+    upstream moved.
+    """
+    return _page_facet(page, name)
+
+
 def page_revision(doc: dict[str, Any], stage: str, page: dict[str, Any], *,
                   options: Any = None,
                   stages: dict[str, Any] | None = None) -> str:
