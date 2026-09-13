@@ -188,6 +188,11 @@ original's SHA-256 is re-checked at the end.
 | `qa.py` | the gate, including the pixel-preservation proof |
 | `package.py` | verifying what actually shipped against what the export wrote |
 | `export.py` | CBZ, PDF, folder |
+| `regions.py` | what a region's decisions MEAN, and what a page with none of them is |
+| `certify.py` | whether the bytes about to ship come from the run that claims them |
+| `journal.py` | the record an export leaves so an interrupted run can be finished |
+| `pdfpage.py` | what a PDF sheet SHOWS, as opposed to what it contains |
+| `writers.py` | assembling each package format and putting it where it belongs |
 | `lettering.py` | matching a drawn sound effect's slant, arc and recession |
 | `providers.py` | the optional second-opinion boundary, and its fakes |
 | `adapters.py` | real providers — currently `manga-ocr`, local and keyless |

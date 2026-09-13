@@ -221,14 +221,23 @@ one: absent means nobody has decided, and then the page decides, as above.
   mechanically, so write naturally and do not fight it.
 - Persian letters, not Arabic: `ی` and `ک`, never `ي` and `ك`.
 - Half-spaces where they belong: `می‌روم`, `کتاب‌ها`. **Write them yourself.**
-  The plural and possessive family — `کتاب ها` → `کتاب‌ها` — is joined for you,
-  because `<noun> ها` is the plural in every register comic dialogue uses and
-  nothing else looks like it. `می` and `نمی` are not: `می` is the imperfective
-  prefix and also the noun *wine*, `نمی` is the negative prefix and also نَمی,
-  *a trace of moisture*, and only the word after them tells the two apart —
-  which is the word no rule here can classify. `qa` names each one it finds
-  (`zwnj-review`) and changes nothing; settle it in the worksheet with
-  `reviewed: zwnj-review`, which records the exact words you looked at.
+  What is joined for you is the possessive family — `کتاب هایم` → `کتاب‌هایم`,
+  and the same for `هایت`, `هایش`, `هایمان`, `هایتان`, `هایشان`, `هایی`. Those
+  carry a personal ending and nothing else in Persian looks like them.
+
+  A bare `ها` or `های` is joined only where the next word settles it:
+  `کتاب ها را` and `کتاب ها ی من` become `کتاب‌ها …`, because `را` and a bare
+  ezafe `ی` can only follow a complete noun phrase. Elsewhere it is left alone
+  and reported, because in conversation `ها` is also the warning particle —
+  `حواست باشه ها!`, `این کار رو نکن ها.` — and joining that says something the
+  sentence does not. `های های گریه کرد` is sobbing, not a plural.
+
+  `می` and `نمی` are never joined either: `می` is the imperfective prefix and
+  also the noun *wine*, `نمی` is the negative prefix and also نَمی, *a trace of
+  moisture*, and only the word after them tells the two apart — which is the
+  word no rule here can classify. `qa` names each one it finds (`zwnj-review`)
+  and changes nothing; settle it in the worksheet with `reviewed: zwnj-review`,
+  which records the exact words you looked at.
 - Do not reverse anything, and do not paste text that already looks right-to-left
   in your editor. Write ordinary Persian in ordinary order.
 - Do not insert an explanation into the dialogue. A character does not explain
