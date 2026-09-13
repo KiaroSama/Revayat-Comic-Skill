@@ -293,17 +293,29 @@ def test_a_glossary_drift_is_reported(finished):
     assert report["by_code"]["glossary-drift"] >= 1
 
 
-def test_an_inflected_form_of_a_locked_name_is_not_drift(finished):
-    """`هاروکا` with an ezafe is `هاروکای`, and that is correct Persian. Matching
-    on the substring accepts the inflection and still rejects a different name."""
+def test_an_approved_inflection_of_a_locked_name_is_not_drift(finished):
+    """`هاروکا` with an ezafe is `هاروکای`, and that is correct Persian.
+
+    It used to be accepted because the target was matched as a bare substring,
+    which also accepted `آنا` inside `آنان` — a line that never mentions the
+    character, counted as having rendered her name. An attached form is
+    approved by writing it down, and then it is accepted here.
+    """
     doc = ir.load_doc(finished)
     _, region = next(iter(ir.iter_regions(doc)))
     region["source_text"] = "ハルカ"
     region["target_text"] = "کتابِ هاروکای کوچک"
-    doc["glossary"] = {"entries": {"ハルカ": {"target": "هاروکا", "locked": True}}}
+    doc["glossary"] = {"entries": {"ハルカ": {
+        "target": "هاروکا", "target_forms": ["هاروکای"], "locked": True}}}
     ir.save_doc(doc, finished)
-    report = qa.check_document(finished)
-    assert "glossary-drift" not in report["by_code"]
+
+    assert "glossary-drift" not in qa.check_document(finished)["by_code"]
+
+    doc = ir.load_doc(finished)
+    doc["glossary"]["entries"]["ハルカ"].pop("target_forms")
+    ir.save_doc(doc, finished)
+
+    assert qa.check_document(finished)["by_code"].get("glossary-drift") == 1
 
 
 def test_every_finding_code_is_declared():

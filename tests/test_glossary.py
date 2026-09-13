@@ -8,6 +8,9 @@ file stays readable at.
 from __future__ import annotations
 
 import json
+from pathlib import Path
+
+import pytest
 
 import pageir as ir
 import glossary
@@ -249,8 +252,13 @@ def test_an_unlocked_suggestion_has_no_history_to_keep():
 
 # --- R5: history on the path the docs tell you to use ------------------------
 
-def _table(tmp_path, payload):
-    path = tmp_path / "names.json"
+def _table(folder, payload):
+    """A hand-written table on disk. `folder` so two tables in one test are two
+    files: they were both `names.json`, so the second write reached the first
+    apply and a test about two revisions applied one table twice."""
+    folder = Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / "names.json"
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     return path
 
@@ -344,7 +352,14 @@ def test_a_cjk_term_is_still_enforced():
     """Japanese has no spaces, so a word-boundary test never matches one at all
     and every CJK term would quietly stop being enforced."""
     assert glossary._mentions("ハルカ", "それでハルカは言った")
-    assert glossary._mentions("هاروکا", "هاروکای عزیز")
+    # Persian is NOT matched as a bare substring any more: `آنا` inside
+    # `آنان` is the same shape, and accepting it made a line that never
+    # mentions the character count as having rendered her name. An attached
+    # spelling counts when a reader has written it down.
+    assert not glossary._mentions("هاروکا", "هاروکای عزیز")
+    assert glossary._mentions("هاروکا", "هاروکای عزیز",
+                              {"aliases": ["هاروکای"]})
+    assert glossary._mentions("هاروکا", "هاروکا عزیز است")
 
 
 def test_an_approved_alias_counts_as_the_term(translated, tmp_path):
@@ -487,3 +502,202 @@ def test_a_rescan_preserves_the_decision_and_refreshes_the_count(translated):
     # The live numbers live in `counts`, and a rescan refreshes them without
     # touching the decision beside them.
     assert after["counts"]["repeated"] >= 1, after
+
+
+# --- A Persian name is not every word that starts the same way ---------------
+
+def _locked(doc_path, term, target, line, **extra):
+    """One locked name and one approved line that is supposed to use it."""
+    doc = ir.load_doc(doc_path)
+    for _page, region in ir.iter_regions(doc):
+        region["source_text"] = term
+        region["target_text"] = line
+    glossary.set_entry(doc, term, {"target": target, "locked": True, **extra})
+    ir.save_doc(doc, doc_path)
+    return doc
+
+
+def test_a_persian_name_inside_a_longer_word_is_not_that_name(translated):
+    """The target side was a plain substring test, so the canonical `آنا` was
+    found inside `آنان رسیدند` — *they arrived* — and a balloon that never
+    mentions Anna counted as having rendered her name correctly."""
+    _locked(translated, "Anna", "آنا", "آنان رسیدند")
+
+    report = glossary.check(translated)
+
+    assert not report["ok"], report
+    assert report["drift"][0]["term"] == "Anna"
+
+
+def test_the_name_itself_is_still_found(translated):
+    """The control. A check that refuses the word it is looking for is not a
+    check."""
+    _locked(translated, "Anna", "آنا", "آنا رسید")
+
+    assert glossary.check(translated)["ok"]
+
+
+@pytest.mark.parametrize("line", [
+    "آنا را دیدم",          # the direct-object marker, separated
+    "آنا، بیا این‌جا",       # punctuation
+    "آنا‌ی کوچک",            # the ezafe, joined by a zero-width non-joiner
+    "(آنا)",                # brackets
+])
+def test_persian_attaches_around_a_name_without_changing_it(translated, line):
+    """Persian puts clitics and punctuation straight against a word. A boundary
+    test borrowed from Latin would report every one of these as drift."""
+    _locked(translated, "Anna", "آنا", line)
+
+    assert glossary.check(translated)["ok"], line
+
+
+def test_an_attached_spelling_has_to_be_approved(translated):
+    """`آناست` is a legitimate Persian form of the name and it is also exactly
+    the shape a wrong match takes. Nothing infers it: a reader writes it
+    down."""
+    _locked(translated, "Anna", "آنا", "آناست که آمد")
+    assert not glossary.check(translated)["ok"]
+
+    doc = ir.load_doc(translated)
+    glossary.set_entry(doc, "Anna", {"target_forms": ["آناست"]})
+    ir.save_doc(doc, translated)
+
+    assert glossary.check(translated)["ok"]
+
+
+def test_a_cjk_target_is_matched_with_no_boundaries_at_all(translated):
+    """A target in a script that has no spaces cannot be bounded, and applying
+    a boundary test to one silently stops enforcing it."""
+    _locked(translated, "Haruka", "ハルカ", "それはハルカだ")
+
+    assert glossary.check(translated)["ok"]
+
+
+def test_an_accented_latin_target_matches_itself_and_not_more(translated):
+    _locked(translated, "Renee", "Renée", "Renée came back")
+    assert glossary.check(translated)["ok"]
+
+    _locked(translated, "Renee", "Renée", "Renéeta came back")
+    assert not glossary.check(translated)["ok"]
+
+
+# --- A payload is checked before any of it is written ------------------------
+
+@pytest.mark.parametrize("field", ["aliases", "target_forms"])
+def test_a_bare_string_is_not_a_list_of_forms(translated, field):
+    """Iterating a string yields its CHARACTERS, so `aliases: "آنا"` approved
+    the three forms `آ`, `ن` and `ا` — each of which appears in most Persian
+    lines ever written."""
+    doc = ir.load_doc(translated)
+
+    with pytest.raises(ValueError, match="list of written forms"):
+        glossary.set_entry(doc, "Anna", {field: "آنا"})
+
+    assert "Anna" not in (doc.get("glossary") or {}).get("entries", {})
+
+
+def test_a_refused_edit_changes_nothing_at_all(translated):
+    """A half-applied entry is worse than a refused one: `locked` was written,
+    then the malformed list raised, and the entry was left locked with the old
+    target and nothing saying anything had failed."""
+    doc = _locked(translated, "Anna", "آنا", "آنا رسید")
+    before = dict(doc["glossary"]["entries"]["Anna"])
+
+    with pytest.raises(ValueError):
+        glossary.set_entry(doc, "Anna", {"locked": False, "target": "آنّا",
+                                         "aliases": "wrong"})
+
+    assert doc["glossary"]["entries"]["Anna"] == before
+
+
+def test_a_table_that_fails_half_way_is_not_applied_at_all(translated,
+                                                           tmp_path):
+    """Otherwise the document holds some of somebody's decisions and no record
+    of which ones."""
+    table = _table(tmp_path, {"ハルカ": "هاروکا",
+                              "Anna": {"target": "آنا", "aliases": "wrong"}})
+
+    with pytest.raises(ValueError, match="not applied"):
+        glossary.apply_file(translated, table)
+
+    assert not (ir.load_doc(translated).get("glossary") or {}).get("entries")
+
+
+def test_an_unknown_role_is_refused(translated):
+    doc = ir.load_doc(translated)
+
+    with pytest.raises(ValueError, match="role"):
+        glossary.set_entry(doc, "Anna", {"role": "protagonist"})
+
+
+def test_a_form_list_can_be_cleared(translated):
+    """A form recorded by mistake has to be removable."""
+    doc = ir.load_doc(translated)
+    glossary.set_entry(doc, "Anna", {"target": "آنا", "target_forms": ["آناست"]})
+
+    glossary.set_entry(doc, "Anna", {"target_forms": []})
+
+    assert doc["glossary"]["entries"]["Anna"]["target_forms"] == []
+
+
+def test_a_malformed_list_already_in_a_document_approves_nothing(translated):
+    """Read defensively as well: a document may have been written by hand."""
+    doc = _locked(translated, "Anna", "آنا", "آنان رسیدند")
+    doc["glossary"]["entries"]["Anna"]["target_forms"] = "آنان"
+    ir.save_doc(doc, translated)
+
+    assert not glossary.check(translated)["ok"]
+
+
+# --- Through the command people actually run ---------------------------------
+
+def test_history_survives_the_command_line(translated, tmp_path, capsys):
+    """Every supported edit path, which means the one with a `--table` in it."""
+    first = _table(tmp_path / "one", {"ハルカ": "هاروکا"})
+    second = _table(tmp_path / "two", {"ハルカ": {"target": "هارُکا",
+                                                  "target_forms": ["هارُکای"]}})
+
+    assert glossary.main(["apply", "--doc", str(translated),
+                          "--table", str(first)]) == 0
+    capsys.readouterr()
+    assert glossary.main(["apply", "--doc", str(translated),
+                          "--table", str(second)]) == 0
+    capsys.readouterr()
+
+    entry = ir.load_doc(translated)["glossary"]["entries"]["ハルカ"]
+    assert entry["version"] == 2
+    assert entry["previous"] == [{"target": "هاروکا", "version": 1}]
+    assert entry["target_forms"] == ["هارُکای"]
+
+
+def test_a_malformed_table_on_the_command_line_says_so(translated, tmp_path):
+    table = _table(tmp_path, {"Anna": {"target": "آنا", "aliases": "wrong"}})
+
+    with pytest.raises(ValueError, match="not applied"):
+        glossary.main(["apply", "--doc", str(translated), "--table", str(table)])
+
+
+# --- What the translator is told ---------------------------------------------
+
+def test_the_approved_forms_reach_the_translator(translated):
+    """`check` enforces every approved form and the translator was told only
+    the headword, so a line it had no way of knowing was acceptable came back
+    reported as drift."""
+    import context as chapter_context
+
+    _locked(translated, "Anna", "آنا", "آنا رسید", target_forms=["آنای"])
+    doc = ir.load_doc(translated)
+    package = chapter_context.build(doc, doc["pages"][0]["id"])
+
+    assert package["constraints"]["glossary"]["Anna"] == {
+        "target": "آنا", "forms": ["آنای"]}
+
+
+def test_a_term_with_no_extra_forms_is_still_sent_as_a_plain_name(translated):
+    import context as chapter_context
+
+    _locked(translated, "Anna", "آنا", "آنا رسید")
+    doc = ir.load_doc(translated)
+    package = chapter_context.build(doc, doc["pages"][0]["id"])
+
+    assert package["constraints"]["glossary"]["Anna"] == "آنا"

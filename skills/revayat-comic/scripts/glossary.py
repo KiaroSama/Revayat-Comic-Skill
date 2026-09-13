@@ -35,6 +35,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+import falint
 import pageir as ir
 import stages
 
@@ -207,6 +208,26 @@ def _pattern(term: str) -> str:
     return r"\b" + r"\s+".join(re.escape(word) for word in term.split()) + r"\b"
 
 
+#: Persian and Arabic letters, from the module that owns Persian text. A form
+#: written in this script attaches its clitics directly — `آنا را`, `آنا‌ی` —
+#: so it is bounded by anything that is NOT one of these, and by nothing else.
+_ATTACHING = re.compile(rf"[{falint.PERSIAN_LETTER}]")
+
+
+def _string_list(value: Any) -> list[str]:
+    """A list of written forms, or nothing.
+
+    A bare string here is a malformed payload, and iterating it yields its
+    CHARACTERS: `aliases: "آنا"` became the three approved forms `آ`, `ن`, `ا`,
+    each of which matches almost every Persian line in the chapter. Read
+    defensively as well as validated on the way in, because a document may have
+    been written by hand or by an older build.
+    """
+    if isinstance(value, (list, tuple)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return []
+
+
 def forms(term: str, entry: dict[str, Any] | None = None) -> list[str]:
     """Every spelling this term is allowed to appear as.
 
@@ -216,30 +237,60 @@ def forms(term: str, entry: dict[str, Any] | None = None) -> list[str]:
     a decision.
     """
     out = [term]
-    for alias in ((entry or {}).get("aliases") or []):
-        alias = str(alias).strip()
-        if alias and alias not in out:
+    for alias in _string_list((entry or {}).get("aliases")):
+        if alias not in out:
             out.append(alias)
     return out
 
 
-def _mentions(term: str, source: str, entry: dict[str, Any] | None = None) -> bool:
-    """Whether `source` really uses `term` or one of its approved aliases.
+def target_forms(entry: dict[str, Any]) -> list[str]:
+    """Every approved spelling of the canonical Persian, headword first."""
+    out = [(entry.get("target") or "").strip()]
+    for form in _string_list(entry.get("target_forms")):
+        if form not in out:
+            out.append(form)
+    return [form for form in out if form]
 
-    Latin words and phrases are matched at word boundaries — `Ann` matched
-    inside `Anna` and reported drift on a name the balloon never used.
-    Everything else is a substring, deliberately: Japanese has no spaces, so a
-    boundary test never matches a CJK term at all and every one of them would
-    quietly stop being enforced; Persian inflects by attaching, so the same
-    applies there.
+
+def used(text: str, candidates: list[str]) -> bool:
+    """Whether `text` really uses one of these forms.
+
+    ONE matcher, for the source side and the target side, because there were
+    two: the source was matched at word boundaries and the target by plain
+    substring presence. So the canonical target `آنا` was found inside
+    `آنان رسیدند` — *they arrived* — and a balloon that never mentions Anna
+    counted as having rendered her name correctly.
+
+    Three scripts, three answers, and the script decides which:
+
+    * **Latin** has spaces and no attachment, so a form is a whole word or a
+      whole phrase. `Ann` must not match inside `Anna`.
+    * **Persian and Arabic** attach clitics with no space — `آنا را`, `آنا‌ی` —
+      so a form is bounded by any character that is not a letter of that
+      script. An attached spelling that a reader has approved goes in
+      `target_forms` and is matched in its own right; nothing is inferred.
+    * **Everything else**, meaning CJK, has no boundaries at all. A boundary
+      test never matches one and would silently stop enforcing every Japanese,
+      Chinese and Korean term in the table.
     """
-    for form in forms(term, entry):
+    for form in candidates:
+        if not form:
+            continue
         if _BOUNDED_TERM.match(form) or _BOUNDED_PHRASE.match(form):
-            if re.search(_pattern(form), source, re.UNICODE):
+            if re.search(_pattern(form), text, re.UNICODE):
                 return True
-        elif form in source:
+        elif _ATTACHING.search(form):
+            letter = f"[{falint.PERSIAN_LETTER}]"
+            if re.search(f"(?<!{letter}){re.escape(form)}(?!{letter})", text):
+                return True
+        elif form in text:
             return True
     return False
+
+
+def _mentions(term: str, source: str, entry: dict[str, Any] | None = None) -> bool:
+    """Whether `source` really uses `term` or one of its approved aliases."""
+    return used(source, forms(term, entry))
 
 
 def check(doc_path: str | Path, *, limit: int | None = 30) -> dict[str, Any]:
@@ -267,9 +318,7 @@ def check(doc_path: str | Path, *, limit: int | None = 30) -> dict[str, Any]:
             # absent from the balloon cannot have been rendered wrongly in it.
             if not _mentions(term, source, entry):
                 continue
-            approved = [entry["target"]] + [
-                str(alias) for alias in (entry.get("target_forms") or [])]
-            if any(form and form in target for form in approved):
+            if used(target, target_forms(entry)):
                 continue
             drift.append({
                 "region": region["id"],
@@ -315,6 +364,39 @@ def _affected(doc: dict[str, Any], term: str, previous: str,
     return touched
 
 
+def validate(record: dict[str, Any]) -> dict[str, Any]:
+    """The record, checked whole. Raises `ValueError` naming what is wrong.
+
+    Called before a single field is written, because a half-applied entry is
+    worse than a refused one: `locked` was set, then `role`, and then the
+    malformed `aliases` raised — leaving the entry locked with the old target
+    and no record that anything had failed.
+
+    `aliases` and `target_forms` are lists a person writes. A bare string is a
+    malformed payload and iterating it yields its CHARACTERS, so
+    `aliases: "آنا"` became three approved forms — `آ`, `ن`, `ا` — each of
+    which appears in most Persian lines ever written.
+    """
+    if not isinstance(record, dict):
+        raise ValueError("a glossary entry has to be an object, or a string "
+                         "holding the Persian for it")
+    checked = dict(record)
+    for key in ("aliases", "target_forms"):
+        if key in checked and not isinstance(checked[key], (list, tuple)):
+            raise ValueError(
+                f"`{key}` has to be a list of written forms, and this is "
+                f"{type(checked[key]).__name__}. A bare string is read one "
+                f"character at a time, which approves every letter in it")
+    for key in ("target", "role", "note"):
+        if key in checked and checked[key] is not None \
+                and not isinstance(checked[key], str):
+            raise ValueError(f"`{key}` has to be text")
+    role = checked.get("role")
+    if role and role not in ROLES:
+        raise ValueError(f"`role` has to be one of {', '.join(ROLES)}")
+    return checked
+
+
 def set_entry(doc: dict[str, Any], source: str, record: dict[str, Any]
               ) -> dict[str, Any]:
     """Change one entry, keeping the history a locked form is owed.
@@ -324,6 +406,7 @@ def set_entry(doc: dict[str, Any], source: str, record: dict[str, Any]
     assigned `entry["target"] = …` directly and preserved nothing, so the
     guarantee existed only for callers that already knew about it.
     """
+    record = validate(record)
     entries = doc.setdefault("glossary", {}).setdefault("entries", {})
     entry = entries.setdefault(source, _entry(source))
     # Snapshotted before anything is applied. Every question about what this
@@ -345,8 +428,7 @@ def set_entry(doc: dict[str, Any], source: str, record: dict[str, Any]
             entry[key] = record[key]
     for key in ("aliases", "target_forms"):
         if key in record:
-            entry[key] = [str(item).strip() for item in (record[key] or [])
-                          if str(item).strip()]
+            entry[key] = _string_list(record[key])
     if "target" in record:
         set_target(entry, record["target"], was_locked=was_locked)
     return {"term": source, "version": entry.get("version", 1),
@@ -368,10 +450,28 @@ def apply_file(doc_path: str | Path, table: str | Path) -> dict[str, Any]:
     doc = ir.load_doc(doc_path)
     payload = json.loads(ir.read_text(table))
 
-    applied, revised, review = 0, [], []
+    if not isinstance(payload, dict):
+        raise ValueError("a glossary table is an object of "
+                         "`source: target` or `source: {…}` entries")
+    # Every record is checked before the first one is written. A table that
+    # fails half way through leaves a document holding some of somebody's
+    # decisions and no record of which ones.
+    records = {}
+    problems = []
     for source, value in payload.items():
         record = ({"target": value, "locked": True} if isinstance(value, str)
-                  else {"locked": True, **dict(value)})
+                  else {"locked": True, **value} if isinstance(value, dict)
+                  else value)
+        try:
+            records[source] = validate(record)
+        except ValueError as error:
+            problems.append(f"{source}: {error}")
+    if problems:
+        raise ValueError("this table was not applied — "
+                         + "; ".join(problems[:6]))
+
+    applied, revised, review = 0, [], []
+    for source, record in records.items():
         outcome = set_entry(doc, source, record)
         applied += 1
         if outcome["version"] > 1 and outcome["previous"]:
