@@ -168,3 +168,122 @@ def test_the_set_says_where_its_lines_came_from():
     readme = (EVALUATION / "README.md").read_text(encoding="utf-8")
     assert "rights-clean by construction" in readme
     assert "no overall score" in readme.lower()
+
+
+# --- C11: what the scorer may decide, and what it may not -------------------
+
+def test_a_name_beginning_with_nun_is_not_evidence_of_negation(score):
+    """`نادر آمد.` is *Nader came*, an affirmative sentence about a man. The
+    bare `ن`-prefix heuristic read it as a preserved negation."""
+    checked = score.check_preserved({"must_preserve": {"negation": True}},
+                                    "نادر آمد.")
+
+    assert checked["negation"] == "review"
+
+
+@pytest.mark.parametrize("answer", [
+    "نمی‌آیم.", "نه، نمی‌شود.", "به هیچ وجه.", "هرگز نخواهم رفت.",
+])
+def test_a_real_negation_is_decided(score, answer):
+    checked = score.check_preserved({"must_preserve": {"negation": True}},
+                                    answer)
+
+    assert checked["negation"] is True, answer
+
+
+def test_an_undecidable_check_neither_passes_nor_fails(score):
+    row = score.score_one({"id": "x", "must_preserve": {"negation": True}},
+                          "نادر آمد.")
+
+    assert row["adequacy"]["needs_review"] == ["negation"]
+    assert row["adequacy"]["machine_ok"] is True     # not a failure
+    report = score.score({"x": "نادر آمد."},
+                         [{"id": "x", "must_preserve": {"negation": True}}])
+    assert report["needs_review"] == ["x"]
+    assert report["machine_adequacy_failures"] == []
+
+
+@pytest.mark.parametrize("answer,ok", [
+    ("سه نفر دیگر مانده.", False),      # no digit at all, and no spelling
+    ("۳ نفر دیگر مانده.", True),
+    ("3 نفر دیگر مانده.", True),
+    ("۳۰ نفر دیگر مانده.", False),      # THE bug: `30` satisfied `3`
+    ("سی نفر دیگر مانده.", False),
+])
+def test_a_quantity_is_a_token_not_a_substring(score, answer, ok):
+    checked = score.check_preserved({"must_preserve": {"numbers": ["3"]}},
+                                    answer)
+
+    assert checked["numbers"]["ok"] is ok, answer
+
+
+def test_a_written_out_spelling_the_case_supplies_still_counts(score):
+    checked = score.check_preserved(
+        {"must_preserve": {"numbers": [["12.5", "دوازده و نیم"]]}},
+        "ساعت دوازده و نیم می‌بینمت.")
+
+    assert checked["numbers"]["ok"] is True
+
+
+def test_formatting_does_not_change_the_verdict(score, tmp_path, capsys):
+    """The same failing evaluation exited 1 as text and 0 as JSON — and a
+    machine reading it, which is who asks for JSON, was told it passed."""
+    cases = tmp_path / "cases.json"
+    cases.write_text(json.dumps({
+        "scheme": "1", "note": "",
+        "cases": [{"id": "x", "must_preserve": {"numbers": ["3"]}}],
+    }, ensure_ascii=False), encoding="utf-8")
+    answers = tmp_path / "answers.json"
+    answers.write_text(json.dumps({"x": "سی تا."}, ensure_ascii=False),
+                       encoding="utf-8")
+
+    plain = score.main(["--answers", str(answers), "--cases", str(cases)])
+    as_json = score.main(["--answers", str(answers), "--cases", str(cases),
+                          "--json"])
+
+    capsys.readouterr()
+    assert plain == as_json == 1
+
+
+def test_complete_mode_fails_on_a_missing_answer(score, tmp_path, capsys):
+    cases = tmp_path / "cases.json"
+    cases.write_text(json.dumps({
+        "scheme": "1", "note": "",
+        "cases": [{"id": "x"}, {"id": "y"}],
+    }, ensure_ascii=False), encoding="utf-8")
+    answers = tmp_path / "answers.json"
+    answers.write_text(json.dumps({"x": "سلام."}, ensure_ascii=False),
+                       encoding="utf-8")
+
+    lenient = score.main(["--answers", str(answers), "--cases", str(cases)])
+    strict = score.main(["--answers", str(answers), "--cases", str(cases),
+                         "--complete"])
+
+    capsys.readouterr()
+    assert lenient == 0 and strict == 1
+
+
+def test_the_case_set_was_extended_not_rebuilt(score):
+    cases = score.load_cases()
+    ids = [case["id"] for case in cases]
+
+    # The original fifteen are all still here.
+    for original in ("neg-01", "neg-02", "num-01", "num-02", "sarc-01",
+                     "sub-01", "pron-01", "form-01", "form-02", "cont-01a",
+                     "cont-01b", "ell-01", "name-01", "mod-01", "fit-01"):
+        assert original in ids, original
+    assert len(cases) == 20
+    # And every new one carries more than one acceptable Persian form.
+    for case in cases:
+        assert len(case.get("accept") or []) >= 2, case["id"]
+
+
+def test_every_adversarial_control_passes_on_its_own_references(score):
+    """The controls have to be satisfiable, or they are not controls."""
+    cases = {case["id"]: case for case in score.load_cases()}
+    for case_id in ("neg-03", "neg-04", "num-03", "num-04", "cont-02"):
+        case = cases[case_id]
+        for answer in case["accept"]:
+            row = score.score_one(case, answer)
+            assert row["adequacy"]["machine_ok"], (case_id, answer,
+                                                   row["adequacy"])

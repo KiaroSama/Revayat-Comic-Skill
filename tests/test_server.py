@@ -632,3 +632,53 @@ def test_a_rejected_post_closes_rather_than_leaving_its_body_behind(http_server)
         assert response.getheader("Connection", "").lower() == "close"
     finally:
         connection.close()
+
+
+# --- C12: the boundaries the transport is responsible for -------------------
+
+def test_import_and_doctor_dispatch_inside_the_guarded_output_boundary(
+        sample_cbz, tmp_path):
+    """`import` maps to `readers` and `doctor` is not a stage at all, so both
+    take a different path to every other tool. The capture that keeps a stage's
+    own printing out of the JSON-RPC stream has to cover them too: a stray line
+    on stdout from either one corrupts the protocol, not just the report.
+
+    Reported as VERIFIED, not repaired — both were already inside it."""
+    import server
+
+    work = tmp_path / "work"
+    imported = server.run("import", [str(sample_cbz), "--out", str(work)])
+    assert imported["ok"], imported
+    assert (work / "comic.json").is_file()
+
+    checked = server.run(server.DOCTOR, [])
+    assert checked["ok"], checked
+    # Whatever either of them printed is inside the answer, never beside it:
+    # the stage's own report, captured, rather than a line on the stream the
+    # protocol is using.
+    for answer in (imported, checked):
+        assert isinstance(answer.get("report"), dict), answer
+        assert answer.get("exit") == 0, answer
+
+
+@pytest.mark.parametrize("arguments", [
+    "not-a-list", 42, {"doc": "x"}, [1, 2], [None],
+])
+def test_a_request_whose_arguments_are_the_wrong_shape_is_a_bounded_error(
+        arguments):
+    """Finite and typed: the transport answers, and does not hand a mapping or
+    a number to a stage expecting a list of strings."""
+    import server
+
+    answer = server.run("detect", arguments)
+
+    assert answer["ok"] is False
+    assert answer["error"]
+
+
+def test_an_unknown_tool_is_an_answer_not_a_crash():
+    import server
+
+    answer = server.run("no-such-stage", {})
+
+    assert answer["ok"] is False and answer["error"]

@@ -271,10 +271,19 @@ are missing from the package.
 >     `qa` raises `compressed-variant` so somebody reads the pair.
 >   - `reviewed: <lint code>` — a lint you have looked at and settled, so
 >     the gate stops asking. `reviewed: zwnj-review` on a line where `می`
->     is wine and not the verb prefix.
+>     is wine and not the verb prefix. It records **which words** you
+>     settled, so a later edit that introduces a different ambiguity is
+>     still raised rather than covered by the old decision.
 >   - `propose: <name>, <name>` — a name or term this balloon *mentions*
 >     but does not say. It reaches the glossary without claiming somebody
 >     else is talking.
+>   - `note: <anything a person should read>` — the one field that may
+>     appear more than once in a block. A rebuilt worksheet prints every
+>     note the region carries, and the merge takes the sheet as the whole
+>     truth: a note you edit is edited, a note you delete is deleted.
+>     Lines beginning `# ` are what the pipeline itself recorded — that
+>     `clean` refused a patch, that an effect was left as drawn — and they
+>     are read back as comments, never as your answer.
 > - **Check every crop for two balloons in one box.** This is the commonest way
 >   the page loses text, it happens several times a volume, and the detector
 >   cannot see it — four different measurements were tried and none separates a
@@ -438,6 +447,8 @@ $PY $SKILL_DIR/scripts/revayat-comic.py qa check --doc $WORK/comic.json
 | `clean-refused` | `clean` had no repair for this patch and left the original lettering on the page | give it `--external`, a working `--provider`, or re-run `mask --free-lettering glyphs` for that page |
 | `region-not-rendered` | this region has approved Persian and its render is missing or overflowed | run `typeset`, or shorten the line until it fits |
 | `erase-unfinished` | a region is marked for erasure and the cleaner has not acted on it | run `clean` before publishing |
+| `delivery-mismatch` | the finished page, the mask it was drawn inside, or the cleaned page under it is not the file `typeset` committed | re-run `typeset`, or restore the page it rendered |
+| `delivery-unverified` | this page was rendered before finished pages were signed, so there is nothing to check the file against | re-run `typeset` to certify it |
 | `annotation-unplaced` | a `bilingual`/`annotate` gloss was produced and nothing reserves a place for it | place it by hand, or use `--sfx-policy translate` to replace the effect instead |
 | `compressed-variant` | a line was shortened to fit and the full-meaning version is recorded beside it | read both, then mark it `reviewed: compressed-variant` |
 | `archive-duplicate-page` | two pages in the package are byte-identical where the export wrote two different ones | re-run `export`; if it repeats, a page failed to write |

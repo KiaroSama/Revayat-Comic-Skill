@@ -13,7 +13,7 @@ folder is the set and the scorer.
 
 | | |
 | --- | --- |
-| `cases.json` | 15 cases across Japanese, Korean, Chinese and English, each with a difficulty tag, a semantic-unit count, the things that must survive the trip, and **several** acceptable Persian renderings |
+| `cases.json` | 20 cases across Japanese, Korean, Chinese and English, each with a difficulty tag, a semantic-unit count, the things that must survive the trip, and **several** acceptable Persian renderings. Five are adversarial controls: a name beginning with `ن` that negates nothing, a free negative, a quantity a larger number must not satisfy, a written-out time, and a line whose referent comes from an earlier page |
 | `build_pages.py` | draws a comic page for each case — two speakers, a balloon, a second balloon for a continuation |
 | `score.py` | scores axis by axis, and refuses to produce one number |
 
@@ -22,7 +22,12 @@ python evaluation/build_pages.py --out evaluation/pages
 python evaluation/score.py --answers my-answers.json
 ```
 
-`--answers` is `{"case-id": "the Persian"}`.
+`--answers` is `{"case-id": "the Persian"}`. `--json` prints the report and returns the same status the text form does; `--complete` additionally fails when a case has no answer, so an evaluation cannot pass by leaving the hard ones out.
+
+A check the scorer cannot decide is reported as `review` rather than scored: a
+Persian word beginning with `ن` may be a negated verb or may be a name, and
+guessing there is how `نادر آمد.` — *Nader came* — was counted as a preserved
+negation.
 
 ## What this set is, and what it is not
 

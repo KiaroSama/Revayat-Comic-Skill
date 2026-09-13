@@ -202,10 +202,19 @@ def test_a_custom_worksheet_folder_is_honoured_by_the_guard(detected, tmp_path):
     ir.write_text(elsewhere / f"{first}.done.txt",
                   ir.read_text(elsewhere / f"{first}.txt"))
 
-    assert context.unmerged_before(detected, doc, second)[0] == [], (
-        "the default folder holds no reply, so there is nothing to report there")
+    # Told where to look, and NOT told: `--out` records the folder, so every
+    # later call reaches it without being reminded. Asking the guard to forget
+    # what the document remembers is how a chapter with a full set of finished
+    # replies was reported as having none.
     assert context.unmerged_before(detected, doc, second,
                                    worksheets=elsewhere)[0] == [first]
+    assert context.unmerged_before(detected, doc, second)[0] == [first]
+
+    # And an explicit argument still wins over the recorded one.
+    empty = tmp_path / "nothing-here"
+    empty.mkdir()
+    assert context.unmerged_before(detected, doc, second,
+                                   worksheets=empty)[0] == []
 
 
 def test_the_package_reports_its_real_size(translated):

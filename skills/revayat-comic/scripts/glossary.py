@@ -71,15 +71,23 @@ def _promote(entry: dict[str, Any], role: str) -> None:
         entry["role"] = role
 
 
-def set_target(entry: dict[str, Any], target: str) -> dict[str, Any]:
+def set_target(entry: dict[str, Any], target: str, *,
+               was_locked: bool | None = None) -> dict[str, Any]:
     """Record a canonical form, keeping the one it replaces.
 
     Only a LOCKED entry has a decision to preserve; an unlocked `target` is
     still a suggestion and overwriting it costs nothing.
+
+    `was_locked` is the approval state BEFORE this update began. Unlocking and
+    renaming in one edit is the ordinary way a decision gets revised, and the
+    caller applied the new `locked` first — so by the time this ran the entry
+    was unlocked, there was "no decision to preserve", and the approved
+    spelling the chapter had been translated against was dropped on the floor.
     """
     target = (target or "").strip()
     previous = (entry.get("target") or "").strip()
-    if entry.get("locked") and previous and previous != target:
+    locked = entry.get("locked") if was_locked is None else was_locked
+    if locked and previous and previous != target:
         entry.setdefault("previous", []).append({
             "target": previous,
             "version": int(entry.get("version") or 1),
@@ -277,20 +285,32 @@ def check(doc_path: str | Path, *, limit: int | None = 30) -> dict[str, Any]:
     }
 
 
-def _affected(doc: dict[str, Any], term: str, previous: str) -> list[str]:
+def _affected(doc: dict[str, Any], term: str, previous: str,
+              entry: dict[str, Any] | None = None) -> list[str]:
     """Approved lines that used the spelling this change replaces.
 
     Not rewritten. A translation is a person's work and a search-and-replace
     through it is how a name ends up inside another word; they are named so
     somebody can look.
+
+    The source side is matched with the SAME alias-aware test `check` uses. It
+    was matched on the headword alone, so a balloon that called the character
+    by an approved alias was left out of the report — and a rename was reported
+    as touching three lines when it touched nine.
     """
     touched = []
+    # The Persian side: the spelling being replaced, plus the approved forms of
+    # it, so a line that used an inflected approved form is found too.
+    spellings = [previous] + [str(form).strip()
+                              for form in ((entry or {}).get("target_forms") or [])
+                              if str(form).strip()]
     for _page, region in ir.iter_regions(doc):
         if region.get("dropped"):
             continue
         target = region.get("target_text") or ""
-        if previous and previous in target and _mentions(
-                term, region.get("source_text") or ""):
+        if not any(spelling and spelling in target for spelling in spellings):
+            continue
+        if _mentions(term, region.get("source_text") or "", entry):
             touched.append(region["id"])
     return touched
 
@@ -306,18 +326,33 @@ def set_entry(doc: dict[str, Any], source: str, record: dict[str, Any]
     """
     entries = doc.setdefault("glossary", {}).setdefault("entries", {})
     entry = entries.setdefault(source, _entry(source))
+    # Snapshotted before anything is applied. Every question about what this
+    # edit REPLACES is asked of the state it found, not of the state it is
+    # half-way through writing.
     previous = (entry.get("target") or "").strip()
+    was_locked = bool(entry.get("locked"))
+    was = dict(entry)
 
     if "locked" in record:
         entry["locked"] = bool(record["locked"])
-    for key in ("role", "note", "aliases"):
+    # `aliases` and `target_forms` are both lists a person writes, and both are
+    # legitimately cleared: a truthiness test meant an empty list was a no-op,
+    # so an alias recorded by mistake could never be removed.
+    # `target_forms` was not copied at all, so `glossary apply` silently
+    # dropped the very field `check` enforces.
+    for key in ("role", "note"):
         if record.get(key):
             entry[key] = record[key]
+    for key in ("aliases", "target_forms"):
+        if key in record:
+            entry[key] = [str(item).strip() for item in (record[key] or [])
+                          if str(item).strip()]
     if "target" in record:
-        set_target(entry, record["target"])
+        set_target(entry, record["target"], was_locked=was_locked)
     return {"term": source, "version": entry.get("version", 1),
             "previous": previous,
-            "affected": (_affected(doc, source, previous)
+            "was_locked": was_locked,
+            "affected": (_affected(doc, source, previous, was)
                          if previous and previous != (entry.get("target") or "")
                          else [])}
 

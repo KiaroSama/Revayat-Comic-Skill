@@ -234,9 +234,26 @@ def japanese_page(width: int = 1000, height: int = 1500):
     column_text = "\u3084\u3081\u308d\u3063\u3066"          # やめろって
     cx = px0 + panel_w * 0.52
     top = py0 + 60 * scale
-    pad_x, pad_y = 42 * scale, 34 * scale
-    draw.ellipse([cx - pad_x, top - pad_y,
-                  cx + 40 * scale + pad_x, top + step * len(column_text) + pad_y],
+    pad_y = 34 * scale
+    # Sized in EMS, because "a manga balloon is drawn around its text with a
+    # margin of roughly half a character" is a statement about characters, not
+    # about ink. Sizing it from the ink instead produced, on a face whose
+    # hiragana are much narrower than their em, a 57-pixel sliver: the column
+    # was still detected, and detected as lettering with no balloon around it.
+    #
+    # The column occupies one em across; the furigana sit about one em to its
+    # right; so the text block is about two ems wide, and half a character on
+    # each side of that is what the ellipse holds.
+    em = font.size
+    furigana = []
+    if small is not None:
+        ry = top + 4 * scale
+        for glyph in "\u3061\u304b\u3089":                    # ちから
+            furigana.append(((cx + 42 * scale, ry), glyph))
+            ry += 21 * scale
+    right = cx + (2.0 * em if furigana else 1.0 * em)
+    draw.ellipse([cx - 0.5 * em, top - pad_y,
+                  right + 0.5 * em, top + step * len(column_text) + pad_y],
                  fill=WHITE, outline=BLACK, width=outline)
     y = top
     for glyph in column_text:
@@ -244,19 +261,16 @@ def japanese_page(width: int = 1000, height: int = 1500):
         y += step
     # Furigana: a smaller column to the *right* of the main one, which is where
     # a reading goes in vertical Japanese.
-    if small is not None:
-        ry = top + 4 * scale
-        for glyph in "\u3061\u304b\u3089":                    # ちから
-            draw.text((cx + 42 * scale, ry), glyph, font=small, fill=BLACK)
-            ry += 21 * scale
+    for position, glyph in furigana:
+        draw.text(position, glyph, font=small, fill=BLACK)
 
     # --- a horizontal balloon, so the page carries both orientations ---------
     px0, py0, _, _ = panels[1]
     line = "\u305d\u3046\u304b\u3001\u3068\u601d\u3046"   # そうか、と思う
-    text_w = 40 * scale * len(line)
     mid = (px0 + panel_w / 2, py0 + 110 * scale)
-    draw.ellipse([mid[0] - text_w / 2 - 34 * scale, mid[1] - 52 * scale,
-                  mid[0] + text_w / 2 + 34 * scale, mid[1] + 52 * scale],
+    box = draw.textbbox(mid, line, font=font, anchor="mm")
+    draw.ellipse([box[0] - 34 * scale, box[1] - 26 * scale,
+                  box[2] + 34 * scale, box[3] + 26 * scale],
                  fill=WHITE, outline=BLACK, width=outline)
     draw.text(mid, line, font=font, fill=BLACK, anchor="mm")
 

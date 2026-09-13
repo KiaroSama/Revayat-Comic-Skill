@@ -369,3 +369,121 @@ def test_drift_accepts_any_approved_persian_form(translated, tmp_path):
     ir.save_doc(doc, translated)
 
     assert glossary.check(translated)["ok"], glossary.check(translated)["drift"]
+
+
+# --- C07: an approved name keeps its history, its aliases and its forms -----
+
+def _named(doc_path, term="ハルカ", target="هاروکا", line="هاروکا آمد."):
+    """One approved name, used by one approved line."""
+    doc = ir.load_doc(doc_path)
+    for _page, region in ir.iter_regions(doc):
+        region["source_text"] = term
+        region["target_text"] = line
+    glossary.set_entry(doc, term, {"target": target, "locked": True,
+                                   "role": "character"})
+    ir.save_doc(doc, doc_path)
+    return doc
+
+
+def test_unlocking_and_renaming_in_one_edit_keeps_the_history(translated):
+    """The ordinary way a decision gets revised. The caller applied the new
+    `locked` first, so by the time the history was considered the entry was
+    unlocked, there was "no decision to preserve", and the spelling the chapter
+    had been translated against was dropped on the floor."""
+    _named(translated)
+    doc = ir.load_doc(translated)
+
+    result = glossary.set_entry(doc, "ハルカ",
+                                {"locked": False, "target": "هاروکه"})
+
+    entry = doc["glossary"]["entries"]["ハルカ"]
+    assert [row["target"] for row in entry["previous"]] == ["هاروکا"]
+    assert entry["version"] == 2 and entry["locked"] is False
+    assert result["was_locked"] is True
+
+
+def test_approving_a_guess_does_not_fabricate_a_history(translated):
+    """The other direction, and it must stay unchanged: an unlocked `target` is
+    a suggestion, and locking one is a first decision, not a second."""
+    doc = ir.load_doc(translated)
+    glossary.set_entry(doc, "ケンジ", {"target": "کنجی"})
+
+    glossary.set_entry(doc, "ケンジ", {"locked": True, "target": "کنجی"})
+
+    entry = doc["glossary"]["entries"]["ケンジ"]
+    assert not entry.get("previous")
+    assert entry["version"] == 1
+
+
+def test_target_forms_survive_apply_save_and_load(translated, tmp_path):
+    """`check` enforces `target_forms`; `apply` silently dropped them, so the
+    documented route could not write the field the gate reads."""
+    table = tmp_path / "names.json"
+    table.write_text(ir.dumps({
+        "ハルカ": {"target": "هاروکا", "locked": True,
+                   "target_forms": ["هاروکای", "هاروکارا"],
+                   "aliases": ["ハル"]},
+    }), encoding="utf-8")
+
+    glossary.apply_file(translated, table)
+
+    entry = ir.load_doc(translated)["glossary"]["entries"]["ハルカ"]
+    assert entry["target_forms"] == ["هاروکای", "هاروکارا"]
+    assert entry["aliases"] == ["ハル"]
+
+
+def test_an_approved_form_is_not_reported_as_drift(translated):
+    doc = ir.load_doc(translated)
+    for _page, region in ir.iter_regions(doc):
+        region["source_text"] = "ハルカ！"
+        region["target_text"] = "هاروکای عزیز آمد."
+    glossary.set_entry(doc, "ハルカ", {"target": "هاروکا", "locked": True,
+                                      "target_forms": ["هاروکای"]})
+    ir.save_doc(doc, translated)
+
+    assert glossary.check(translated)["drift"] == []
+
+
+def test_a_list_field_can_be_cleared(translated):
+    doc = ir.load_doc(translated)
+    glossary.set_entry(doc, "ハルカ", {"target": "هاروکا", "locked": True,
+                                      "aliases": ["ハル"]})
+
+    glossary.set_entry(doc, "ハルカ", {"aliases": []})
+
+    assert doc["glossary"]["entries"]["ハルカ"]["aliases"] == []
+
+
+def test_an_alias_only_mention_is_reported_as_affected(translated):
+    """A balloon that calls the character by an approved alias was left out of
+    the report, so a rename read as touching fewer lines than it did."""
+    doc = ir.load_doc(translated)
+    regions = [region for _page, region in ir.iter_regions(doc)]
+    for region in regions:
+        region["source_text"] = "ハルカ！"
+        region["target_text"] = "هاروکا آمد."
+    # One balloon uses the alias and nothing else.
+    regions[-1]["source_text"] = "ハル！"
+    glossary.set_entry(doc, "ハルカ", {"target": "هاروکا", "locked": True,
+                                      "aliases": ["ハル"]})
+    ir.save_doc(doc, translated)
+    doc = ir.load_doc(translated)
+
+    result = glossary.set_entry(doc, "ハルカ", {"target": "هاروکه"})
+
+    assert regions[-1]["id"] in result["affected"], result
+    assert len(result["affected"]) == len(regions)
+
+
+def test_a_rescan_preserves_the_decision_and_refreshes_the_count(translated):
+    _named(translated)
+    before = ir.load_doc(translated)["glossary"]["entries"]["ハルカ"]
+    assert before["locked"] and before["target"] == "هاروکا"
+
+    glossary.scan(translated)
+
+    after = ir.load_doc(translated)["glossary"]["entries"]["ハルカ"]
+    assert after["locked"] and after["target"] == "هاروکا"
+    # The live numbers live in `counts`, and a rescan refreshes them without
+    # touching the decision beside them.
+    assert after["counts"]["repeated"] >= 1, after
