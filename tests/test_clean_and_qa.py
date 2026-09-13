@@ -644,12 +644,16 @@ def test_qa_reports_a_render_older_than_the_translation_it_shows(finished):
     assert "stale-stage" not in {item["code"] for item in clean_report["findings"]}
 
     doc = ir.load_doc(finished)
-    for region in doc["pages"][0]["regions"]:
-        if region.get("translation"):
-            region["translation"] = region["translation"] + " و باز هم"
-            break
-    else:
-        pytest.skip("this fixture has no translated region to correct")
+    # `target_text`, which is the field a region actually carries. It read
+    # `region["translation"]` — a name nothing in this project has ever used —
+    # so the loop found nothing, the `else` skipped, and the test that exists
+    # to prove a corrected line invalidates its render had never once run. The
+    # prerequisite is now ASSERTED: a `finished` fixture with no translated
+    # region is a broken fixture, not a reason to pass quietly.
+    corrected = [region for region in doc["pages"][0]["regions"]
+                 if (region.get("target_text") or "").strip()]
+    assert corrected, "the finished fixture carries no translated region"
+    corrected[0]["target_text"] += " و باز هم"
     ir.save_doc(doc, finished)
 
     report = qa.check_document(finished)

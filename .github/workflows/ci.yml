@@ -40,12 +40,22 @@ jobs:
       # this the typesetter correctly refuses to draw tofu and every rendering
       # test fails for a reason that has nothing to do with the code.
       # macOS ships Geeza Pro and Windows ships Tahoma, so only Linux needs it.
-      - name: Install a Persian-capable font
+      - name: Install a Persian-capable font and a CJK face
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends fonts-noto-core
+          sudo apt-get install -y --no-install-recommends fonts-noto-core fonts-noto-cjk
           fc-list :lang=fa family | head -5
+          fc-list :lang=ja family | head -5
+
+      # The two capabilities this lane exists to prove are real. A CJK skip in
+      # this job on Linux is refused by `check_skips.py`; this step fails
+      # earlier and says which capability is missing.
+      - name: Assert the shaping and CJK capabilities this lane requires
+        if: runner.os == 'Linux'
+        run: |
+          python -c "import sys; from PIL import features; sys.exit(0) if features.check('raqm') else sys.exit('this Pillow wheel has no RAQM; the required lane must exercise the real shaper, not the fallback')"
+          echo "RAQM: present"
 
       # No runner can *write* a RAR — the format is proprietary and there is no
       # free writer — so `tests/data/real-rar.b64` carries a genuine one and this
@@ -112,7 +122,7 @@ jobs:
   # everything, so the floors could drift years out of date and no build would
   # notice until a user on an older wheel hit it.
   minimum-dependencies:
-    name: declared minimum versions
+    name: literal declared floors
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -121,25 +131,33 @@ jobs:
         with:
           python-version: "3.10"
 
-      # The same font and RAR reader the main test job installs: this job runs
-      # the whole suite, so a skip here is the same loss of coverage it is
-      # there — and `check_skips.py` refuses a RAR skip on Linux.
-      - name: Install a Persian-capable font and a RAR reader
+      # The same fonts and RAR reader the main test job installs: this job
+      # runs the whole suite, so a skip here is the same loss of coverage it is
+      # there — and `check_skips.py` refuses a RAR or CJK skip on Linux.
+      - name: Install the fonts and a RAR reader
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            fonts-noto-core unar libarchive-tools
+            fonts-noto-core fonts-noto-cjk unar libarchive-tools
 
-      # The LOWEST version each floor allows, resolved by asking pip for it.
-      - name: Install the floors
+      # The LITERAL lowest version each requirement declares. `==10.0.*` is a
+      # patch SERIES — pip resolves it to the newest 10.0.x — so this job was
+      # not testing the floor `pillow>=10.0` states, it was testing whichever
+      # patch of that series happened to be last. These are the versions a
+      # user who installs the declared minimum actually gets, and
+      # `floor-versions.txt` records exactly what resolved.
+      - name: Install the literal declared floors
         run: |
           python -m pip install --upgrade pip
           python -m pip install --only-binary=:all: \
-            "pillow==10.0.*" "numpy==1.24.*" "opencv-python-headless==4.8.*" \
-            "pymupdf==1.24.*" "arabic-reshaper==3.0.*" "python-bidi==0.4.*" \
+            "pillow==10.0.0" "numpy==1.24.0" "opencv-python-headless==4.8.0.74" \
+            "pymupdf==1.24.0" "arabic-reshaper==3.0.0" "python-bidi==0.4.0" \
             pytest pytest-timeout rarfile
           python -m pip list --format=freeze > floor-versions.txt
           cat floor-versions.txt
+          # Here rather than at the end: an unsatisfiable declared minimum is a
+          # fact about the requirements file, and it has to fail the job.
+          python -m pip check
 
       - name: Run tests on the floors
         env:
