@@ -10,16 +10,33 @@ import numpy as np
 import pytest
 
 import masks
+import typefont
+import stages
 import pageir as ir
 
 
-def test_a_mask_is_written_for_every_region(detected):
+def test_a_mask_is_written_for_every_region_the_cleaner_may_edit(detected):
+    """The contract is not "every region gets a mask". A region the reader
+    dropped or kept, and a sound effect the POLICY keeps, are artwork — and
+    masking artwork puts it inside the area the cleaner may rewrite and inside
+    the denominator the preservation proof divides by.
+    """
     doc = ir.load_doc(detected)
     root = ir.doc_dir(detected)
+    policy = doc["meta"].get("sfx_policy", "keep")
+    editable = kept = 0
     for _, region in ir.iter_regions(doc):
-        assert region["mask"], f"{region['id']} has no mask"
-        assert (root / region["mask"]).exists()
-        assert region["mask_box"][2] > 0 and region["mask_box"][3] > 0
+        if masks._may_be_edited(region, policy):
+            editable += 1
+            assert region["mask"], f"{region['id']} has no mask"
+            assert (root / region["mask"]).exists()
+            assert region["mask_box"][2] > 0 and region["mask_box"][3] > 0
+        else:
+            kept += 1
+            assert region["mask"] is None, (
+                f"{region['id']} is kept by policy and was masked anyway")
+    assert editable, "the fixture has nothing the cleaner may edit"
+    assert kept, "the fixture no longer exercises a policy-kept region"
 
 
 def test_a_mask_covers_the_lettering(detected):
@@ -100,7 +117,12 @@ def test_the_union_is_the_union(detected):
     union = masks.load_mask(root / page["mask"])
 
     total = np.zeros_like(union)
+    policy = doc["meta"].get("sfx_policy", "keep")
     for region in page["regions"]:
+        # Only the regions that HAVE a mask: the union is the union of the
+        # authority, and a region the policy keeps has none.
+        if not masks._may_be_edited(region, policy):
+            continue
         mask = masks.load_mask(root / region["mask"])
         x, y, w, h = region["mask_box"]
         total[y:y + h, x:x + w] = np.maximum(total[y:y + h, x:x + w], mask)
@@ -125,9 +147,13 @@ def test_excessive_coverage_is_reported(detected):
     """
     doc = ir.load_doc(detected)
     page = doc["pages"][0]
-    page["regions"].append(
-        ir.new_region(f"{page['id']}r900", [10, 10, 900, 1400], kind="sfx")
-    )
+    # `speech`, not `sfx`: the default policy keeps sound effects, and a kept
+    # effect is no longer masked at all — so an `sfx` region would contribute
+    # nothing to coverage and this test would measure the wrong thing.
+    huge = ir.new_region(f"{page['id']}r900", [10, 10, 900, 1400],
+                         kind="speech")
+    huge["target_text"] = "بس کن"
+    page["regions"].append(huge)
     ir.save_doc(doc, detected)
 
     report = masks.build_document(detected, grow=0.01)
@@ -260,3 +286,160 @@ def test_a_panel_sized_component_is_not_accepted_as_a_derived_balloon(detected):
     size = (page["width"], page["height"])
     whole_page = [0, 0, page["width"], page["height"]]
     assert masks.find_balloon(rgb, whole_page, "light", size) is None
+
+
+# --- C01: provenance is page-local and content-bound -------------------------
+
+def test_two_pages_masked_with_different_options_both_stay_current(translated):
+    """One options dict for the whole record meant `mask --pages p0001 --grow 3`
+    followed by `mask --pages p0002 --grow 9` left grow=9 on the record, and
+    page 1's revision — computed with grow=3 — never matched again. Masking two
+    pages differently is the ordinary reason the page selector exists."""
+    doc = ir.load_doc(translated)
+    first, second = doc["pages"][0]["id"], doc["pages"][1]["id"]
+
+    masks.build_document(translated, pages=[first], grow=0.03)
+    masks.build_document(translated, pages=[second], grow=0.09)
+
+    assert stages.stale_pages(ir.load_doc(translated), "masks") == []
+
+
+def test_changing_one_pages_options_stales_only_that_page(translated):
+    masks.build_document(translated)
+    doc = ir.load_doc(translated)
+    first, second = doc["pages"][0]["id"], doc["pages"][1]["id"]
+
+    masks.build_document(translated, pages=[first], grow=0.09)
+
+    # Both are current: each page's recorded revision is the one it ran with.
+    assert stages.stale_pages(ir.load_doc(translated), "masks") == []
+    record = ir.load_doc(translated)["stages"]["masks"]
+    assert record["page_options"][first] != record["page_options"][second]
+
+
+@pytest.mark.parametrize("field", ["keep", "dropped", "erase"])
+def test_a_region_action_invalidates_the_masking_that_depends_on_it(translated,
+                                                                    field):
+    """Keep, drop and erase decide whether the cleaner may touch a region at
+    all. They lived only in the `text` facet, so masking and cleaning were
+    never invalidated by the decision that governs them."""
+    masks.build_document(translated)
+    assert stages.stale_pages(ir.load_doc(translated), "masks") == []
+
+    doc = ir.load_doc(translated)
+    doc["pages"][0]["regions"][0][field] = True
+    ir.save_doc(doc, translated)
+
+    stale = stages.stale_pages(ir.load_doc(translated), "masks")
+    assert stale == [doc["pages"][0]["id"]], stale
+
+
+def test_a_page_mask_mode_changed_underneath_stales_the_cleaning(finished):
+    """`clean` depends on the masks stage's revision, which covers a rebuild.
+    This covers the page's own mask mode being changed WITHOUT one — the case
+    where the cleaner reaches for the tier a solid patch must never reach."""
+    assert stages.stale_pages(ir.load_doc(finished), "clean") == []
+
+    doc = ir.load_doc(finished)
+    doc["pages"][0]["free_lettering_mask"] = "solid"
+    ir.save_doc(doc, finished)
+
+    assert doc["pages"][0]["id"] in stages.stale_pages(
+        ir.load_doc(finished), "clean")
+
+
+def test_removing_every_region_leaves_no_edit_authority(translated):
+    """A rebuild that leaves the previous run's files behind leaves authority
+    behind with them: the union mask still said the cleaner could rewrite most
+    of the page."""
+    masks.build_document(translated)
+    root = ir.doc_dir(translated)
+    doc = ir.load_doc(translated)
+    page = doc["pages"][0]
+    folder = root / "masks" / page["id"]
+    assert list(folder.glob("*.png")), "the fixture wrote no masks"
+
+    page["regions"] = []
+    ir.save_doc(doc, translated)
+    report = masks.build_document(translated, pages=[page["id"]])
+
+    assert report["retired"] > 0, report
+    assert [child.name for child in sorted(folder.iterdir())] == ["union.png"]
+
+    union = np.asarray(ir.load_image(root / "masks" / page["id"] / "union.png"))
+    assert int((union > 0).sum()) == 0, "the union still authorises pixels"
+    assert ir.load_doc(translated)["pages"][0]["mask_coverage"] == 0
+
+
+def test_a_retired_regions_mask_file_is_swept(translated):
+    masks.build_document(translated)
+    root = ir.doc_dir(translated)
+    doc = ir.load_doc(translated)
+    page = doc["pages"][0]
+    orphan = root / "masks" / page["id"] / "r999.png"
+    orphan.write_bytes((root / page["regions"][0]["mask"]).read_bytes())
+
+    masks.build_document(translated, pages=[page["id"]])
+
+    assert not orphan.exists(), "a mask for a region that is gone survived"
+
+
+def test_lettering_the_policy_keeps_is_not_given_cleaning_authority(translated):
+    """A sound effect under `--sfx-policy keep` stays in the artwork by
+    decision, and masking it put artwork inside the area the cleaner may
+    rewrite and inside the preservation denominator."""
+    doc = ir.load_doc(translated)
+    doc["meta"]["sfx_policy"] = "keep"
+    page = doc["pages"][0]
+    page["regions"][0]["kind"] = "sfx"
+    ir.save_doc(doc, translated)
+
+    masks.build_document(translated, pages=[page["id"]])
+
+    region = ir.load_doc(translated)["pages"][0]["regions"][0]
+    assert region["mask"] is None and region["mask_box"] is None
+
+
+def test_an_erase_region_is_masked_even_though_it_takes_no_persian(translated):
+    """"Remove this and put nothing back" is a decision to touch the pixels."""
+    doc = ir.load_doc(translated)
+    page = doc["pages"][0]
+    page["regions"][0].update({"kind": "sfx", "erase": True, "target_text": ""})
+    doc["meta"]["sfx_policy"] = "keep"
+    ir.save_doc(doc, translated)
+
+    masks.build_document(translated, pages=[page["id"]])
+
+    assert ir.load_doc(translated)["pages"][0]["regions"][0]["mask"]
+
+
+def test_an_identical_rerun_keeps_identical_revisions_and_pixels(translated):
+    masks.build_document(translated)
+    doc = ir.load_doc(translated)
+    root = ir.doc_dir(translated)
+    before = ir.dumps(doc["stages"]["masks"])
+    pixels = {path.name: path.read_bytes()
+              for path in sorted((root / "masks" / doc["pages"][0]["id"]).iterdir())}
+
+    masks.build_document(translated)
+
+    after = ir.load_doc(translated)
+    assert ir.dumps(after["stages"]["masks"]) == before
+    assert {path.name: path.read_bytes()
+            for path in sorted((root / "masks" / after["pages"][0]["id"]).iterdir())
+            } == pixels
+
+
+def test_a_font_with_the_same_name_but_different_bytes_is_a_different_render(
+        tmp_path):
+    """Two faces are routinely installed under one basename, and they set a
+    balloon differently. Recording `font_path.name` gave both the same render
+    identity."""
+    first, second = tmp_path / "a" / "F.ttf", tmp_path / "b" / "F.ttf"
+    for path, payload in ((first, b"one"), (second, b"two")):
+        path.parent.mkdir(parents=True)
+        path.write_bytes(payload)
+
+    assert typefont.font_identity(first) != typefont.font_identity(second)
+    assert typefont.font_identity(first) == typefont.font_identity(first)
+    assert typefont.font_identity(first).startswith("F.ttf:")

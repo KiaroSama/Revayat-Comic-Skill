@@ -56,6 +56,7 @@ from typefont import (  # noqa: F401 - re-exported: `typeset.find_font`
     VAZIR_FONTS,                              # tests have always used.
     ZWNJ,
     Shaper,
+    font_identity,
     _numpy,
     _pil,
     _supports_persian,
@@ -468,7 +469,7 @@ def typeset_document(
         # The face and the shaper are options, not results: the same text set
         # in Tahoma instead of Vazir is a different page, and a fallback shaper
         # breaks lines somewhere else.
-        options={"font": font_path.name, "shaping": shaper.mode,
+        options={"font": font_identity(font_path), "shaping": shaper.mode,
                  "max_size": max_size, "min_size": min_size,
                  "stylise": stylise},
         pages=pages)
