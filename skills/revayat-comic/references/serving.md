@@ -82,6 +82,25 @@ The HTTP transport therefore:
   `X-Revayat-Token`. A page in a browser can POST to `localhost`; it cannot read
   a token from the terminal, and it cannot set that header cross-origin without
   a preflight this server never answers.
+- **ends the connection when it rejects a request before reading the body.**
+  The body is still in the socket, and on a keep-alive connection the next read
+  would start in the middle of it — so a rejected call could be followed by a
+  nonsense one the client never sent.
+
+Both transports:
+
+- **bound one message.** A stdio line over 1 MiB is refused unparsed, for the
+  same reason the HTTP body is.
+- **answer a malformed envelope instead of dropping it.** A `jsonrpc` that is
+  not `"2.0"`, a `method` that is not a string, an `id` that is an object, and
+  an explicit `"id": null` all come back as JSON-RPC errors. Only a message
+  with no `id` at all is a notification, which the protocol forbids answering —
+  treating a null id as one left clients waiting for a reply that was never
+  coming.
+- **treat a stage's failure as an answer.** A corrupt archive, a path the
+  process cannot read, a full disk: all of them come back as
+  `{"ok": false, "kind": "stage-failed"}`. Only a shutdown you asked for ends
+  the loop.
 
 ```bash
 curl -s -H "X-Revayat-Token: $TOKEN" http://127.0.0.1:8765/tools

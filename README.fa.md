@@ -241,6 +241,7 @@ pip install -r skills/revayat-comic/requirements.txt
 python -m pytest tests -q
 python tests/e2e_pipeline.py
 python -m ruff check skills/revayat-comic/scripts tests
+python evaluation/score.py --answers my-answers.json
 ```
 
 </div>

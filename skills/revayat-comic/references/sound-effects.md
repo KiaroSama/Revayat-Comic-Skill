@@ -45,10 +45,15 @@ the inpainter, and the result is only as good as that reconstruction. Check
 
 ### `bilingual`
 
-The original stays, and a smaller Persian gloss is added beside it.
+The original stays and the Persian is produced — but **nothing reserves a place
+to draw it**, so it is recorded against the page under `annotations` and `qa`
+raises `annotation-unplaced` naming the region. It is not printed over the
+effect it was supposed to sit beside: that is neither of the two things this
+policy promises, and it was what happened.
 
-Right for: study and reference editions, and readers learning Japanese. Wrong
-for: a busy page, where it adds clutter to artwork that is already full.
+Right for: study and reference editions where you place the gloss yourself, or
+ship it as a note track. Wrong for: expecting a finished bilingual page out of
+the box — use `translate` if you want the effect replaced.
 
 ### `annotate`
 
