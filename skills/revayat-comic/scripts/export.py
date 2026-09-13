@@ -59,6 +59,14 @@ def _dependencies(doc: dict[str, Any], root: Path, doc_path: Path) -> set[Path]:
     `work/pages/../pages/p0001.png` and a symlink alias name the same bytes.
     """
     found = {doc_path.resolve()}
+    # The container this chapter was imported from. Not a working file, and
+    # that is exactly why it belongs here: everything else under `root` can be
+    # rebuilt from it, and it cannot be rebuilt from anything.
+    origin = (doc.get("source") or {}).get("path")
+    if isinstance(origin, str) and origin:
+        candidate = Path(origin)
+        if candidate.exists():
+            found.add(candidate.resolve())
     for page in doc.get("pages", []):
         for key in ("image", "clean", "final", "mask", "writable"):
             relative = page.get(key)
@@ -251,6 +259,78 @@ def _export_pdf(doc: dict[str, Any], root: Path, out: Path,
                          for index, page in enumerate(doc["pages"])]}
 
 
+def _pending_path(doc_path: Path) -> Path:
+    """Where an export records the stamp it is about to commit."""
+    return doc_path.with_name(doc_path.name + ".export-pending.json")
+
+
+def reconcile_pending(doc_path: str | Path) -> dict[str, Any] | None:
+    """Apply a stamp a previous export wrote out but could not commit.
+
+    The package and the document that describes it are two writes, and the
+    second one can fail — a full disk, a document open elsewhere. Then the
+    folder holds this edition and `comic.json` describes the last one, and
+    `qa package` compares the new files against the old manifest and reports
+    them all as wrong.
+
+    So the stamp is staged beside the document BEFORE the output is published
+    and removed once it is committed. One left behind is the record of an
+    interrupted export, and this puts it in.
+    """
+    doc_path = Path(doc_path)
+    pending = _pending_path(doc_path)
+    if not pending.is_file():
+        return None
+    import json
+
+    record = json.loads(ir.read_text(pending))
+    doc = ir.load_doc(doc_path)
+    stages.stamp_stage(doc, "export", record["result"],
+                       options=record["options"])
+    ir.save_doc(doc, doc_path)
+    pending.unlink(missing_ok=True)
+    return record
+
+
+def _restore(out: Path, replaced: Path, promoted: list[str],
+             backed_up: list[str]) -> bool:
+    """Put the previous edition back. Returns whether it is safe to discard it.
+
+    Every file this run promoted is removed and every file it moved aside is
+    put back — the two lists differ, because a file can be backed up and then
+    fail to be replaced.
+
+    A restore that itself fails leaves the backup where it is: it is then the
+    only copy of the operator's previous edition, and deleting it to tidy up
+    after a failed rollback would turn a recoverable failure into a loss. A
+    recovery note beside it says what the files are.
+    """
+    intact = True
+    for name in reversed(promoted):
+        try:
+            (out / name).unlink(missing_ok=True)
+        except OSError:
+            intact = False
+    for name in reversed(backed_up):
+        kept = replaced / name
+        if not kept.exists():
+            continue
+        try:
+            kept.replace(out / name)
+        except OSError:
+            intact = False
+    if not intact:
+        try:
+            ir.write_text(replaced / "RECOVERY.txt",
+                          "This folder holds the previous edition of files an "
+                          "export moved aside. The export failed AND putting "
+                          "them back failed, so they were kept here rather "
+                          "than deleted. Move them back by hand.\n")
+        except OSError:
+            pass
+    return intact
+
+
 def _export_dir(doc: dict[str, Any], root: Path, out: Path,
                 quality: int, draft: bool = False) -> dict[str, Any]:
     out.mkdir(parents=True, exist_ok=True)
@@ -285,6 +365,9 @@ def _export_dir(doc: dict[str, Any], root: Path, out: Path,
     staging = _scratch(out, "part")
     staging.mkdir(parents=True, exist_ok=False)
     replaced = _scratch(out, "kept")
+    # Set before the try, because the cleanup below reads it on every path —
+    # including a failure that happens before a single file has been promoted.
+    rolled_back = True
     try:
         for page in doc["pages"]:
             source = _page_source(root, page)
@@ -301,23 +384,28 @@ def _export_dir(doc: dict[str, Any], root: Path, out: Path,
         # folder that looked finished.
         replaced.mkdir(parents=True, exist_ok=False)
         promoted: list[str] = []
+        backed_up: list[str] = []
         try:
             for child in sorted(staging.iterdir()):
                 target = out / child.name
                 if target.exists():
                     target.replace(replaced / child.name)
+                    # Journalled HERE, before the promotion that may fail.
+                    # Recording it afterwards meant the one file whose
+                    # promotion raised had its previous edition moved aside,
+                    # left out of the rollback list, and then deleted by the
+                    # `finally` below — the operator's current file destroyed
+                    # by a failure that changed nothing else.
+                    backed_up.append(child.name)
                 child.replace(target)
                 promoted.append(child.name)
         except BaseException:
-            for name in reversed(promoted):
-                (out / name).unlink(missing_ok=True)
-                kept = replaced / name
-                if kept.exists():
-                    kept.replace(out / name)
+            rolled_back = _restore(out, replaced, promoted, backed_up)
             raise
     finally:
         shutil.rmtree(staging, ignore_errors=True)
-        shutil.rmtree(replaced, ignore_errors=True)
+        if rolled_back:
+            shutil.rmtree(replaced, ignore_errors=True)
     return {"format": "dir", "path": str(out), "pages": len(doc["pages"]),
             "manifest": manifest}
 
@@ -336,6 +424,11 @@ def export_document(
         fmt = {".cbz": "cbz", ".zip": "cbz", ".pdf": "pdf"}.get(suffix, "dir")
     if fmt not in FORMATS:
         raise ValueError(f"unknown format {fmt!r}; expected one of {FORMATS}")
+    # An export that could not commit its own stamp last time. Reconciled
+    # before this one starts, so the document never describes an edition older
+    # than the files beside it.
+    if reconcile_pending(doc_path) is not None:
+        doc = ir.load_doc(doc_path)
     _refuse_collisions(doc, root, doc_path, out, fmt)
 
     # Resolved before a byte is written, because the fallback is silent: a
@@ -373,6 +466,7 @@ def export_document(
 
     writers = {"cbz": _export_cbz, "pdf": _export_pdf, "dir": _export_dir}
     report = writers[fmt](doc, root, out, quality, draft)
+    staged_stamp = _pending_path(doc_path)
 
     # Counted from what was actually written, not from what the document says
     # exists. A recorded `final` whose file has been deleted is not a
@@ -404,15 +498,19 @@ def export_document(
             f"{report['original_pages']} page(s) had no translated text and "
             "were exported exactly as they arrived."
         )
-    stages.stamp_stage(doc, "export",
-                       {"format": fmt, "path": str(out),
-                        # What was shipped, so `qa package` can check the
-                        # package against it rather than against a sort of its
-                        # own file names.
-                        "manifest": report.get("manifest") or []},
-                       options={"format": fmt, "quality": quality,
-                                "draft": draft})
+    result = {"format": fmt, "path": str(out),
+              # What was shipped, so `qa package` can check the package
+              # against it rather than against a sort of its own file names.
+              "manifest": report.get("manifest") or []}
+    options = {"format": fmt, "quality": quality, "draft": draft}
+    # Staged first, committed second, removed third. A crash between the
+    # package landing and the document being saved used to leave the two
+    # permanently disagreeing with nothing on disk that said so.
+    ir.write_text(staged_stamp, ir.dumps({"result": result,
+                                          "options": options}) + "\n")
+    stages.stamp_stage(doc, "export", result, options=options)
     ir.save_doc(doc, doc_path)
+    staged_stamp.unlink(missing_ok=True)
     return report
 
 
