@@ -197,7 +197,19 @@ def _policy_facet(doc: dict[str, Any]) -> str:
     """
     meta = doc.get("meta", {})
     digest = hashlib.sha256()
-    for key in ("sfx_policy", "free_lettering_mask", "reading_direction"):
+    # `free_lettering_mask` is NOT here, and that is the point. It is a
+    # per-page decision — `mask --pages p0001 --free-lettering solid` is the
+    # ordinary reason the selector exists — and every run writes the mode it
+    # used to `meta` as the document default. Hashing the document value into a
+    # facet every page shares meant masking the second page rewrote a number
+    # the first page's revision was computed from, so the first went stale for
+    # a change that never touched it.
+    #
+    # Where the page's own mode lives instead: in `page_options` for `masks`
+    # (the run's effective options, recorded per page) and in the `masked`
+    # facet for `clean` (the page's own `free_lettering_mask`). Both are
+    # per-page, so two legitimate settings coexist.
+    for key in ("sfx_policy", "reading_direction"):
         digest.update(f"{key}={meta.get(key)!r}|".encode("utf-8"))
     return digest.hexdigest()
 
@@ -282,7 +294,10 @@ def stamp_stage(doc: dict[str, Any], stage: str, detail: dict[str, Any], *,
     """
     recorded = doc.setdefault("stages", {})
     previous = recorded.get(stage) or {}
-    selected = None if not pages else set(pages)
+    # `None` is "every page"; an empty list is "no pages". They were the same
+    # thing, so `--pages ""` — which is what an empty shell variable expands to
+    # — stamped every page as freshly done when none of them had run.
+    selected = None if pages is None else set(pages)
     current = {page["id"] for page in doc.get("pages", [])}
     per_page = {pid: rev for pid, rev in (previous.get("pages") or {}).items()
                 if pid in current}

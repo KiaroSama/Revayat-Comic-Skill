@@ -107,7 +107,7 @@ def read_document(
     per_page: list[dict[str, Any]] = []
 
     for page in doc["pages"]:
-        if pages and page["id"] not in pages:
+        if pages is not None and page["id"] not in pages:
             continue
         regions = [r for r in page.get("regions", []) if not r.get("dropped")]
         if not regions:

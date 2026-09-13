@@ -32,6 +32,37 @@ from typing import Any
 SFX_KEEP_POLICIES = frozenset({"keep", "bilingual", "annotate"})
 
 
+#: What a page carries because work was done ON its regions. Every one of them
+#: is meaningless once the last region is gone.
+DERIVED_FROM_REGIONS = ("clean", "final", "writable", "delivery")
+
+
+def restore_blank_page(page: dict[str, Any]) -> list[str]:
+    """The terminal state of a page whose last region has been removed.
+
+    A page with no regions has nothing to repair and nothing to draw, so what a
+    reader gets is the page that was imported. `clean` and `typeset` simply
+    SKIPPED such a page, which left the previous run's repaired image and
+    rendered text on disk and still referenced — a page claiming work that its
+    own contents say was never needed.
+
+    Nothing is invented here: no text, no placement, no substitute image. The
+    references derived from regions are dropped, so `export` ships the
+    immutable original, which is the only honest answer.
+
+    Returns what it cleared, so a caller can report a transition rather than a
+    silent rewrite. Idempotent: a page already in this state clears nothing.
+    """
+    cleared = []
+    for key in DERIVED_FROM_REGIONS:
+        if page.pop(key, None) is not None:
+            cleared.append(key)
+    if page.get("annotations"):
+        page["annotations"] = []
+        cleared.append("annotations")
+    return cleared
+
+
 def add_audit(region: dict[str, Any], note: str) -> None:
     """Record something a STAGE observed about this region.
 

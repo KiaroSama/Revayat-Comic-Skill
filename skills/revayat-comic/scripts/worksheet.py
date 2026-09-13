@@ -206,7 +206,7 @@ def build_document(
     written: list[str] = []
     empty: list[str] = []
     for page in doc["pages"]:
-        if pages and page["id"] not in pages:
+        if pages is not None and page["id"] not in pages:
             continue
         if not page.get("regions"):
             # Written anyway. `@@ +slug` is the one way to recover text the
