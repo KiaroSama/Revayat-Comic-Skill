@@ -51,6 +51,10 @@ class MangaOcr:
 
     name = "manga-ocr"
 
+    #: One published model, loaded by name. Recorded so a chapter read by a
+    #: future version of it is not resumed as though nothing had changed.
+    model = "kha-white/manga-ocr-base"
+
     def __init__(self) -> None:
         self._model: Any = None
 
@@ -113,6 +117,35 @@ HOSTED_CONFIDENCE = 0.7
 #: away. Not imported from `clean`, because an adapter reaching into a pipeline
 #: stage inverts the layering; `test_adapters.py` asserts the ordering instead.
 IMAGE_EDIT_TIMEOUT = 150.0
+
+
+#: Bumped when the wording of a system message changes. The prompt is part of
+#: the question: the same source line under different instructions is a
+#: different request, and a resume that cannot see the difference keeps an
+#: answer produced under instructions nobody is giving any more.
+PROMPT_VERSION = "1"
+
+
+def endpoint_identity() -> str:
+    """Which service is being asked, with nothing secret in it.
+
+    Scheme, host, port and path — never the userinfo, the query or a fragment,
+    any of which can carry a token. An endpoint that is unset is named as such
+    rather than guessed at: a run with no endpoint is a run that will fail, and
+    calling that the same request as a configured one is worse than saying so.
+    """
+    import os
+    import urllib.parse
+
+    base = (os.environ.get(API_BASE) or "").strip()
+    if not base:
+        return "unset"
+    split = urllib.parse.urlsplit(base)
+    host = split.hostname or ""
+    if split.port:
+        host = f"{host}:{split.port}"
+    return urllib.parse.urlunsplit(
+        (split.scheme, host, split.path.rstrip("/"), "", ""))
 
 
 def _endpoint(path: str) -> str:
@@ -304,6 +337,19 @@ class HostedTranslation:
 
     name = "openai-compatible"
 
+    def descriptor(self) -> dict:
+        """The request this adapter would make now, as configuration.
+
+        Read at call time, exactly as `translate` reads it, because that is the
+        point: the model lives in an environment variable and nowhere on this
+        object, so nothing about the instance changed when it changed.
+        """
+        import os
+
+        return {"model": os.environ.get(TRANSLATION_MODEL) or "unset",
+                "endpoint": endpoint_identity(),
+                "prompt_version": PROMPT_VERSION}
+
     def translate(self, source: str, context: dict):
         import json
         import os
@@ -401,6 +447,14 @@ class HostedImageEdit:
     """
 
     name = "openai-compatible-image"
+
+    def descriptor(self) -> dict:
+        """Same reason as the translator: both values live in the environment
+        and neither of them is an attribute of this object."""
+        import os
+
+        return {"model": os.environ.get(IMAGE_MODEL) or "unset",
+                "endpoint": endpoint_identity()}
 
     def repair(self, page_png: bytes, mask_png: bytes, instructions: str):
         import base64

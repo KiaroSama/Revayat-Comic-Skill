@@ -31,8 +31,11 @@ Two rules for anyone adding a fixture here:
 
 from __future__ import annotations
 
+import json
 import shutil
 import sys
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -42,6 +45,112 @@ sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from tests_support import manga_page, page_bytes, write_cbz  # noqa: E402
+
+import adapters  # noqa: E402 - the scripts directory is on the path above
+
+
+# --------------------------------------------------------------------------- #
+# A loopback OpenAI-compatible endpoint
+#
+# Here rather than in one suite because two need it: the adapter boundary, and
+# what a recorded answer is an answer TO. No key and no network - the server is
+# a `ThreadingHTTPServer` on a free port of 127.0.0.1, and every request it
+# receives is kept so a test can assert what was actually asked.
+# --------------------------------------------------------------------------- #
+
+def _parse_multipart(content_type: str, body: bytes) -> dict[str, bytes]:
+    """The parts of a `multipart/form-data` body, by field name.
+
+    Hand-rolled on purpose: `email`'s parser re-encodes a binary part, and the
+    thing under test here is whether a PNG arrived intact.
+    """
+    boundary = content_type.split("boundary=")[1].strip().encode()
+    parts: dict[str, bytes] = {}
+    for chunk in body.split(b"--" + boundary):
+        if not chunk.strip(b"-\r\n"):
+            continue  # the preamble and the closing `--`
+        head, _, payload = chunk.partition(b"\r\n\r\n")
+        name = head.decode("utf-8", "replace").split('name="')[1].split('"')[0]
+        parts[name] = payload[:-2] if payload.endswith(b"\r\n") else payload
+    return parts
+
+
+class _Endpoint:
+    """An OpenAI-compatible server that answers however a test needs it to."""
+
+    def __init__(self):
+        self.requests: list[dict] = []
+        self.chat = {"choices": [{"message": {"content": "بس کن"}}]}
+        self.image: dict | None = None
+        self.status = 200
+
+    def serve(self):
+        endpoint = self
+
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def do_POST(self):  # noqa: N802 - BaseHTTPRequestHandler's name
+                length = int(self.headers.get("Content-Length") or 0)
+                raw = self.rfile.read(length)
+                kind = self.headers.get("Content-Type", "")
+                if self.path.endswith("images/edits"):
+                    # `images/edits` is multipart, and this server now refuses
+                    # anything else. It used to read JSON from every path, and
+                    # that is the whole reason a JSON image request looked like
+                    # it worked for as long as it did: nothing but this handler
+                    # had ever accepted one.
+                    if not kind.startswith("multipart/form-data"):
+                        endpoint.requests.append(
+                            {"path": self.path, "refused": kind})
+                        self.send_response(400)
+                        self.send_header("Content-Length", "0")
+                        self.end_headers()
+                        return
+                    payload = _parse_multipart(kind, raw)
+                else:
+                    payload = json.loads(raw.decode("utf-8"))
+                endpoint.requests.append({
+                    "path": self.path,
+                    "authorization": self.headers.get("Authorization"),
+                    "content_type": kind,
+                    "payload": payload,
+                })
+                if endpoint.status != 200:
+                    self.send_response(endpoint.status)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                answer = (endpoint.image if self.path.endswith("images/edits")
+                          else endpoint.chat)
+                body = json.dumps(answer).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_args):
+                """No access log: it goes to stderr on every request."""
+
+        self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        return f"http://127.0.0.1:{self.httpd.server_address[1]}/v1"
+
+
+@pytest.fixture
+def endpoint(monkeypatch):
+    server = _Endpoint()
+    base = server.serve()
+    monkeypatch.setenv(adapters.API_BASE, base)
+    monkeypatch.setenv(adapters.TRANSLATION_MODEL, "a-model")
+    monkeypatch.setenv(adapters.IMAGE_MODEL, "an-image-model")
+    monkeypatch.delenv(adapters.API_KEY, raising=False)
+    try:
+        yield server
+    finally:
+        server.httpd.shutdown()
+        server.httpd.server_close()
 
 
 def _clone(template: Path, destination: Path) -> Path:
