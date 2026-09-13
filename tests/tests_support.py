@@ -185,14 +185,10 @@ def cjk_font(size: int):
     return None
 
 
-def _ink_width(draw, text: str, font) -> float:
-    """How wide this face really draws these characters.
-
-    The fixture used to multiply the em size by the character count, which is
-    right for a monospaced face and wrong for every other one.
-    """
-    box = draw.textbbox((0, 0), text, font=font)
-    return max(1.0, box[2] - box[0])
+def _union(boxes):
+    """The smallest box holding all of them."""
+    return (min(box[0] for box in boxes), min(box[1] for box in boxes),
+            max(box[2] for box in boxes), max(box[3] for box in boxes))
 
 
 def japanese_page(width: int = 1000, height: int = 1500):
@@ -245,14 +241,28 @@ def japanese_page(width: int = 1000, height: int = 1500):
     cx = px0 + panel_w * 0.52
     top = py0 + 60 * scale
     pad_x, pad_y = 42 * scale, 34 * scale
-    # MEASURED, not assumed. `40 * scale` was the em size asked for, which is
-    # not the width a proportional CJK face actually draws — on Noto Sans CJK
-    # the balloon came out wider than its text, the interior fell under the
-    # detector's `ink_min`, and the balloon stopped being one. A real manga
-    # balloon is drawn around its text, so this one is too.
-    glyph_w = max(_ink_width(draw, glyph, font) for glyph in column_text)
-    draw.ellipse([cx - pad_x, top - pad_y,
-                  cx + glyph_w + pad_x, top + step * len(column_text) + pad_y],
+    # Every glyph that will be inside this balloon, measured where it is
+    # actually drawn — the column and the furigana beside it. Multiplying the
+    # em size by the character count is right for a monospaced face and wrong
+    # for every other one: on Noto Sans CJK the ellipse came out wider than its
+    # text, the interior fell under the detector's `ink_min`, and the balloon
+    # stopped being a balloon. A real manga balloon is drawn around its text,
+    # so this one is too.
+    inside = []
+    y = top
+    for glyph in column_text:
+        inside.append(draw.textbbox((cx, y), glyph, font=font))
+        y += step
+    furigana = []
+    if small is not None:
+        ry = top + 4 * scale
+        for glyph in "\u3061\u304b\u3089":                    # ちから
+            furigana.append(((cx + 42 * scale, ry), glyph))
+            inside.append(draw.textbbox(furigana[-1][0], glyph, font=small))
+            ry += 21 * scale
+    box = _union(inside)
+    draw.ellipse([box[0] - pad_x, box[1] - pad_y,
+                  box[2] + pad_x, box[3] + pad_y],
                  fill=WHITE, outline=BLACK, width=outline)
     y = top
     for glyph in column_text:
@@ -260,19 +270,16 @@ def japanese_page(width: int = 1000, height: int = 1500):
         y += step
     # Furigana: a smaller column to the *right* of the main one, which is where
     # a reading goes in vertical Japanese.
-    if small is not None:
-        ry = top + 4 * scale
-        for glyph in "\u3061\u304b\u3089":                    # ちから
-            draw.text((cx + 42 * scale, ry), glyph, font=small, fill=BLACK)
-            ry += 21 * scale
+    for position, glyph in furigana:
+        draw.text(position, glyph, font=small, fill=BLACK)
 
     # --- a horizontal balloon, so the page carries both orientations ---------
     px0, py0, _, _ = panels[1]
     line = "\u305d\u3046\u304b\u3001\u3068\u601d\u3046"   # そうか、と思う
-    text_w = _ink_width(draw, line, font)
     mid = (px0 + panel_w / 2, py0 + 110 * scale)
-    draw.ellipse([mid[0] - text_w / 2 - 34 * scale, mid[1] - 52 * scale,
-                  mid[0] + text_w / 2 + 34 * scale, mid[1] + 52 * scale],
+    box = draw.textbbox(mid, line, font=font, anchor="mm")
+    draw.ellipse([box[0] - 34 * scale, box[1] - 26 * scale,
+                  box[2] + 34 * scale, box[3] + 26 * scale],
                  fill=WHITE, outline=BLACK, width=outline)
     draw.text(mid, line, font=font, fill=BLACK, anchor="mm")
 
