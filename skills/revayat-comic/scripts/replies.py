@@ -52,8 +52,37 @@ def _is_comment(raw: str) -> bool:
 
 
 def _unescape(line: str) -> str:
-    """A leading '\\#' is a literal `#`, so a balloon can start with one."""
-    return line[1:] if line.startswith("\\#") else line
+    """One leading backslash escapes the whole line.
+
+    It began as `\\#` alone, which covered a balloon starting with a hash and
+    nothing else: a continuation line reading `fa: بله` was still parsed as a
+    second `fa:` field — a duplicate, so the page was refused — and one reading
+    `@@ چی` started a new block and swallowed the rest of the balloon. Any line
+    the protocol would otherwise claim is written with a backslash in front of
+    it, and `\\\\` is a literal backslash.
+    """
+    return line[1:] if line.startswith("\\") else line
+
+
+def escape(line: str) -> str:
+    """The inverse, applied by whoever writes a value line into a sheet."""
+    if (line.startswith("\\")
+            or (line.startswith("#") and (len(line) == 1 or line[1] in " \t"))
+            or HEADER.match(line) or FIELD.match(line)):
+        return "\\" + line
+    return line
+
+
+def field_lines(name: str, value: str) -> list[str]:
+    """`name: value`, with every continuation line escaped.
+
+    The first line needs nothing — it is already behind `name: ` — and every
+    line after it is at the start of a line, where the protocol is looking.
+    """
+    first, _, rest = str(value).partition("\n")
+    out = [f"{name}: {first}"]
+    out += [escape(line) for line in rest.split("\n")] if rest else []
+    return out
 
 
 #: Fields a block may legitimately carry more than once. `note:` is the only
@@ -144,6 +173,22 @@ def _set_or_clear(region: dict[str, Any], block: dict[str, str],
         region.pop(key, None)
 
 
+def _clear_previous_outcome(region: dict[str, Any]) -> None:
+    """Drop what an EARLIER decision produced, keeping the audit record.
+
+    A new answer about a region invalidates the old answer's results: the
+    render, the cleaner's verdict, the measurement taken off a box that has
+    since moved. Leaving them made a resolved problem permanent — `clean`
+    refused a solid patch, the reader answered `keep: yes`, and the refusal
+    stayed on the region and blocked publication for ever, because nothing
+    that ran afterwards had any reason to touch it.
+
+    `audit` is deliberately not cleared: what happened, happened.
+    """
+    region["typeset"] = {}
+    region.pop("clean_status", None)
+
+
 def _apply(region: dict[str, Any], block: dict[str, str],
            report: dict[str, list[str]]) -> bool:
     # Checked together, before any of them is acted on. `drop` returned
@@ -160,12 +205,15 @@ def _apply(region: dict[str, Any], block: dict[str, str],
         region["dropped"] = True
         region["target_text"] = ""
         region["source_text"] = ""
-        # Forget what an earlier run did to it. A region dropped after it had
-        # already been cleaned and typeset kept that run's `fill` and `typeset`
-        # records, and those stale values then spoke for a region nobody was
-        # cleaning any more.
+        _clear_previous_outcome(region)
+        # `keep` and `erase` are the two answers this one replaces, and the
+        # early return left them standing: a region kept and then dropped
+        # carried both, the rebuilt sheet printed `drop: yes` beside
+        # `keep: yes`, and every later merge refused the page as contradicting
+        # itself — a state no reader could get out of.
+        region.pop("keep", None)
+        region.pop("erase", None)
         region["fill"] = "none"
-        region["typeset"] = {}
         report["dropped"].append(region["id"])
         return True
 
@@ -179,6 +227,7 @@ def _apply(region: dict[str, Any], block: dict[str, str],
     kept = "keep" in asked
     if kept:
         region["keep"] = True
+        region.pop("erase", None)
     else:
         region.pop("keep", None)
 
@@ -253,7 +302,7 @@ def _apply(region: dict[str, Any], block: dict[str, str],
     if kept:
         region["target_text"] = ""
         region["fill"] = "none"
-        region["typeset"] = {}
+        _clear_previous_outcome(region)
         # A keep IS a review — the reader looked at the region and decided.
         # Without this the decision reads as "never reviewed": `qa` warns
         # `low-confidence-region` on it and a later `detect` run is free to
@@ -264,7 +313,8 @@ def _apply(region: dict[str, Any], block: dict[str, str],
 
     if erased:
         region["target_text"] = ""
-        region["typeset"] = {}
+        _clear_previous_outcome(region)
+        region.pop("fill", None)
         # Deliberately NOT `fill = "none"`. That is what `keep` sets to tell the
         # cleaner to leave the pixels alone, and it is the opposite of what this
         # asks for: an erase region goes through the ordinary tier ladder —
@@ -287,6 +337,17 @@ def _apply(region: dict[str, Any], block: dict[str, str],
     return bool(target)
 
 
+def _owes_persian(region: dict[str, Any], policy: str) -> bool:
+    """Is a missing translation a hole here, or the answer?
+
+    The added-box path asked its own narrower version of this — dropped or
+    kept — so a box the reader added purely to ERASE a watermark, and a sound
+    effect a policy keeps, were both reported as untranslated work. They are
+    finished; `ir.translatable` has always known it, and now both paths ask it.
+    """
+    return not region.get("dropped") and ir.translatable(region, policy)
+
+
 def _next_region_id(page: dict[str, Any]) -> str:
     """The next free `pNNNNrMMM` on this page."""
     used = 0
@@ -298,7 +359,8 @@ def _next_region_id(page: dict[str, Any]) -> str:
 
 
 def _add_region(page: dict[str, Any], slug: str, block: dict[str, str],
-                report: dict[str, Any]) -> bool:  # noqa: C901 - one flow, read top to bottom
+                report: dict[str, Any],
+                policy: str = "keep") -> bool:  # noqa: C901 - one flow, read top to bottom
     """Create a region the detector never found, from a `box:` the reader read.
 
     The counterpart to `drop`, and the page needs both. Detection returns the
@@ -357,11 +419,17 @@ def _add_region(page: dict[str, Any], slug: str, block: dict[str, str],
         if moved:
             for derived in ("balloon", "mask", "mask_box"):
                 existing[derived] = None
+            # `lettering` too. It is the measurement of the ink inside the OLD
+            # box — stroke weight, curve, the shape `typeset` renders the
+            # Persian into — and it survived a correction that moved the box
+            # somewhere else entirely, so the effect was set in the geometry of
+            # whatever used to be there.
+            existing.pop("lettering", None)
             existing["fill"] = "none"
-            existing["typeset"] = {}
+            _clear_previous_outcome(existing)
         _apply(existing, block, report)
         filled = bool((existing.get("target_text") or "").strip())
-        if not filled and not existing.get("dropped") and not existing.get("keep"):
+        if not filled and _owes_persian(existing, policy):
             report["empty_translation"].append(existing["id"])
         return filled
 
@@ -379,7 +447,7 @@ def _add_region(page: dict[str, Any], slug: str, block: dict[str, str],
     _apply(region, block, report)
     report["added"].append(f"{region['id']} ({slug})")
     filled = bool((region.get("target_text") or "").strip())
-    if not filled and not region.get("dropped") and not region.get("keep"):
+    if not filled and _owes_persian(region, policy):
         # A box the reader added with no Persian in it is exactly as unfinished
         # as a detected balloon with no Persian in it, and reported as clean.
         report["empty_translation"].append(region["id"])
@@ -437,7 +505,8 @@ def _apply_page(page: dict[str, Any], blocks: dict[str, dict[str, str]],
             report["empty_translation"].append(region["id"])
 
     for slug in additions:
-        if _add_region(page, slug[1:] or "added", blocks[slug], report):
+        if _add_region(page, slug[1:] or "added", blocks[slug], report,
+                       policy):
             merged += 1
     if additions:
         # A new box changes what comes before what, and it has no mask yet.

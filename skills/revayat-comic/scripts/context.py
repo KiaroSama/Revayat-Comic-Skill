@@ -204,7 +204,7 @@ def unmerged_before(doc_path: Path, doc: dict[str, Any],
 
     Returns the offending page ids, nearest first. Empty is the good case.
     """
-    folder = Path(worksheets) if worksheets else doc_path.parent / "worksheets"
+    folder = ir.worksheet_folder(doc_path, doc, worksheets)
     if not folder.is_dir():
         return [], []
     behind: list[str] = []
@@ -247,10 +247,7 @@ def worksheet_folder(doc_path: Path, doc: dict[str, Any],
     who keeps replies somewhere else got an empty answer from every guard —
     the folder was not there, so nothing was unmerged, so nothing was refused.
     """
-    if worksheets:
-        return Path(worksheets)
-    recorded = (doc.get("meta") or {}).get("worksheets")
-    return Path(recorded) if recorded else doc_path.parent / "worksheets"
+    return ir.worksheet_folder(doc_path, doc, worksheets)
 
 
 def preflight(doc_path: Path, doc: dict[str, Any], page_id: str, *,
