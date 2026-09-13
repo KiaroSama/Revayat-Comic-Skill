@@ -634,8 +634,11 @@ def _solid_free_page(doc_path, *, box=(120, 140, 300, 120), doc_mode="solid",
         doc_path, mask=np.full((box[3], box[2]), 255, np.uint8), box=box)
     doc = ir.load_doc(doc_path)
     doc["meta"]["free_lettering_mask"] = doc_mode
-    if page_mode is not None:
-        doc["pages"][0]["free_lettering_mask"] = page_mode
+    # The PAGE carries what its own masks were built as — `mask` writes it as
+    # it builds them, which is the only moment it is known. This fixture builds
+    # the mask by hand, so it says so by hand.
+    doc["pages"][0]["free_lettering_mask"] = (
+        doc_mode if page_mode is None else page_mode)
     ir.save_doc(doc, doc_path)
     return page, region
 

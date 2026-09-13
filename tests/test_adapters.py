@@ -682,3 +682,25 @@ def test_no_adapters_flag_is_advertised():
     Registration is automatic now, so there is nothing to advertise."""
     assert "--adapters" not in (adapters.__doc__ or "").replace(
         "There is no `--adapters` flag", "")
+
+
+# --- R11: an answer that was cut off is not an answer ---------------------
+
+def test_a_truncated_translation_is_declined_rather_than_approved(endpoint):
+    """`length` means the answer was cut off at the token limit — a half
+    sentence, which read as a complete short line and went into the document as
+    an approved translation."""
+    endpoint.chat = {"choices": [{"finish_reason": "length",
+                                  "message": {"content": "بس"}}]}
+    assert adapters.HostedTranslation().translate("やめろ", {}) is None
+
+    endpoint.chat = {"choices": [{"finish_reason": "stop",
+                                  "message": {"content": "بس کن"}}]}
+    assert adapters.HostedTranslation().translate("やめろ", {})[0] == "بس کن"
+
+
+def test_a_refusal_is_not_a_translation(endpoint):
+    endpoint.chat = {"choices": [{"finish_reason": "stop",
+                                  "message": {"refusal": "I can't help",
+                                              "content": "بس کن"}}]}
+    assert adapters.HostedTranslation().translate("やめろ", {}) is None

@@ -8,6 +8,7 @@ import zlib
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 import pageir as ir
 import readers
@@ -610,3 +611,136 @@ def test_two_archive_members_with_one_name_are_refused(tmp_path):
 
     with pytest.raises(ValueError, match="twice|duplicate"):
         readers.import_source(archive_path, tmp_path / "work")
+
+
+# --- R6: the whole chapter, or the one that was already there ----------------
+
+def _chapter(tmp_path, name="in", pages=2, colour=(10, 20, 30)):
+    """A folder of real pages to import."""
+    folder = tmp_path / name
+    folder.mkdir(parents=True, exist_ok=True)
+    for index in range(pages):
+        (folder / f"{index:03d}.png").write_bytes(
+            page_bytes(Image.new("RGB", (40, 60), colour)))
+    return folder
+
+
+def _imported(tmp_path, work, colour=(10, 20, 30)):
+    readers.import_source(_chapter(tmp_path, "first", 2, colour), work)
+    return sorted(p.name for p in (work / "pages").iterdir())
+
+
+def test_a_document_that_cannot_be_written_leaves_the_old_chapter_whole(
+        tmp_path, monkeypatch):
+    """The backup was deleted one line before `comic.json` was saved, so a
+    failed save left the new pages on disk, the backup gone, and the old
+    document pointing at files that were no longer there."""
+    work = tmp_path / "work"
+    before = _imported(tmp_path, work, colour=(10, 20, 30))
+    original = (work / "pages" / before[0]).read_bytes()
+    document = (work / "comic.json").read_bytes()
+
+    def refuse(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(readers.ir, "save_doc", refuse)
+    with pytest.raises(OSError):
+        readers.import_source(_chapter(tmp_path, "second", 3, (200, 0, 0)), work)
+
+    assert sorted(p.name for p in (work / "pages").iterdir()) == before
+    assert (work / "pages" / before[0]).read_bytes() == original
+    assert (work / "comic.json").read_bytes() == document
+
+
+def test_nothing_the_operator_owns_is_deleted_to_make_room(tmp_path):
+    """The scratch names were fixed and both were deleted on sight, so a folder
+    of that name belonging to somebody else went with them."""
+    work = tmp_path / "work"
+    _imported(tmp_path, work)
+    mine = work / ".pages-incoming"
+    mine.mkdir()
+    (mine / "notes.txt").write_text("mine", encoding="utf-8")
+    theirs = work / "pages.previous"
+    theirs.mkdir()
+    (theirs / "keep.txt").write_text("mine too", encoding="utf-8")
+
+    readers.import_source(_chapter(tmp_path, "again", 2, (0, 90, 0)), work)
+
+    assert (mine / "notes.txt").read_text(encoding="utf-8") == "mine"
+    assert (theirs / "keep.txt").read_text(encoding="utf-8") == "mine too"
+
+
+def test_no_scratch_folder_survives_a_successful_import(tmp_path):
+    work = tmp_path / "work"
+    _imported(tmp_path, work)
+    leftovers = [child.name for child in work.iterdir()
+                 if child.name.startswith((".incoming-", ".previous-"))]
+    assert leftovers == []
+
+
+def test_a_source_inside_the_working_folder_is_refused(tmp_path):
+    """The scratch and backup folders live beside `pages`, so a source anywhere
+    under the working folder is inside the blast radius."""
+    work = tmp_path / "work"
+    _imported(tmp_path, work)
+    inside = _chapter(work / "nested", "src", 1)
+    with pytest.raises(ValueError, match="working folder"):
+        readers.import_source(inside, work)
+
+
+# --- R7: the fast path only where the page IS the image ----------------------
+
+def _pdf_with(tmp_path, *, rotate_image=0, margin=0, twice=False, alpha=False):
+    """A one-page PDF holding one image, placed as asked."""
+    pymupdf = pytest.importorskip("pymupdf")
+    image = Image.new("RGB", (120, 160), (30, 60, 90))
+    for x in range(0, 120, 20):                 # something to see the turn by
+        for y in range(0, 40):
+            image.putpixel((x, y), (250, 250, 0))
+    if alpha:
+        image = image.convert("RGBA")
+        image.putalpha(128)
+    payload = page_bytes(image, "PNG")
+
+    path = tmp_path / "in.pdf"
+    document = pymupdf.open()
+    page = document.new_page(width=120, height=160)
+    rect = pymupdf.Rect(margin, margin, 120 - margin, 160 - margin)
+    page.insert_image(rect, stream=payload, rotate=rotate_image)
+    if twice:
+        page.insert_image(pymupdf.Rect(0, 0, 30, 30), stream=payload)
+    document.save(str(path))
+    document.close()
+    return path, payload
+
+
+def _extracted(pdf: Path):
+    pymupdf = pytest.importorskip("pymupdf")
+    with pymupdf.open(str(pdf)) as document:
+        return readers._single_embedded_image(document, document[0])
+
+
+def test_a_page_whose_image_fills_it_takes_the_fast_path(tmp_path):
+    pdf, payload = _pdf_with(tmp_path)
+    assert _extracted(pdf) is not None
+
+
+def test_an_image_placed_turned_is_not_handed_back_unturned(tmp_path):
+    """`page.rotation` is one way a page turns; the image's own placement
+    matrix is another, and a 180° placement still handed back unrotated bytes —
+    an upside-down page that every later stage measured the right way up."""
+    pdf, _ = _pdf_with(tmp_path, rotate_image=180)
+    assert _extracted(pdf) is None
+
+
+def test_a_page_with_margins_is_not_treated_as_edge_to_edge(tmp_path):
+    """The old test was that the image covered 92% of the page, which passed a
+    scan inset by a margin and imported it as though it filled the page — so
+    every box measured afterwards was offset by the margin thrown away."""
+    pdf, _ = _pdf_with(tmp_path, margin=6)
+    assert _extracted(pdf) is None
+
+
+def test_an_image_drawn_twice_is_not_the_page(tmp_path):
+    pdf, _ = _pdf_with(tmp_path, twice=True)
+    assert _extracted(pdf) is None

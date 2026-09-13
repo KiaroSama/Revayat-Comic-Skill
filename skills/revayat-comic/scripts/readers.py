@@ -343,6 +343,45 @@ def _from_pdf(path: Path, pages_dir: Path, dpi: int) -> list[Path]:
     return written
 
 
+#: How far a placement may sit from the page edge and still be "the page".
+#: A point, not a percentage: PDF coordinates are in points and rounding is
+#: the only difference worth forgiving.
+_PLACEMENT_SLACK = 1.0
+
+
+def _upright(page, xref: int) -> bool:
+    """Whether this image is drawn without rotation, reflection or skew.
+
+    The stored bytes are not transformed. A placement matrix that turns the
+    image — or mirrors it — makes the page look nothing like them, and the
+    extraction shortcut hands back the bytes.
+    """
+    try:
+        # `xrefs=True` asks for the xref of each placement — the keyword is
+        # plural, and the singular spelling raises rather than filtering.
+        placements = page.get_image_info(xrefs=True)
+    except Exception:  # pragma: no cover - older PyMuPDF, or a malformed page
+        return False
+    mine = [info for info in placements if info.get("xref") == xref]
+    if not mine:
+        # An older build that does not report xrefs at all. The caller has
+        # already established there is exactly one image on this page, so an
+        # unambiguous single placement is still this image's.
+        mine = placements if len(placements) == 1 else []
+    if len(mine) != 1:
+        return False
+    transform = mine[0].get("transform")
+    if not transform or len(transform) < 4:
+        return False
+    a, b, c, d = (float(value) for value in transform[:4])
+    # `(a, b, c, d, e, f)`: an upright placement reports the image's width and
+    # height as `a` and `d` with no shear. A 180° turn reports both negative —
+    # which is exactly what was handed back unrotated — and a mirror flips one.
+    if abs(b) > 1e-6 or abs(c) > 1e-6:
+        return False
+    return a > 0 and d > 0
+
+
 def _single_embedded_image(document, page) -> bytes | None:
     """The page's bytes when the page *is* one image, otherwise ``None``."""
     images = page.get_images(full=True)
@@ -383,11 +422,30 @@ def _single_embedded_image(document, page) -> bytes | None:
         rects = page.get_image_rects(xref)
     except Exception:  # pragma: no cover - malformed PDF
         return None
-    if not rects:
+    # Drawn once. The same XObject placed twice — a tiled background, a page
+    # shown beside its own thumbnail — is a page that does not look like its
+    # bytes, however much of it the two placements cover between them.
+    if len(rects) != 1:
         return None
-    page_area = abs(page.rect.width * page.rect.height)
-    covered = sum(abs(rect.width * rect.height) for rect in rects)
-    if page_area <= 0 or covered / page_area < 0.92:
+    rect = rects[0]
+    page_rect = page.rect
+    if abs(page_rect.width * page_rect.height) <= 0:
+        return None
+    # The placement must BE the page, to within a pixel. The old test was that
+    # the image covered 92% of it, which passed a scan inset by a centimetre of
+    # margin on every side and then imported it as though it filled the page —
+    # so every box measured afterwards was offset from the artwork by the
+    # margin that had been thrown away.
+    if (abs(rect.x0 - page_rect.x0) > _PLACEMENT_SLACK
+            or abs(rect.y0 - page_rect.y0) > _PLACEMENT_SLACK
+            or abs(rect.x1 - page_rect.x1) > _PLACEMENT_SLACK
+            or abs(rect.y1 - page_rect.y1) > _PLACEMENT_SLACK):
+        return None
+    # And it must be placed the way it was stored. `page.rotation` is one way a
+    # page turns; the image's own placement matrix is another, and a 180°
+    # placement still handed back unrotated bytes — an upside-down page that
+    # every later stage measured as though it were the right way up.
+    if not _upright(page, xref):
         return None
     try:
         extracted = document.extract_image(xref)
@@ -398,6 +456,10 @@ def _single_embedded_image(document, page) -> bytes | None:
         return None
     # A CMYK or exotic colourspace round-trips badly; render those instead.
     if extracted.get("colorspace", 3) > 3:
+        return None
+    # An image with its own transparency is composited over whatever is behind
+    # it. Extracting it alone gives back the layer, not the page.
+    if extracted.get("smask"):
         return None
     return payload
 
@@ -460,6 +522,15 @@ def _refuse_overlap(source: Path, pages_dir: Path) -> None:
     """
     src = source.expanduser().resolve()
     dst = pages_dir.expanduser().resolve()
+    # The scratch and backup folders live in the working directory beside
+    # `pages`, so a source inside the working directory is inside the blast
+    # radius even when it is not inside `pages` itself.
+    work = dst.parent
+    if src == work or work in src.parents:
+        raise ValueError(
+            f"the source {src} is inside the working folder this import "
+            f"writes to ({work}). Move the source, or pick a different --out."
+        )
     if src == dst or dst in src.parents:
         raise ValueError(
             f"the source {src} is inside the pages folder this import replaces "
@@ -474,15 +545,32 @@ def _refuse_overlap(source: Path, pages_dir: Path) -> None:
         )
 
 
+def scratch(work: Path, label: str) -> Path:
+    """A scratch path this run owns, and nobody else could already be using.
+
+    The names were fixed — `.pages-incoming`, `pages.previous` — and both were
+    deleted on sight. A folder of that name that belonged to the operator, or
+    to another import running at the same time, went with them. A random
+    suffix costs nothing and makes ownership a fact rather than a hope.
+    """
+    import secrets
+
+    for _ in range(8):
+        candidate = work / f".{label}-{secrets.token_hex(6)}"
+        if not candidate.exists():
+            return candidate
+    raise RuntimeError(f"could not find an unused scratch name under {work}")
+
+
 def _stage_pages(kind: str, path: Path, staging: Path, dpi: int) -> list[Path]:
     """Read the source into a staging folder, and clean up if it goes wrong.
 
     Nothing the caller already owns is touched here. A failed read leaves only
     the staging folder to remove.
     """
-    if staging.exists():
-        shutil.rmtree(staging)
-    staging.mkdir(parents=True, exist_ok=True)
+    # Never `rmtree` a path we did not just name: `scratch()` hands back one
+    # that does not exist, and anything sitting there is somebody else's.
+    staging.mkdir(parents=True, exist_ok=False)
     readers = {
         "cbz": lambda: _from_zip(path, staging),
         "cbr": lambda: _from_rar(path, staging),
@@ -497,15 +585,16 @@ def _stage_pages(kind: str, path: Path, staging: Path, dpi: int) -> list[Path]:
         raise
 
 
-def _commit_pages(staging: Path, pages_dir: Path) -> None:
-    """Swap the validated staging folder into place, keeping a way back.
+def _commit_pages(staging: Path, pages_dir: Path, previous: Path) -> bool:
+    """Swap the validated staging folder into place. Returns whether a previous
+    version was moved aside, and LEAVES it there.
 
-    The old folder is moved aside rather than deleted first, so a rename that
-    fails — a file still open on Windows, a full disk — can put it back instead
-    of leaving the caller with neither version.
+    The caller deletes it, and only once `comic.json` has been written. The old
+    folder used to be removed at the end of this function, one line before the
+    document was saved — so a failed save left the new pages on disk, the
+    backup gone, and the old `comic.json` pointing at files that no longer
+    existed. Neither version was then complete.
     """
-    previous = pages_dir.with_name(pages_dir.name + ".previous")
-    shutil.rmtree(previous, ignore_errors=True)
     moved = False
     if pages_dir.exists():
         pages_dir.rename(previous)
@@ -516,7 +605,7 @@ def _commit_pages(staging: Path, pages_dir: Path) -> None:
         if moved:
             previous.rename(pages_dir)
         raise
-    shutil.rmtree(previous, ignore_errors=True)
+    return moved
 
 
 def import_source(
@@ -542,7 +631,8 @@ def import_source(
     _refuse_overlap(path, pages_dir)
 
     kind = detect_kind(path)
-    staging = work / ".pages-incoming"
+    staging = scratch(work, "incoming")
+    previous = scratch(work, "previous")
     files = _stage_pages(kind, path, staging, dpi)
 
     doc = ir.new_doc(
@@ -578,13 +668,24 @@ def import_source(
                     ir.sha256_file(file),
                 )
             )
-        _commit_pages(staging, pages_dir)
+        moved = _commit_pages(staging, pages_dir, previous)
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise
 
+    # One transaction, pages and document together. Until this succeeds the
+    # previous pages are still on disk under `previous`, and a failure puts
+    # them back rather than leaving a chapter that references files that are
+    # not there.
     doc_path = work / "comic.json"
-    ir.save_doc(doc, doc_path)
+    try:
+        ir.save_doc(doc, doc_path)
+    except BaseException:
+        shutil.rmtree(pages_dir, ignore_errors=True)
+        if moved:
+            previous.rename(pages_dir)
+        raise
+    shutil.rmtree(previous, ignore_errors=True)
 
     widths = sorted(size[0] for size in sizes)
     heights = sorted(size[1] for size in sizes)

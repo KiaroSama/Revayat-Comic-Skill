@@ -182,109 +182,223 @@ def test_missing_dependency_names_the_package():
         ir.require("no_such_module_here", "no-such-package", "testing")
 
 
-# --- R03: what a stage ran against, and what that makes stale ----------------
-
-def _doc():
-    return {
-        "meta": {"sfx_policy": "keep", "target_language": "fa"},
-        "pages": [{
-            "id": "p0001", "sha256": "a" * 64, "width": 100, "height": 100,
-            "regions": [{
-                "id": "r001", "bbox": [1, 2, 3, 4], "kind": "speech",
-                "orientation": "horizontal",
-                "source_text": "hello", "translation": "سلام",
-            }],
-        }],
-    }
+# --- Freshness: what a stage was made from, and what that makes stale ---------
+#
+# Every fixture here is built with the production constructors. The first
+# version of these tests wrote `{"translation": ...}` and `{"drop": ...}` into
+# a hand-made dict — two keys no region has ever carried — so the freshness
+# code read empty strings, the tests read the same empty strings, and the two
+# agreed with each other while disagreeing with every real document.
 
 
-def test_a_stage_records_what_it_read_and_when():
+def _doc(pages=2, regions=1):
+    doc = ir.new_doc(title="t", chapter="1")
+    for index in range(pages):
+        page = ir.new_page(f"p{index + 1:04d}", index, f"pages/{index}.png",
+                           800, 1200, f"{index:064d}")
+        for ordinal in range(regions):
+            region = ir.new_region(ir.region_id_for(page, ordinal),
+                                   [10 * ordinal, 20, 100, 40], kind="speech")
+            region["source_text"] = "やめろ"
+            region["target_text"] = "بس کن"
+            page["regions"].append(region)
+        doc["pages"].append(page)
+    return doc
+
+
+def _all_fresh(doc, *stages_):
+    for stage in stages_:
+        stages.stamp_stage(doc, stage, {"ran": True})
+    assert not stages.stale_stages(doc), stages.stale_stages(doc)
+
+
+def test_a_stage_records_what_each_page_it_touched_ran_on():
     doc = _doc()
     stages.stamp_stage(doc, "typeset", {"placed": 1})
     record = doc["stages"]["typeset"]
-    assert set(record["inputs"]) == {"geometry", "text", "policy"}
-    assert record["seq"] == 1
+    assert set(record["pages"]) == {"p0001", "p0002"}
+    assert record["scheme"] == stages.SCHEME
     assert not stages.stale_stages(doc)
 
 
-def test_correcting_an_approved_line_stales_the_page_already_rendered_from_it():
+def test_correcting_an_approved_line_stales_the_page_rendered_from_it():
     """**The one that matters.** The render on disk was made from Persian
     somebody has since corrected, and it stayed stamped `typeset` and shipped.
-    Nothing anywhere asked."""
+    """
     doc = _doc()
-    stages.stamp_stage(doc, "typeset", {"placed": 1})
-    doc["pages"][0]["regions"][0]["translation"] = "سلام، حالت چطور است؟"
+    _all_fresh(doc, "detect", "masks", "clean", "typeset")
+
+    doc["pages"][0]["regions"][0]["target_text"] = "بس کن، حالت چطور است؟"
 
     stale = stages.stale_stages(doc)
-    assert "typeset" in stale
-    assert "text" in stale["typeset"]
+    assert "typeset" in stale, stale
+    assert "p0001" in stale["typeset"] and "p0002" not in stale["typeset"]
+
+
+def test_the_text_facet_reads_the_fields_a_region_actually_has():
+    """A contract test, not a behaviour test: it fails if `target_text` or
+    `dropped` is renamed in the freshness logic, which is exactly how this
+    broke — the code read `translation`/`drop` and nothing noticed."""
+    doc = _doc()
+    page = doc["pages"][0]
+    before = stages._page_facet(page, "text")
+
+    page["regions"][0]["translation"] = "a key no region carries"
+    page["regions"][0]["drop"] = True
+    assert stages._page_facet(page, "text") == before, (
+        "the text facet moved for a field the document does not use")
+
+    page["regions"][0]["target_text"] = "چیز دیگری"
+    assert stages._page_facet(page, "text") != before
+    del page["regions"][0]["translation"], page["regions"][0]["drop"]
+
+    after_text = stages._page_facet(page, "text")
+    page["regions"][0]["dropped"] = True
+    assert stages._page_facet(page, "text") != after_text
 
 
 def test_correcting_a_line_does_not_stale_the_detection_that_found_the_box():
-    """Named facets rather than one document hash, exactly so that this does
-    not happen: re-detecting on every edit would renumber the regions and throw
-    away every reply written against the old ids."""
+    """Named facets exist so that this does not happen: re-detecting on every
+    edit would renumber the regions and throw away every reply already written
+    against the old ids."""
     doc = _doc()
-    stages.stamp_stage(doc, "detect", {"totals": {}})
-    stages.stamp_stage(doc, "worksheet", {"merged": 1})
-    doc["pages"][0]["regions"][0]["translation"] = "چیز دیگری"
-
+    _all_fresh(doc, "detect", "worksheet")
+    doc["pages"][0]["regions"][0]["target_text"] = "چیز دیگری"
     assert not stages.stale_stages(doc)
 
 
-def test_moving_a_box_stales_the_worksheet_and_the_masks():
+def test_a_polarity_correction_stales_the_mask_and_not_the_worksheet():
+    """A worksheet reply is filed against ids, boxes, kinds and orientations.
+    A mask is also measured from the polarity — which the one shared geometry
+    hash did not cover at all, so `polarity: dark` changed nothing."""
     doc = _doc()
-    stages.stamp_stage(doc, "worksheet", {"merged": 1})
-    stages.stamp_stage(doc, "masks", {"written": 1})
-    doc["pages"][0]["regions"][0]["bbox"] = [9, 9, 3, 4]
+    _all_fresh(doc, "detect", "worksheet", "masks")
+    doc["pages"][0]["regions"][0]["polarity"] = "dark"
 
     stale = stages.stale_stages(doc)
-    assert set(stale) == {"worksheet", "masks"}
+    assert "masks" in stale and "worksheet" not in stale
 
 
-def test_changing_the_sfx_policy_stales_the_masks_not_the_worksheet():
+def test_a_traced_balloon_stales_the_render_it_changes():
     doc = _doc()
-    stages.stamp_stage(doc, "worksheet", {"merged": 1})
-    stages.stamp_stage(doc, "masks", {"written": 1})
-    doc["meta"]["sfx_policy"] = "translate"
-
-    assert set(stages.stale_stages(doc)) == {"masks"}
+    _all_fresh(doc, "detect", "masks", "clean", "typeset")
+    doc["pages"][0]["regions"][0]["balloon"] = {"cx": 50, "cy": 40, "r": 30}
+    assert "typeset" in stages.stale_stages(doc)
 
 
-def test_re_running_a_stage_stales_everything_downstream_of_it():
-    """A path in `comic.json` does not change when the file behind it is
-    redrawn, so content hashing cannot see this. Order can."""
+def test_locking_a_glossary_name_stales_the_translation_that_predates_it():
+    """Translation depended on neither the glossary nor the title policy, so
+    locking a name left every line translated before the lock looking
+    current."""
     doc = _doc()
-    for stage in ("masks", "clean", "typeset"):
-        stages.stamp_stage(doc, stage, {"written": 1})
+    _all_fresh(doc, "detect", "translate")
+    doc["glossary"] = {"entries": {"ハルカ": {"target": "هاروکا",
+                                            "locked": True, "version": 1}}}
+    assert "translate" in stages.stale_stages(doc)
+
+
+def test_a_title_policy_change_stales_translation_and_render():
+    doc = _doc()
+    _all_fresh(doc, "detect", "translate", "masks", "clean", "typeset")
+    doc["meta"]["title_policy"] = {"honorifics": "keep -senpai"}
+    stale = stages.stale_stages(doc)
+    assert {"translate", "typeset"} <= set(stale), stale
+
+
+def test_remasking_then_recleaning_settles_instead_of_staying_stale_forever():
+    """`masks -> clean -> masks -> clean` left `clean` stale no matter how many
+    times it ran: a re-run whose summary came out identical kept its old
+    sequence number, which stayed below the number masks had just taken. The
+    identity is the inputs now, so consuming the new masks is what ends it."""
+    doc = _doc()
+    _all_fresh(doc, "detect", "masks", "clean")
+
+    stages.stamp_stage(doc, "masks", {"written": 1}, options={"grow": 6})
+    assert "clean" in stages.stale_stages(doc)
+
+    # The SAME clean summary as before — equal counts, different pixels.
+    stages.stamp_stage(doc, "clean", {"ran": True})
+    assert not stages.stale_stages(doc), stages.stale_stages(doc)
+
+
+def test_a_different_option_is_a_different_answer():
+    """Equal counts, different pixels: the summary cannot tell them apart, so
+    the options the run used are part of its identity."""
+    doc = _doc()
+    _all_fresh(doc, "detect")
+    stages.stamp_stage(doc, "masks", {"written": 2}, options={"grow": 3})
+    first = doc["stages"]["masks"]["pages"]["p0001"]
+    stages.stamp_stage(doc, "masks", {"written": 2}, options={"grow": 9})
+    assert doc["stages"]["masks"]["pages"]["p0001"] != first
+
+
+def test_running_one_page_does_not_claim_the_others_were_done():
+    """`mask --pages p0003` is an ordinary thing to do, and a document-wide
+    hash called every other page freshly masked because one was."""
+    doc = _doc(pages=3)
+    _all_fresh(doc, "detect")
+    stages.stamp_stage(doc, "masks", {"written": 1}, pages=["p0002"])
+
+    stale = stages.stale_stages(doc)
+    assert "masks" in stale
+    assert "p0001" in stale["masks"] and "p0002" not in stale["masks"]
+
+    stages.stamp_stage(doc, "masks", {"written": 3})
     assert not stages.stale_stages(doc)
 
-    stages.stamp_stage(doc, "masks", {"written": 2})   # re-run, new masks
-    stale = stages.stale_stages(doc)
-    assert stale["clean"] == "masks has run since"
-    # `typeset` depends on `clean`, which has not re-run yet, so it is not
-    # reported twice for the same cause.
-    assert "typeset" not in stale
+
+def test_watermarking_does_not_wait_for_a_render_that_comes_after_it():
+    """`watermark` was recorded as depending on `typeset`, which is backwards:
+    a mark is placed before the page is masked, cleaned or set."""
+    assert "typeset" not in stages.STAGE_NEEDS.get("watermark", ())
+    assert not stages.prerequisites("watermark")
 
 
-def test_re_running_a_stage_that_changed_nothing_stales_nothing():
-    """`seq` counts changes, not runs. Running `mask` twice with the same
-    options is an ordinary thing to do, and it must not tell `clean` and every
-    page rendered from it that they are out of date."""
+def test_the_dependency_graph_has_no_cycle():
+    for stage in stages.STAGE_NEEDS:
+        assert stage not in stages.prerequisites(stage), stage
+
+
+def test_an_obsolete_export_does_not_block_checking_the_new_render():
+    """QA asks about the render. A package from a previous session is not a
+    prerequisite of checking the current pages, and reporting it stopped a
+    corrected chapter from being verified before it was packaged again."""
     doc = _doc()
+    _all_fresh(doc, "detect", "masks", "clean", "typeset", "export")
+
+    doc["pages"][0]["regions"][0]["target_text"] = "متن اصلاح‌شده"
     for stage in ("masks", "clean", "typeset"):
-        stages.stamp_stage(doc, stage, {"written": 1})
+        stages.stamp_stage(doc, stage, {"ran": True})
+
+    assert "export" in stages.stale_stages(doc)
+    assert not stages.stale_stages(doc, needed_for="typeset")
+
+
+def test_a_second_unchanged_run_reports_nothing_new_and_changes_nothing():
+    doc = _doc()
+    _all_fresh(doc, "detect", "masks", "clean", "typeset")
     before = ir.dumps(doc)
 
-    stages.stamp_stage(doc, "masks", {"written": 1})
+    for stage in ("detect", "masks", "clean", "typeset"):
+        stages.stamp_stage(doc, stage, {"ran": True})
 
-    assert ir.dumps(doc) == before, "an identical re-run changed the document"
+    assert ir.dumps(doc) == before, "an identical re-run rewrote the document"
     assert not stages.stale_stages(doc)
 
 
-def test_a_stamp_from_an_older_build_is_unknown_rather_than_stale():
-    """An upgrade must not look like a defect: a record with no `inputs` is a
-    build that never recorded them, not proof that anything moved."""
+def test_a_stamp_from_an_older_build_is_unverified_rather_than_stale():
+    """An upgrade must not look like a defect, and must never be answered by
+    translating an unchanged chapter again."""
     doc = _doc()
     doc["stages"] = {"typeset": {"fingerprint": "whatever", "placed": 1}}
+
     assert not stages.stale_stages(doc)
+    unverified = stages.unverified_stages(doc)
+    assert "typeset" in unverified and "re-run" in unverified["typeset"]
+
+
+def test_the_retired_counter_is_not_left_behind():
+    doc = _doc()
+    doc["meta"]["stage_seq"] = 7
+    stages.stamp_stage(doc, "detect", {"ran": True})
+    assert "stage_seq" not in doc["meta"]

@@ -260,3 +260,95 @@ def test_digits_in_a_latin_sentence_are_left_alone():
     """`Vol. 2, ch. 3` is not Persian and its numerals are not Persian either."""
     assert fix("Vol. 2, ch. 3") == "Vol. 2, ch. 3"
     assert fix("او 3 بار گفت") == "او ۳ بار گفت"
+
+
+# --- R4: the fixer stops guessing at morphology ------------------------------
+
+#: `می` is the imperfective prefix AND the noun *wine*, written identically.
+#: Only the next word separates them, and the old rule joined anything ending
+#: in م و ی د ن ه — which is also the last letter of ordinary adjectives.
+WINE = [
+    ("می شیرین را نوشید.", "sweet wine"),
+    ("می کهنه را آورد.", "old wine"),
+    ("می گران خریدم.", "expensive wine"),
+    ("می تلخ بود.", "bitter wine"),
+]
+VERB = [
+    ("می روم خانه.", "می\u200cروم"),
+    ("می کنم این کار را.", "می\u200cکنم"),
+    ("می شود دید.", "می\u200cشود"),
+    ("می گویند نه.", "می\u200cگویند"),
+]
+
+
+@pytest.mark.parametrize("line,meaning", WINE)
+def test_wine_is_not_joined_to_the_adjective_after_it(line, meaning):
+    """A guess that changes what a sentence means is worse than no rule,
+    because the reader is never asked."""
+    assert falint.fix_line(line, falint.Options()) == line, meaning
+
+
+@pytest.mark.parametrize("line,joined", VERB)
+def test_a_verb_this_project_can_name_is_still_joined(line, joined):
+    assert joined in falint.fix_line(line, falint.Options())
+
+
+@pytest.mark.parametrize("line,_meaning", WINE)
+def test_the_ambiguous_case_is_handed_to_a_reader(line, _meaning):
+    codes = {issue["code"] for issue in falint.lint_text(line)}
+    assert "zwnj-review" in codes
+
+
+def test_a_comparative_is_still_left_alone():
+    """`تر` is both the comparative suffix and the adjective "wet"."""
+    assert falint.fix_line("موهایم تر شد", falint.Options()) == "موهایم تر شد"
+
+
+def test_a_quotation_that_spans_a_latin_word_is_still_paired():
+    """Pairing happened inside each unprotected piece, so a quotation with a
+    Latin word in it was two pieces with one mark each and neither could find
+    its partner."""
+    fixed = falint.fix_line('گفت: "سلام Bob"', falint.Options())
+    assert fixed.count("«") == 1 and fixed.count("»") == 1
+    assert "Bob" in fixed, "the protected word was rewritten"
+    assert '"' not in fixed
+
+
+def test_pairing_leaves_the_protected_bytes_alone():
+    fixed = falint.fix_line('"برو به https://example.com/a?b=1&c=2 زود"',
+                            falint.Options())
+    assert "https://example.com/a?b=1&c=2" in fixed
+    assert fixed.startswith("«") and fixed.endswith("»")
+
+
+def test_a_url_is_not_linted_for_the_letters_inside_it():
+    """The fixer left a URL alone and the linter reported the Arabic letters
+    inside it, demanding an edit the fixer would never make and the gate would
+    never stop asking for."""
+    assert falint.lint_text("آدرس https://example.com/کيک است") == []
+    assert falint.lint_text("بنویس به a.b@exаmple.com زود") == []
+    # And a genuine Arabic yeh in the Persian is still reported.
+    assert any(issue["code"] == "arabic-forms"
+               for issue in falint.lint_text("ببين اين را"))
+
+
+def test_a_settled_review_is_not_demanded_again():
+    """Asking forever leaves two ways out: make the unsafe edit, or stop
+    running the gate."""
+    line = "می شیرین را نوشید."
+    assert falint.lint_text(line)
+    assert falint.lint_text(line, acknowledged=["zwnj-review"]) == []
+
+
+def test_fixing_twice_changes_nothing_more():
+    once = falint.fix_line('گفت: "سلام Bob" و می روم', falint.Options())
+    assert falint.fix_line(once, falint.Options()) == once
+
+
+def test_a_deliberate_line_break_survives():
+    text = "خط اول\nخط دوم"
+    assert falint.fix_text(text, falint.Options()) == text
+
+
+def test_a_numeral_only_balloon_is_left_readable():
+    assert falint.fix_line("۱۲۳", falint.Options()) == "۱۲۳"

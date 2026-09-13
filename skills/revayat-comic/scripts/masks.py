@@ -288,7 +288,18 @@ def build_document(
         size = (page["width"], page["height"])
         union = np.zeros((page["height"], page["width"]), np.uint8)
 
+        skipped = 0
         for region in page["regions"]:
+            # Authority to change pixels comes from the decisions that stand
+            # NOW. A region the reader dropped has no text in it, and one they
+            # kept is text they asked to leave in the artwork — masking either
+            # put artwork inside the area the cleaner is allowed to rewrite and
+            # inside the denominator the preservation proof divides by.
+            if region.get("dropped") or region.get("keep"):
+                region["mask"] = None
+                region["mask_box"] = None
+                skipped += 1
+                continue
             # A box the reader drew arrives with no balloon. Find it, so a
             # hand-split pair of balloons is masked and typeset like any other.
             if (region.get("detector") == "reader" and not region.get("balloon")
@@ -315,16 +326,30 @@ def build_document(
         page["mask"] = relative
         coverage = float((union > 0).sum()) / float(page["width"] * page["height"])
         page["mask_coverage"] = round(coverage, 5)
+        # Written HERE, by the builder, for THIS page. The mode was recorded
+        # once for the whole document at the end of the run, so masking page A
+        # solid and then page B with glyphs left one flag describing neither —
+        # and `clean` read it and gave page A the cleaners a solid patch must
+        # never reach. `clean` used to write this back afterwards, which is a
+        # guess about what the masks on disk are; the builder knows.
+        page["free_lettering_mask"] = "solid" if solid_free else "glyphs"
+        page["mask_options"] = {"grow": grow, "pad": pad,
+                                "solid_free": bool(solid_free)}
         per_page.append({
             "page": page["id"],
             "regions": len(page["regions"]),
+            "not_masked": skipped,
             "coverage": page["mask_coverage"],
         })
 
-    # Recorded so `clean` can refuse the one combination that would destroy
-    # artwork: a solid free-lettering mask handed to the built-in cleaners.
+    # The document-wide flag stays for a page that has never been masked and
+    # for every older document; the per-page value above is what `clean` reads
+    # when it is there.
     doc["meta"]["free_lettering_mask"] = "solid" if solid_free else "glyphs"
-    stages.stamp_stage(doc, "masks", {"written": written, "balloons_derived": derived})
+    stages.stamp_stage(doc, "masks",
+                       {"written": written, "balloons_derived": derived},
+                       options={"grow": grow, "pad": pad,
+                                "solid_free": solid_free}, pages=pages)
     ir.save_doc(doc, doc_path)
 
     # A mask covering a third of the page is not lettering; something matched

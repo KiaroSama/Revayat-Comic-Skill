@@ -372,7 +372,26 @@ def call(provider, role: str, *args, timeout: float = DEFAULT_TIMEOUT,
 # Writing a result back into the IR
 # --------------------------------------------------------------------------- #
 
-def completed(region: dict[str, Any], role: str, field_name: str) -> bool:
+def request_identity(**parts: Any) -> str:
+    """A short name for everything an answer was produced from.
+
+    Recorded with the answer, and compared on resume. Without it "this value is
+    what a provider wrote" was the whole test, so a region kept its old reading
+    after the source it was read from had been re-cropped, after the model was
+    changed, and after the glossary the translation was constrained by was
+    edited. The answer was still exactly what the provider had written; it had
+    simply been written about something else.
+    """
+    import hashlib
+    import json
+
+    payload = json.dumps({key: value for key, value in sorted(parts.items())},
+                         sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def completed(region: dict[str, Any], role: str, field_name: str, *,
+              identity: str | None = None) -> bool:
     """Whether a provider already finished this region's `role` work.
 
     Resume rests on this. A region whose current value is exactly what a
@@ -380,6 +399,11 @@ def completed(region: dict[str, Any], role: str, field_name: str) -> bool:
     to be told the same thing, and risks a different answer overwriting a good
     one. A value a person changed afterwards no longer matches, so the region
     correctly stops looking complete and gets looked at again.
+
+    `identity` is what the work would be done from NOW. A record made from
+    something else is not a completion of this question, and a record from a
+    build that did not write one down is unknown rather than complete — asking
+    again costs a call, and trusting it costs a wrong reading nobody can see.
     """
     existing = (region.get(field_name) or "").strip()
     if not existing:
@@ -387,13 +411,16 @@ def completed(region: dict[str, Any], role: str, field_name: str) -> bool:
     for record in reversed(region.get("provenance", []) or []):
         if record.get("role") != role:
             continue
-        if record.get("outcome") == "applied" and record.get("wrote") == existing:
+        if record.get("outcome") != "applied" or record.get("wrote") != existing:
+            continue
+        if identity is None:
             return True
+        return record.get("identity") == identity
     return False
 
 
 def apply(region: dict[str, Any], field_name: str, result: Result, *,
-          min_confidence: float = 0.0) -> str:
+          min_confidence: float = 0.0, identity: str | None = None) -> str:
     """Put a provider's answer into one region, or explain why it was not.
 
     Returns what happened: ``applied``, ``unchanged``, ``locked``, ``failed`` or
@@ -410,8 +437,13 @@ def apply(region: dict[str, Any], field_name: str, result: Result, *,
     """
     provenance = region.setdefault("provenance", [])
 
+    def record(outcome_record: dict[str, Any]) -> dict[str, Any]:
+        if identity is not None:
+            outcome_record["identity"] = identity
+        return outcome_record
+
     if not result.ok:
-        provenance.append(result.as_provenance())
+        provenance.append(record(result.as_provenance()))
         return "failed"
 
     text = result.data if isinstance(result.data, str) else None
@@ -439,8 +471,8 @@ def apply(region: dict[str, Any], field_name: str, result: Result, *,
     if existing or locked:
         outcome = "locked" if locked else "unchanged"
         if text and text != existing:
-            provenance.append({**result.as_provenance(),
-                               "outcome": "disagreed", "read": text})
+            provenance.append(record({**result.as_provenance(),
+                               "outcome": "disagreed", "read": text}))
             held = "locked" if locked else "existing"
             kept = repr(existing) if existing else "empty"
             note = (f"{result.provider} read this as {text!r}; the {held} "
@@ -448,11 +480,11 @@ def apply(region: dict[str, Any], field_name: str, result: Result, *,
             if note not in region.get("review", []):
                 region.setdefault("review", []).append(note)
             return "needs_review"
-        provenance.append({**result.as_provenance(), "outcome": outcome})
+        provenance.append(record({**result.as_provenance(), "outcome": outcome}))
         return outcome
 
     if result.confidence is not None and result.confidence < min_confidence:
-        provenance.append({**result.as_provenance(), "outcome": "low_confidence"})
+        provenance.append(record({**result.as_provenance(), "outcome": "low_confidence"}))
         region.setdefault("review", []).append(
             f"{result.provider} was only {result.confidence:.2f} confident here; "
             f"nothing was written"
@@ -460,14 +492,14 @@ def apply(region: dict[str, Any], field_name: str, result: Result, *,
         return "needs_review"
 
     if not text:
-        provenance.append({**result.as_provenance(), "outcome": "empty"})
+        provenance.append(record({**result.as_provenance(), "outcome": "empty"}))
         return "failed"
 
     region[field_name] = text
     # The text is recorded beside the outcome so a later run can tell its own
     # earlier work from a human's, which is what makes resume meaningful.
-    provenance.append({**result.as_provenance(), "outcome": "applied",
-                       "wrote": text})
+    provenance.append(record({**result.as_provenance(), "outcome": "applied",
+                       "wrote": text}))
     return "applied"
 
 

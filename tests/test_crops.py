@@ -50,7 +50,12 @@ def test_the_document_records_where_the_images_are(detected):
         assert page["sheets"], f"{page['id']}: no sheets recorded"
         assert all(name.startswith(f"crops/{page['id']}/sheet")
                    for name in page["sheets"])
-    assert doc["stages"]["crops"]["pages"] == len(doc["pages"])
+    # `pages` on a stage record is now the per-page revision map — what
+    # each page was made from. The count this test means lives under
+    # `rendered`.
+    assert doc["stages"]["crops"]["rendered"] == len(doc["pages"])
+    assert set(doc["stages"]["crops"]["pages"]) == {
+        page["id"] for page in doc["pages"]}
 
 
 def test_every_region_reaches_a_sheet(detected):

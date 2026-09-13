@@ -218,9 +218,20 @@ def run(name: str, args: list[str] | None = None) -> dict[str, Any]:
         except ir.MissingDependency as error:
             return {"ok": False, "stage": stage, "error": str(error),
                     "kind": "missing-dependency"}
-        except (FileNotFoundError, ValueError) as error:
+        except (KeyboardInterrupt, GeneratorExit):
+            # A shutdown the operator asked for. Swallowing it would make Ctrl-C
+            # do nothing to a server that is inside a stage.
+            raise
+        except Exception as error:  # noqa: BLE001 - the request boundary
+            # Everything a stage can do wrong is an ANSWER. Only
+            # `FileNotFoundError` and `ValueError` were caught, so a corrupt
+            # archive (`zipfile.BadZipFile`), a file somebody else had open
+            # (`PermissionError`), a full disk (`OSError`) or an image library
+            # raising its own class ended the MCP loop and closed the HTTP
+            # connection without a reply — and the client waited.
             return {"ok": False, "stage": stage,
-                    "error": f"{type(error).__name__}: {error}"}
+                    "error": f"{type(error).__name__}: {error}",
+                    "kind": "stage-failed"}
 
         text = captured.getvalue().strip()
         reason = reason or complaint.getvalue().strip()
@@ -290,14 +301,42 @@ def handle(message: dict[str, Any]) -> dict[str, Any] | None:
                       f"a JSON-RPC message is an object, not a "
                       f"{type(message).__name__}")
 
-    method = message.get("method")
+    # An `id` that is present must be a string or a number — `{"id": {}}` is
+    # not a request and not a notification, and answering it with that object
+    # as the id produced a reply no client could match to anything.
+    has_id = "id" in message
     request_id = message.get("id")
+    if (has_id and request_id is not None
+            and not isinstance(request_id, (str, int, float))):
+        return _error(None, -32600,
+                      f"a JSON-RPC id is a string or a number, not a "
+                      f"{type(request_id).__name__}")
+    if has_id and isinstance(request_id, bool):
+        return _error(None, -32600, "a JSON-RPC id is a string or a number")
+
+    version = message.get("jsonrpc")
+    if version is not None and version != "2.0":
+        return _error(request_id if has_id else None, -32600,
+                      f"this server speaks JSON-RPC 2.0, not {version!r}")
+
+    method = message.get("method")
+    if not isinstance(method, str):
+        return _error(request_id if has_id else None, -32600,
+                      f"method must be a string, not a "
+                      f"{type(method).__name__}")
+
     params = message.get("params")
     if params is None:
         params = {}
 
-    if request_id is None:
+    # No id at all is a notification, which the protocol forbids answering.
+    # A NULL id is a malformed request, not a notification — and treating the
+    # two the same left a client waiting for a reply that was never coming.
+    if not has_id:
         return None
+    if request_id is None:
+        return _error(None, -32600, "a request needs an id; use a notification "
+                                    "(no `id` at all) if no reply is wanted")
 
     if not isinstance(params, dict):
         return _error(request_id, -32602,
@@ -339,12 +378,21 @@ def serve_mcp(stream_in=None, stream_out=None) -> int:
         line = line.strip()
         if not line:
             continue
-        try:
-            message = json.loads(line)
-        except json.JSONDecodeError:
-            reply = _error(None, -32700, "invalid JSON")
+        # Bounded, like the HTTP body. A stage's arguments are a few hundred
+        # bytes; a client that sends a megabyte on one line is malfunctioning
+        # or hostile, and reading it to reject it afterwards is the cost it was
+        # hoping for.
+        if len(line) > MAX_BODY_BYTES:
+            reply = _error(None, -32600,
+                           f"a message may be at most {MAX_BODY_BYTES} bytes; "
+                           f"this one was {len(line)}")
         else:
-            reply = handle(message)
+            try:
+                message = json.loads(line)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                reply = _error(None, -32700, "invalid JSON")
+            else:
+                reply = handle(message)
         if reply is not None:
             stream_out.write(_wire(reply) + "\n")
             stream_out.flush()
@@ -379,6 +427,18 @@ def _handler_class(token: str):
             self.end_headers()
             self.wfile.write(body)
 
+        def _refuse(self, status: int, payload: dict[str, Any]) -> None:
+            """Reject before the body is read, and end the connection.
+
+            The body is still in the socket. On a keep-alive connection the
+            next read starts in the middle of it, and those bytes are parsed as
+            the next request — so a rejected call could be followed by a
+            nonsense one the client never sent. Draining an unbounded body is
+            the cost the rejection exists to avoid, so the connection closes.
+            """
+            self.close_connection = True
+            self._send(status, payload)
+
         def _authorised(self) -> bool:
             # A page in a browser can POST to localhost. It cannot read a token
             # printed in this terminal, and cross-origin rules stop it setting
@@ -388,17 +448,17 @@ def _handler_class(token: str):
 
         def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler's name
             if not self._authorised():
-                return self._send(401, {"ok": False, "error": "bad token"})
+                return self._refuse(401, {"ok": False, "error": "bad token"})
             if self.path.rstrip("/") == "/tools":
                 return self._send(200, {"tools": tools()})
             self._send(404, {"ok": False, "error": "GET /tools"})
 
         def do_POST(self) -> None:  # noqa: N802
             if not self._authorised():
-                return self._send(401, {"ok": False, "error": "bad token"})
+                return self._refuse(401, {"ok": False, "error": "bad token"})
             if not self.path.startswith("/tools/"):
-                return self._send(404, {"ok": False,
-                                        "error": "POST /tools/<name>"})
+                return self._refuse(404, {"ok": False,
+                                          "error": "POST /tools/<name>"})
             declared = self.headers.get("Content-Length") or "0"
             try:
                 length = int(declared)
@@ -407,8 +467,7 @@ def _handler_class(token: str):
             if not 0 <= length <= MAX_BODY_BYTES:
                 # Refused before a single byte is read, because reading it is
                 # the whole cost: 64 MiB arrived, in memory, over 28 seconds.
-                self.close_connection = True
-                return self._send(413, {
+                return self._refuse(413, {
                     "ok": False,
                     "error": f"a request body may be at most "
                              f"{MAX_BODY_BYTES} bytes; this one declared "

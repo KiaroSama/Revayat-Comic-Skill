@@ -96,3 +96,9 @@ Thumbs.db
 # later is still ignored by default. Only these two exact files are published.
 !/AGENTS.md
 !/CLAUDE.md
+
+# Test reports, produced by every run and kept only as CI artifacts.
+junit*.xml
+resolved-versions.txt
+floor-versions.txt
+/evaluation/pages/

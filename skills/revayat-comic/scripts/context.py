@@ -129,12 +129,20 @@ def _index(doc: dict[str, Any], page_id: str) -> int:
     raise KeyError(f"no page {page_id!r} in this document")
 
 
-def _next(doc: dict[str, Any], page_id: str) -> list[dict[str, str]]:
-    """The following page, by region kind only.
+#: How much of a following region's SOURCE to show. Enough to see how a
+#: sentence continues, not enough to translate the page ahead.
+NEXT_SOURCE_CHARS = 80
 
-    Deliberately thin. Enough to notice that the page ends mid-sentence; not
-    enough to translate ahead, which would commit a reading before the page it
-    belongs to has been looked at.
+
+def _next(doc: dict[str, Any], page_id: str) -> list[dict[str, str]]:
+    """The following page: region kinds, speakers, and a little of the source.
+
+    Kinds and speakers alone could not do the job they were there for. A page
+    that ends mid-sentence needs the words the sentence continues into, and
+    `{"kind": "speech"}` does not tell a translator whether the next balloon
+    finishes the clause or starts a new one. The SOURCE is shown — never a
+    translation — and truncated, so this stays a look ahead rather than a
+    commitment to a reading of a page nobody has examined.
     """
     position = _index(doc, page_id) + 1
     if position >= len(doc["pages"]):
@@ -144,8 +152,13 @@ def _next(doc: dict[str, Any], page_id: str) -> list[dict[str, str]]:
     for region in following.get("regions", [])[:MAX_NEXT]:
         if region.get("dropped"):
             continue
-        out.append({"region": region["id"], "kind": region["kind"],
-                    "speaker": (region.get("speaker") or "").strip()})
+        source = (region.get("source_text") or "").strip()
+        entry = {"region": region["id"], "kind": region["kind"],
+                 "speaker": (region.get("speaker") or "").strip()}
+        if source:
+            entry["source"] = source[:NEXT_SOURCE_CHARS]
+            entry["truncated"] = len(source) > NEXT_SOURCE_CHARS
+        out.append(entry)
     return out
 
 
@@ -175,8 +188,13 @@ def _fit(value, limit: int, name: str, over: list[str]):
 
 def unmerged_before(doc_path: Path, doc: dict[str, Any],
                     page_id: str, *,
-                    worksheets: str | Path | None = None) -> list[str]:
+                    worksheets: str | Path | None = None
+                    ) -> tuple[list[str], list[str]]:
     """Earlier pages whose reply is written but not merged into the document.
+
+    Returns `(unmerged, unverified)`. The second list is the pages whose merge
+    predates this bookkeeping: "does it hold any Persian" is not evidence that
+    a reply was consumed whole, so they are named rather than waved through.
 
     This is the whole failure mode of the workflow, made checkable. A page's
     context is the pages before it, and `build` reads `comic.json` — so a reply
@@ -188,8 +206,9 @@ def unmerged_before(doc_path: Path, doc: dict[str, Any],
     """
     folder = Path(worksheets) if worksheets else doc_path.parent / "worksheets"
     if not folder.is_dir():
-        return []
+        return [], []
     behind: list[str] = []
+    unverified: list[str] = []
     for page in doc["pages"][:_index(doc, page_id)]:
         reply = folder / f"{page['id']}.done.txt"
         if not reply.is_file():
@@ -206,6 +225,8 @@ def unmerged_before(doc_path: Path, doc: dict[str, Any],
             )
             if not translated:
                 behind.append(page["id"])
+            else:
+                unverified.append(page["id"])
             continue
         # Three failures, one test. The reply was never merged; or it was
         # merged and then edited, so the page holds last time's Persian;
@@ -214,7 +235,58 @@ def unmerged_before(doc_path: Path, doc: dict[str, Any],
         if (recorded != worksheet.reply_digest(ir.read_text(reply))
                 or not page.get("worksheet_clean", False)):
             behind.append(page["id"])
-    return list(reversed(behind))
+    return list(reversed(behind)), list(reversed(unverified))
+
+
+def worksheet_folder(doc_path: Path, doc: dict[str, Any],
+                     worksheets: str | Path | None = None) -> Path:
+    """Where this chapter's replies actually live.
+
+    An explicit argument wins, then what the last `build`/`merge` recorded,
+    then the default beside the document. Without the recorded value a reader
+    who keeps replies somewhere else got an empty answer from every guard —
+    the folder was not there, so nothing was unmerged, so nothing was refused.
+    """
+    if worksheets:
+        return Path(worksheets)
+    recorded = (doc.get("meta") or {}).get("worksheets")
+    return Path(recorded) if recorded else doc_path.parent / "worksheets"
+
+
+def preflight(doc_path: Path, doc: dict[str, Any], page_id: str, *,
+              worksheets: str | Path | None = None,
+              allow_unmerged: bool = False) -> dict[str, Any]:
+    """Is this page safe to build a context for, and if not, what is missing.
+
+    One function, because there were two answers. The CLI refused when an
+    earlier page's reply was unmerged; `translate_document` built the package
+    itself and asked nothing, so the automatic path did silently what the
+    manual path refused to do.
+    """
+    folder = worksheet_folder(doc_path, doc, worksheets)
+    behind, unverified = unmerged_before(doc_path, doc, page_id,
+                                         worksheets=folder)
+    return {
+        "page": page_id,
+        "worksheets": str(folder),
+        "unmerged": behind,
+        "unverified": unverified,
+        "allow_unmerged": bool(allow_unmerged),
+        "ok": allow_unmerged or not behind,
+    }
+
+
+def refusal(state: dict[str, Any], doc_path: str | Path) -> str:
+    """What to say when the preflight fails. One wording, wherever it is hit."""
+    return (
+        f"{', '.join(state['unmerged'])} have been translated but not merged, "
+        f"so this context would be missing them.\n"
+        f"Run:  revayat-comic worksheet merge --doc {doc_path}\n"
+        f"then build this context again. Translating a page before the pages "
+        f"ahead of it are merged is what makes a chapter drift.\n"
+        f"Pass --allow-unmerged if you meant to translate these together and "
+        f"accept that they cannot see each other."
+    )
 
 
 def build(doc: dict[str, Any], page_id: str, *,
@@ -270,6 +342,11 @@ def build(doc: dict[str, Any], page_id: str, *,
             "glossary": glossary,
             "policy": {
                 **ir.title_policy(meta),
+                # Prose that names a different policy from the enum every stage
+                # obeys is two instructions, not one. Named here so the
+                # translator sees which one wins before writing a line.
+                **({"sfx_conflict": ir.sfx_conflict(meta)}
+                   if ir.sfx_conflict(meta) else {}),
                 "sfx": meta.get("sfx_policy", "keep"),
                 # `reading_direction` is the key the importer writes.
                 # `direction` is never set, so this always said "rtl" and
@@ -324,6 +401,14 @@ def build(doc: dict[str, Any], page_id: str, *,
             "overflowed": over,
             "constraints_characters": constraints_size,
             "constraints_over_budget": constraints_size > budget,
+            # Sent whole regardless — a locked term that vanished to fit is a
+            # name the chapter then spells two ways — but saying only "over
+            # budget" left nobody anything to do about it.
+            **({"constraints_action":
+                f"the locked glossary alone is {constraints_size} characters "
+                f"against a {budget}-character budget. Raise --budget, or lock "
+                f"fewer terms: every locked entry is sent on every page."}
+               if constraints_size > budget else {}),
             # Measured with this field still holding a placeholder, so it is
             # a few characters short of the final string. It is here because
             # `characters_used` counted the dialogue alone while the glossary
@@ -361,22 +446,20 @@ def main(argv: list[str] | None = None) -> int:
     # the JSON comes out well-formed and missing the pages that mattered. Refuse
     # by default; `--allow-unmerged` is there for the deliberate case, and says
     # what it costs.
-    behind = unmerged_before(doc_path, doc, args.page,
-                             worksheets=args.worksheets or None)
-    if behind and not args.allow_unmerged:
-        raise SystemExit(
-            f"{', '.join(behind)} have been translated but not merged, so this "
-            f"context would be missing them.\n"
-            f"Run:  revayat-comic worksheet merge --doc {args.doc}\n"
-            f"then build this context again. Translating a page before the "
-            f"pages ahead of it are merged is what makes a chapter drift.\n"
-            f"Pass --allow-unmerged if you meant to translate these together "
-            f"and accept that they cannot see each other."
-        )
+    state = preflight(doc_path, doc, args.page,
+                      worksheets=args.worksheets or None,
+                      allow_unmerged=args.allow_unmerged)
+    if not state["ok"]:
+        raise SystemExit(refusal(state, args.doc))
 
     package = build(doc, args.page, budget=args.budget)
-    if behind:
-        package["budget"]["unmerged_pages"] = behind
+    if state["unmerged"]:
+        # Recorded, because this was a deliberate override: a later reader has
+        # to be able to see that these pages could not see each other.
+        package["budget"]["unmerged_pages"] = state["unmerged"]
+        package["budget"]["unmerged_override"] = True
+    if state["unverified"]:
+        package["budget"]["unverified_pages"] = state["unverified"]
     ir.emit(package)
     return 0
 

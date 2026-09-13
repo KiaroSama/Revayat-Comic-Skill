@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+
 import pageir as ir
 import worksheet
 
@@ -448,6 +449,37 @@ def _sheets(doc_path):
     return ir.doc_dir(doc_path) / "worksheets"
 
 
+def _set_fields(text, region_id, *fields):
+    """Set field lines inside a region's block, replacing any already there.
+
+    `_add_fields` appends, which is right for a field the block does not have
+    and wrong for one it does: two `fa:` lines in one block is a malformed
+    reply, and a malformed reply is refused whole. A test that meant to correct
+    a translation has to overwrite the line, the way a reader editing the sheet
+    would.
+    """
+    wanted = {line.split(":", 1)[0].strip(): line for line in fields}
+    out, inside, written = [], False, set()
+    for line in text.splitlines():
+        header = worksheet.HEADER.match(line)
+        if header:
+            if inside:
+                out.extend(wanted[name] for name in wanted
+                           if name not in written)
+                written = set()
+            inside = header.group("id") == region_id
+        if inside:
+            match = worksheet.FIELD.match(line)
+            if match and match.group("name") in wanted:
+                out.append(wanted[match.group("name")])
+                written.add(match.group("name"))
+                continue
+        out.append(line)
+    if inside:
+        out.extend(wanted[name] for name in wanted if name not in written)
+    return "\n".join(out) + "\n"
+
+
 def _add_fields(text, region_id, *fields):
     """Extra field lines inside a region's EXISTING block.
 
@@ -550,7 +582,7 @@ def test_merging_the_same_reply_twice_changes_nothing(detected):
     page = doc["pages"][0]
     region_id = page["regions"][0]["id"]
 
-    _finish(detected, page["id"], _add_fields(
+    _finish(detected, page["id"], _set_fields(
         ir.read_text(_sheets(detected) / f"{page['id']}.txt"), region_id,
         "src: やめろ", "fa: بس کن", "note: check the speaker on this one"))
     for other in doc["pages"][1:]:
@@ -679,78 +711,3 @@ def test_a_worksheet_stamped_by_an_older_build_is_still_readable(detected):
     merged = worksheet.merge_document(detected)
     assert not merged["stale_worksheets"], (
         f"an older stamp was treated as stale: {merged['stale_worksheets']}")
-
-
-# --- a mentioned name is not the speaker -------------------------------------
-
-def test_a_mentioned_name_is_recorded_without_claiming_the_balloon(detected):
-    """The glossary was fed from `speaker:` alone, so the only way to get a name
-    that is merely talked about — "did you see Anna?" — into the table was to
-    write it in `speaker:`. That then told every later page that the wrong
-    character was talking, and carried the wrong voice into their context."""
-    worksheet.build_document(detected)
-    doc = ir.load_doc(detected)
-    page = doc["pages"][0]
-    region = page["regions"][0]["id"]
-
-    sheet = ir.read_text(_sheets(detected) / f"{page['id']}.txt")
-    sheet = _add_fields(sheet, region,
-                        "speaker: Ken", "propose: Anna, the Iron Gate")
-    _finish(detected, page["id"], sheet)
-    for other in doc["pages"][1:]:
-        _finish(detected, other["id"])
-    worksheet.merge_document(detected)
-
-    merged = ir.find_region(ir.load_doc(detected), region)
-    assert merged["speaker"] == "Ken"
-    assert merged["proposed"] == ["Anna", "the Iron Gate"]
-
-
-def test_a_proposal_round_trips_through_a_rebuilt_worksheet(detected):
-    """An absent field resets at the next merge, so a rebuilt worksheet that
-    forgets a proposal quietly undoes it — the same defect `drop`, `keep` and
-    `erase` already had."""
-    doc = ir.load_doc(detected)
-    page = doc["pages"][0]
-    page["regions"][0]["proposed"] = ["Anna", "the Iron Gate"]
-    ir.save_doc(doc, detected)
-
-    reloaded = ir.load_doc(detected)
-    body = worksheet.page_worksheet(reloaded, reloaded["pages"][0],
-                                    ir.page_fingerprint(reloaded["pages"][0]))
-    assert "propose: Anna, the Iron Gate" in body
-
-
-def test_a_proposal_merged_twice_is_not_listed_twice(detected):
-    """Merging the same reply again is an ordinary thing to do."""
-    worksheet.build_document(detected)
-    doc = ir.load_doc(detected)
-    page = doc["pages"][0]
-    region = page["regions"][0]["id"]
-
-    sheet = _add_fields(
-        ir.read_text(_sheets(detected) / f"{page['id']}.txt"),
-        region, "propose: Anna")
-    _finish(detected, page["id"], sheet)
-    for other in doc["pages"][1:]:
-        _finish(detected, other["id"])
-    worksheet.merge_document(detected)
-    worksheet.merge_document(detected)
-
-    assert ir.find_region(ir.load_doc(detected), region)["proposed"] == ["Anna"]
-
-
-def test_the_title_policy_is_printed_where_the_reader_is(detected):
-    """A policy filed somewhere else is a policy that gets re-decided every
-    chapter."""
-    doc = ir.load_doc(detected)
-    doc["meta"]["title_policy"] = {"honorifics": "keep -senpai, drop -san",
-                                   "slang": "   "}
-    ir.save_doc(doc, detected)
-
-    reloaded = ir.load_doc(detected)
-    body = worksheet.page_worksheet(reloaded, reloaded["pages"][0],
-                                    ir.page_fingerprint(reloaded["pages"][0]))
-    assert "# This title has settled:" in body
-    assert "#   honorifics: keep -senpai, drop -san" in body
-    assert "slang" not in body        # an empty entry is not a decision

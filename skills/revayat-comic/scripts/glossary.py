@@ -117,18 +117,18 @@ def scan(doc_path: str | Path) -> dict[str, Any]:
             repeats[source] += 1
             first_seen.setdefault(source, page["id"])
 
+    # Counted per role and then summed, rather than each loop assigning over
+    # the last one. A name that speaks, is mentioned and repeats had its total
+    # overwritten twice, and whichever loop ran last decided the number.
     for name, count in speakers.items():
         entry = entries.setdefault(name, _entry(name, role="character",
                                                 first=first_seen.get(name, "")))
-        entry["count"] = count
+        entry.setdefault("counts", {})["speaker"] = count
         _promote(entry, "character")
     for name, count in mentioned.items():
         entry = entries.setdefault(name, _entry(name, role="mentioned",
                                                 first=first_seen.get(name, "")))
-        # A name that is both said and mentioned is counted once for each, so
-        # the table shows how often the chapter uses it at all.
-        entry["count"] = entry.get("count", 0) + count if name in speakers \
-            else count
+        entry.setdefault("counts", {})["mentioned"] = count
         _promote(entry, "mentioned")
     for text, count in repeats.items():
         existing = entries.get(text)
@@ -137,18 +137,25 @@ def scan(doc_path: str | Path) -> dict[str, Any]:
             # term counts were not, so a term that had nearly left the
             # chapter still looked like one of its commonest words. The
             # reader's own `target`, `locked` and `role` are untouched.
-            existing["count"] = count
+            existing.setdefault("counts", {})["repeated"] = count
             continue
         if count < MIN_OCCURRENCES:
             continue
         entry = entries.setdefault(text, _entry(text, role="term",
                                                 first=first_seen.get(text, "")))
-        entry["count"] = count
+        entry.setdefault("counts", {})["repeated"] = count
     for text, entry in entries.items():
-        # A term that no longer appears at all is not in `repeats`, so it
-        # would have kept whichever count it had when it last did.
-        if entry.get("role") == "term" and text not in repeats:
-            entry["count"] = 0
+        # A role that no longer occurs is zero, not last time's number: a term
+        # that had nearly left the chapter still looked like one of its
+        # commonest words.
+        counts = entry.setdefault("counts", {})
+        counts["speaker"] = speakers.get(text, 0)
+        counts["mentioned"] = mentioned.get(text, 0)
+        counts["repeated"] = repeats.get(text, 0) if (
+            entry.get("role") == "term" or "repeated" in counts) else 0
+        # `count` stays as the one number the table and every older report
+        # print. It is now the sum, not whichever loop assigned last.
+        entry["count"] = sum(counts.values())
         entry.setdefault("version", 1)
 
     stages.stamp_stage(doc, "glossary", {"entries": len(entries)})
@@ -173,27 +180,65 @@ def scan(doc_path: str | Path) -> dict[str, Any]:
 #: A term written in a script that has word boundaries. `Ann` inside
 #: `Anna` is not an occurrence of `Ann`, and reporting it sends a
 #: translator to correct something that was already right.
-_BOUNDED_TERM = re.compile(r"^[A-Za-z][A-Za-z\u2019'-]*$")
+#: Latin letters, accents included: `Renée` and `Ångström` are names and
+#: `[A-Za-z]` could not even spell them. Deliberately NOT `\w` under
+#: `re.UNICODE`, which counts katakana and han as word characters — and then
+#: `\b` between two of them never matches, so every CJK term silently stopped
+#: being enforced.
+_LATIN = r"A-Za-z\u00C0-\u024F\u1E00-\u1EFF"
+#: One such word. `Ann` must not match inside `Anna`.
+_BOUNDED_TERM = re.compile(rf"^[{_LATIN}][{_LATIN}\u2019'-]*$")
+#: Several of them, so `the Iron Gate` is matched as a phrase rather than as
+#: three separate substrings that may be anywhere in the balloon.
+_BOUNDED_PHRASE = re.compile(
+    rf"^[{_LATIN}][{_LATIN}\u2019'-]*(?: [{_LATIN}][{_LATIN}\u2019'-]*)+$")
 
 
-def _mentions(term: str, source: str) -> bool:
-    """Whether `source` really uses `term`.
+def _pattern(term: str) -> str:
+    """A regular expression that matches `term` where a word may begin and end."""
+    return r"\b" + r"\s+".join(re.escape(word) for word in term.split()) + r"\b"
 
-    Substring for everything else, deliberately. Japanese has no spaces,
-    so a word-boundary test never matches a CJK term at all and every one
-    of them would quietly stop being enforced; Persian inflects by
-    attaching, so the same applies there.
+
+def forms(term: str, entry: dict[str, Any] | None = None) -> list[str]:
+    """Every spelling this term is allowed to appear as.
+
+    Aliases are written down, never guessed. Persian inflects by attaching and
+    Japanese has no spaces, so there is no general rule to infer one from — and
+    a guessed inflection enforced as a constraint is a wrong name presented as
+    a decision.
     """
-    if _BOUNDED_TERM.match(term):
-        return re.search(rf"\b{re.escape(term)}\b", source) is not None
-    return term in source
+    out = [term]
+    for alias in ((entry or {}).get("aliases") or []):
+        alias = str(alias).strip()
+        if alias and alias not in out:
+            out.append(alias)
+    return out
+
+
+def _mentions(term: str, source: str, entry: dict[str, Any] | None = None) -> bool:
+    """Whether `source` really uses `term` or one of its approved aliases.
+
+    Latin words and phrases are matched at word boundaries — `Ann` matched
+    inside `Anna` and reported drift on a name the balloon never used.
+    Everything else is a substring, deliberately: Japanese has no spaces, so a
+    boundary test never matches a CJK term at all and every one of them would
+    quietly stop being enforced; Persian inflects by attaching, so the same
+    applies there.
+    """
+    for form in forms(term, entry):
+        if _BOUNDED_TERM.match(form) or _BOUNDED_PHRASE.match(form):
+            if re.search(_pattern(form), source, re.UNICODE):
+                return True
+        elif form in source:
+            return True
+    return False
 
 
 def check(doc_path: str | Path, *, limit: int | None = 30) -> dict[str, Any]:
     doc = ir.load_doc(Path(doc_path))
     entries = doc.get("glossary", {}).get("entries", {})
     locked = {
-        source: entry["target"]
+        source: entry
         for source, entry in entries.items()
         if entry.get("locked") and entry.get("target")
     }
@@ -209,16 +254,21 @@ def check(doc_path: str | Path, *, limit: int | None = 30) -> dict[str, Any]:
         target = (region.get("target_text") or "")
         if not source or not target:
             continue
-        for term, expected in locked.items():
+        for term, entry in locked.items():
             # Only meaningful where the source term is actually present; a term
             # absent from the balloon cannot have been rendered wrongly in it.
-            if _mentions(term, source) and expected not in target:
-                drift.append({
-                    "region": region["id"],
-                    "term": term,
-                    "expected": expected,
-                    "got": target[:60],
-                })
+            if not _mentions(term, source, entry):
+                continue
+            approved = [entry["target"]] + [
+                str(alias) for alias in (entry.get("target_forms") or [])]
+            if any(form and form in target for form in approved):
+                continue
+            drift.append({
+                "region": region["id"],
+                "term": term,
+                "expected": entry["target"],
+                "got": target[:60],
+            })
     return {
         "ok": not drift,
         "locked": len(locked),
@@ -227,27 +277,83 @@ def check(doc_path: str | Path, *, limit: int | None = 30) -> dict[str, Any]:
     }
 
 
+def _affected(doc: dict[str, Any], term: str, previous: str) -> list[str]:
+    """Approved lines that used the spelling this change replaces.
+
+    Not rewritten. A translation is a person's work and a search-and-replace
+    through it is how a name ends up inside another word; they are named so
+    somebody can look.
+    """
+    touched = []
+    for _page, region in ir.iter_regions(doc):
+        if region.get("dropped"):
+            continue
+        target = region.get("target_text") or ""
+        if previous and previous in target and _mentions(
+                term, region.get("source_text") or ""):
+            touched.append(region["id"])
+    return touched
+
+
+def set_entry(doc: dict[str, Any], source: str, record: dict[str, Any]
+              ) -> dict[str, Any]:
+    """Change one entry, keeping the history a locked form is owed.
+
+    THE way a target changes. `set_target` preserved the previous spelling and
+    bumped the version, and the documented route — `glossary apply --table` —
+    assigned `entry["target"] = …` directly and preserved nothing, so the
+    guarantee existed only for callers that already knew about it.
+    """
+    entries = doc.setdefault("glossary", {}).setdefault("entries", {})
+    entry = entries.setdefault(source, _entry(source))
+    previous = (entry.get("target") or "").strip()
+
+    if "locked" in record:
+        entry["locked"] = bool(record["locked"])
+    for key in ("role", "note", "aliases"):
+        if record.get(key):
+            entry[key] = record[key]
+    if "target" in record:
+        set_target(entry, record["target"])
+    return {"term": source, "version": entry.get("version", 1),
+            "previous": previous,
+            "affected": (_affected(doc, source, previous)
+                         if previous and previous != (entry.get("target") or "")
+                         else [])}
+
+
 def apply_file(doc_path: str | Path, table: str | Path) -> dict[str, Any]:
-    """Merge a hand-written ``{"source": {"target": ...}}`` table into the doc."""
+    """Merge a hand-written ``{"source": {"target": ...}}`` table into the doc.
+
+    Every change goes through `set_entry`, so an approved spelling that is
+    replaced keeps the one it replaced and the lines translated against the old
+    one are named rather than silently rewritten.
+    """
     doc_path = Path(doc_path)
     doc = ir.load_doc(doc_path)
     payload = json.loads(ir.read_text(table))
-    entries = doc.setdefault("glossary", {}).setdefault("entries", {})
 
-    applied = 0
+    applied, revised, review = 0, [], []
     for source, value in payload.items():
-        record = {"target": value} if isinstance(value, str) else dict(value)
-        entry = entries.setdefault(source, _entry(source))
-        # A hand-made decision outranks anything scanning produced, but the
-        # occurrence count stays: it is measurement, not judgement.
-        for key in ("target", "role", "note"):
-            if record.get(key):
-                entry[key] = record[key]
-        entry["locked"] = bool(record.get("locked", True))
+        record = ({"target": value, "locked": True} if isinstance(value, str)
+                  else {"locked": True, **dict(value)})
+        outcome = set_entry(doc, source, record)
         applied += 1
+        if outcome["version"] > 1 and outcome["previous"]:
+            revised.append({"term": source, "was": outcome["previous"],
+                            "version": outcome["version"]})
+            review.extend(outcome["affected"])
 
     ir.save_doc(doc, doc_path)
-    return {"applied": applied, "entries": len(entries)}
+    return {
+        "applied": applied,
+        "entries": len(doc["glossary"]["entries"]),
+        "revised": revised,
+        "needs_review": sorted(set(review)),
+        "next": ("these regions were translated against the previous spelling "
+                 "and were NOT rewritten — read them and correct the ones that "
+                 "need it") if review else None,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:

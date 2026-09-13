@@ -148,6 +148,13 @@ def mark_document(
             region["balloon"] = None
             region["added_as"] = slug
             region["polarity"] = "light"
+            # After everything already on the page, and never renumbering any
+            # of it. The reading order of approved dialogue is a decision;
+            # moving it to make room for a watermark would be a defect hidden
+            # by a renumbering.
+            region["reading_order"] = 1 + max(
+                [existing.get("reading_order") or 0
+                 for existing in page.get("regions", [])] or [0])
             page.setdefault("regions", []).append(region)
 
         region["erase"] = True
@@ -160,7 +167,11 @@ def mark_document(
         marked.append({"page": page["id"], "region": region["id"]})
 
     stages.stamp_stage(doc, "watermark", {"label": label, "box": box,
-                                      "pages": len(marked)})
+                                          "marked": len(marked)},
+                       options={"box": list(box), "label": label,
+                                "kind": kind,
+                                "from_overview": from_overview},
+                       pages=pages)
     ir.save_doc(doc, doc_path)
 
     return {

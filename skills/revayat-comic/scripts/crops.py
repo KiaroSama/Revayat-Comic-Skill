@@ -267,7 +267,8 @@ def build_document(
             "regions": len(page.get("regions", [])),
         })
 
-    stages.stamp_stage(doc, "crops", {"pages": len(produced)})
+    stages.stamp_stage(doc, "crops", {"rendered": len(produced)},
+                       pages=pages)
     ir.save_doc(doc, doc_path)
     return {
         "document": str(doc_path),

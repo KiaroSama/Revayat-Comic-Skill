@@ -688,7 +688,9 @@ def detect_document(
             "panels": len(page["panels"]),
         })
 
-    stages.stamp_stage(doc, "detect", {"totals": totals})
+    stages.stamp_stage(doc, "detect", {"totals": totals},
+                       options={"thresholds": options or {},
+                                "find_sfx": find_sfx}, pages=pages)
     ir.save_doc(doc, doc_path)
 
     empty = [entry["page"] for entry in per_page if entry.get("regions") == 0]

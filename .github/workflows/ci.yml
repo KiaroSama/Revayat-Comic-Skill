@@ -50,7 +50,9 @@ jobs:
       # No runner can *write* a RAR — the format is proprietary and there is no
       # free writer — so `tests/data/real-rar.b64` carries a genuine one and this
       # supplies something that can read it. Without a backend the CBR test skips
-      # and the reader goes untested on every machine but a developer's.
+      # and the reader goes untested. Linux is where that skip is NOT allowed:
+      # `check_skips.py` fails the job if the CBR test skips here, so this step
+      # going wrong is a build failure rather than a quiet loss of coverage.
       - name: Install a RAR reader
         if: runner.os == 'Linux'
         run: |
@@ -65,15 +67,96 @@ jobs:
           # Optional for users, required here: it is what the CBR reader tests need.
           python -m pip install rarfile
 
+      - name: Record the resolved versions
+        run: |
+          python -m pip list --format=freeze > resolved-versions.txt
+          echo "--- resolved on ${{ matrix.os }} / ${{ matrix.python }} ---"
+          cat resolved-versions.txt
+
+      # `-rs` prints a reason for every skip. The next step reads them: a skip
+      # is a test that did not run, and a workflow that only looks at the final
+      # summary line cannot tell "all green" from "half of it was skipped".
       - name: Run tests
         env:
           PYTHONIOENCODING: utf-8
-        run: python -m pytest tests -q --timeout=300 --durations=10
+        run: >
+          python -m pytest tests -q -rs --timeout=300 --durations=10
+          --junitxml=junit.xml
+
+      # An allowlist, not a word-search. Every skip this project accepts is
+      # named here with the reason it is acceptable; anything else fails the
+      # job, because a test that quietly stopped running is indistinguishable
+      # from one that never existed.
+      - name: Check every skip is one we allow
+        if: always()
+        run: python .github/check_skips.py junit.xml
+
+      - name: Keep the evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-evidence-${{ matrix.os }}-py${{ matrix.python }}
+          path: |
+            junit.xml
+            resolved-versions.txt
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Smoke-test the CLI
         env:
           PYTHONIOENCODING: utf-8
         run: python skills/revayat-comic/scripts/revayat-comic.py doctor
+
+  # The floors in `requirements.txt` are a promise: `pillow>=10.0` says the
+  # project works on Pillow 10. Nothing tested that — CI resolved the latest of
+  # everything, so the floors could drift years out of date and no build would
+  # notice until a user on an older wheel hit it.
+  minimum-dependencies:
+    name: declared minimum versions
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.10"
+
+      - name: Install a Persian-capable font
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends fonts-noto-core
+
+      # The LOWEST version each floor allows, resolved by asking pip for it.
+      - name: Install the floors
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --only-binary=:all: \
+            "pillow==10.0.*" "numpy==1.24.*" "opencv-python-headless==4.8.*" \
+            "pymupdf==1.24.*" "arabic-reshaper==3.0.*" "python-bidi==0.4.*" \
+            pytest pytest-timeout
+          python -m pip list --format=freeze > floor-versions.txt
+          cat floor-versions.txt
+
+      - name: Run tests on the floors
+        env:
+          PYTHONIOENCODING: utf-8
+        run: >
+          python -m pytest tests -q -rs --timeout=300 --junitxml=junit-floor.xml
+
+      - name: Check every skip is one we allow
+        if: always()
+        run: python .github/check_skips.py junit-floor.xml
+
+      - name: Keep the evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-evidence-minimum-dependencies
+          path: |
+            junit-floor.xml
+            floor-versions.txt
+          if-no-files-found: warn
+          retention-days: 14
 
   pipeline:
     name: end-to-end pipeline (${{ matrix.os }})
@@ -132,7 +215,20 @@ jobs:
           if not raqm:
               print("::warning::Pillow on Linux no longer carries RAQM; the "
                     "reshaper fallback is now the only path under test")
-          print("shaping:", typeset.Shaper().mode)
+
+          # BOTH paths, on the runner that has both. The reshaper fallback is
+          # exercised everywhere; RAQM only where libraqm and FriBiDi are
+          # actually present, and asserting the two differ is what proves the
+          # forced-fallback flag does anything at all.
+          native = typeset.Shaper()
+          forced = typeset.Shaper(force_fallback=True)
+          print("shaping:", native.mode, "| forced:", forced.mode)
+          assert forced.mode == "reshaper", forced.mode
+          if raqm:
+              assert native.mode == "raqm", native.mode
+              sample = "\u06cc\u06a9 \u062c\u0645\u0644\u0647"
+              assert typeset.shape_fallback(sample) != sample, (
+                  "the fallback produced its input unchanged")
           PY
 
   install:
