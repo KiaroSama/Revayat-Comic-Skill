@@ -271,6 +271,11 @@ def clean_page(
             # The artwork *is* the sound effect. Erasing it to write the same
             # thing in Persian is a loss, so these policies leave it drawn.
             region["fill"] = "keep"
+            # An OUTCOME, written every time. A region this run left alone by
+            # decision carried whatever the previous run had concluded about
+            # it — including `refused`, which gates publication — and no later
+            # stage had any reason to touch a region nobody was cleaning.
+            region["clean_status"] = "kept"
             counts["keep"] += 1
             continue
         if not region.get("mask"):

@@ -170,7 +170,7 @@ def build_document(
     doc_path = Path(doc_path)
     doc = ir.load_doc(doc_path)
     root = ir.doc_dir(doc_path)
-    folder = Path(out) if out else root / "worksheets"
+    folder = ir.worksheet_folder(doc_path, doc, out)
     fingerprint = ir.fingerprint(doc)
     by_id = {page["id"]: page for page in doc["pages"]}
 
@@ -245,8 +245,7 @@ def merge_document(
     doc_path = Path(doc_path)
     doc = ir.load_doc(doc_path)
     root = ir.doc_dir(doc_path)
-    folder = (Path(worksheets) if worksheets
-              else Path(doc["meta"].get("worksheets") or root / "worksheets"))
+    folder = ir.worksheet_folder(doc_path, doc, worksheets)
     if worksheets:
         doc["meta"]["worksheets"] = str(folder)
     # Kept only so a worksheet stamped by an older build is still recognised;
@@ -424,7 +423,7 @@ def status(doc_path: str | Path, worksheets: str | Path | None = None) -> dict[s
     doc_path = Path(doc_path)
     doc = ir.load_doc(doc_path)
     root = ir.doc_dir(doc_path)
-    folder = Path(worksheets) if worksheets else root / "worksheets"
+    folder = ir.worksheet_folder(doc_path, doc, worksheets)
 
     by_id = {page["id"]: page for page in doc["pages"]}
     document_stamp = ir.fingerprint(doc)

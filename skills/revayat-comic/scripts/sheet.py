@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 import pageir as ir
+from replies import field_lines
 
 #: Written into every sheet this build produces, so a reply that comes back
 #: without it is recognisable as one an older build handed out — whose
@@ -192,14 +193,18 @@ def page_worksheet(doc: dict[str, Any], page: dict[str, Any], fingerprint: str) 
         if region.get("confidence", 1.0) < 0.5:
             lines.append("# low-confidence detection — check the crop; "
                          "`drop: yes` if there is no text")
-        lines.append(f"src: {region.get('source_text', '')}")
-        lines.append(f"fa: {region.get('target_text', '')}")
+        # Through `field_lines`, not an f-string: a balloon may contain this
+        # protocol's own syntax — a line starting `fa:`, `@@` or `# ` — and a
+        # raw write made the sheet unparseable in exactly the way that loses
+        # the reader's work without saying so.
+        lines += field_lines("src", region.get("source_text", ""))
+        lines += field_lines("fa", region.get("target_text", ""))
         if region.get("speaker"):
-            lines.append(f"speaker: {region['speaker']}")
+            lines += field_lines("speaker", region["speaker"])
         if region.get("proposed"):
             lines.append(f"propose: {', '.join(region['proposed'])}")
         if region.get("target_full"):
-            lines.append(f"fa_full: {region['target_full']}")
+            lines += field_lines("fa_full", region["target_full"])
         if region.get("review_ack"):
             lines.append(f"reviewed: {', '.join(region['review_ack'])}")
         # Decisions already taken are written back out. An ABSENT field resets
@@ -213,7 +218,7 @@ def page_worksheet(doc: dict[str, Any], page: dict[str, Any], fingerprint: str) 
         if region.get("erase"):
             lines.append("erase: yes")
         for note in region.get("review", []):
-            lines.append(f"note: {note}")
+            lines += field_lines("note", note)
         # What a stage recorded, as comments: the reader has to see that `clean`
         # refused a patch, and the parser must never read it back as an answer
         # the reader gave.

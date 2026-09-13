@@ -318,6 +318,25 @@ def find_region(doc: dict[str, Any], region_id: str) -> dict[str, Any] | None:
 SFX_KEEP_POLICIES = frozenset({"keep", "bilingual", "annotate"})
 
 
+def worksheet_folder(doc_path: Path | str, doc: dict[str, Any],
+                     override: str | Path | None = None) -> Path:
+    """Where this document's worksheets live.
+
+    Three call sites answered this separately and two of them forgot the
+    document: `worksheet build --out elsewhere` records the folder in `meta`,
+    and then `worksheet build` and `worksheet status` with no `--out` looked
+    in `work/worksheets`, found nothing, and reported a chapter with a full
+    set of finished replies as having none.
+
+    Order: what this call was told, then what the document remembers, then the
+    default beside the document.
+    """
+    if override:
+        return Path(override)
+    recorded = (doc.get("meta") or {}).get("worksheets")
+    return Path(recorded) if recorded else Path(doc_path).parent / "worksheets"
+
+
 def add_audit(region: dict[str, Any], note: str) -> None:
     """Record something a STAGE observed about this region.
 
