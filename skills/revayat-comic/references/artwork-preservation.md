@@ -86,6 +86,18 @@ So there are two authorised areas, and the union of them is what QA checks:
 
 `writable.png` records what was *actually drawn*, not what might have been.
 
+**Each region is bounded by its own area, not by that union.** The union is
+what QA measures the finished page against; it is not a permission the
+typesetter may spend. Ink from one balloon landing inside the next balloon is
+outside *this* region's authority however legitimately that balloon belongs to
+somebody else, so the line is reported as `text-overflow` and taken back off
+the page. Two balloons side by side is the ordinary case, not a corner one.
+
+A rejected line restores the page **as it stands**, with every region already
+set on it — not as it was before any region drew. Restoring the older snapshot
+erased the finished translation of every neighbour whose ink shared a rectangle
+with the one that did not fit.
+
 ## The cleaning tiers
 
 Escalate; do not reach for the expensive tool first.

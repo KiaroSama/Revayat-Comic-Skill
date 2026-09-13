@@ -15,7 +15,9 @@ script's:
   before writing a single line. The overview is the context — who is speaking,
   which balloon answers which, what the scene is. The sheets are what you read
   the text from. Then fill in the worksheet.
-- **Step 10.** Do not export while `qa check` reports `"ok": false`, and in
+- **Step 10.** `export` runs the whole publication gate itself and refuses
+  while `qa check` would report `"ok": false` — `--draft` ships what is there
+  and marks the package a draft in its own `ComicInfo.xml`. In
   particular never ship a page flagged `artwork-modified`.
 
 If the source language is not given, work it out from the first page and say

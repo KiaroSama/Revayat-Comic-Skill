@@ -27,6 +27,8 @@ skills/revayat-comic/
 commands/           slash commands for plugin hosts
 install/            install.ps1, install.sh — copy the skill into agents
 tests/              pytest; fixtures are generated, never committed
+evaluation/         the translation benchmark and its scorer — cases, a
+                    generated page per case, and axis-by-axis scoring
 ```
 
 ## The pipeline
