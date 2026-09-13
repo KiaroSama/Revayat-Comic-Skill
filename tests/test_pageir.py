@@ -297,12 +297,44 @@ def test_locking_a_glossary_name_stales_the_translation_that_predates_it():
     assert "translate" in stages.stale_stages(doc)
 
 
-def test_a_title_policy_change_stales_translation_and_render():
+def test_a_title_policy_change_stales_what_reads_it():
+    """The title policy constrains the WORDS. A render depends on the words
+    themselves, which is a different fact and already covered — so changing a
+    honorific rule invalidates the translation and the sheet that prints it,
+    and does not claim every page needs setting again."""
     doc = _doc()
-    _all_fresh(doc, "detect", "translate", "masks", "clean", "typeset")
+    _all_fresh(doc, "detect", "worksheet", "translate", "masks", "clean",
+               "typeset")
     doc["meta"]["title_policy"] = {"honorifics": "keep -senpai"}
+
     stale = stages.stale_stages(doc)
-    assert {"translate", "typeset"} <= set(stale), stale
+    assert {"translate", "worksheet"} <= set(stale), stale
+    assert "masks" not in stale and "typeset" not in stale
+
+
+def test_filling_in_the_glossary_does_not_stale_the_masks():
+    """`glossary scan` is the stage whose whole job is to fill that table in,
+    and it reported the masks of every page as out of date — on the ordinary
+    order of operations, caught by the end-to-end pipeline in CI. Masking and
+    cleaning know nothing about names."""
+    doc = _doc()
+    _all_fresh(doc, "detect", "masks", "clean", "typeset")
+
+    doc["glossary"] = {"entries": {"ハルカ": {"target": "هاروکا",
+                                            "locked": False, "version": 1}}}
+
+    assert not stages.stale_stages(doc), stages.stale_stages(doc)
+
+
+def test_a_sound_effect_policy_change_still_stales_the_render():
+    """The narrowing must not go too far: `--sfx-policy` decides whether an
+    effect is replaced or left in the artwork, and that is a render."""
+    doc = _doc()
+    _all_fresh(doc, "detect", "masks", "clean", "typeset")
+    doc["meta"]["sfx_policy"] = "translate"
+
+    stale = stages.stale_stages(doc)
+    assert {"masks", "clean", "typeset"} <= set(stale), stale
 
 
 def test_remasking_then_recleaning_settles_instead_of_staying_stale_forever():
