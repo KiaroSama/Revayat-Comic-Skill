@@ -672,7 +672,7 @@ def detect_document(
     per_page: list[dict[str, Any]] = []
 
     for page in doc["pages"]:
-        if pages and page["id"] not in pages:
+        if pages is not None and page["id"] not in pages:
             continue
         # A page whose regions were reviewed keeps them: re-detecting would
         # renumber the ids the worksheet already refers to.

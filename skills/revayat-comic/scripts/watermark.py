@@ -100,7 +100,7 @@ def mark_document(
     refused: list[str] = []
 
     for page in doc["pages"]:
-        if pages and page["id"] not in pages:
+        if pages is not None and page["id"] not in pages:
             continue
         width, height = page["width"], page["height"]
         wanted = box
