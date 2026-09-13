@@ -47,32 +47,23 @@ def japanese_chapter(tmp_path):
     return Path(report["document"])
 
 
-def test_a_japanese_page_gives_up_its_text_and_its_effect(japanese_chapter):
-    """Every piece of lettering on the page, and the column read as a column.
+def test_a_japanese_page_gives_up_its_balloons_and_its_effect(japanese_chapter):
+    """Both balloons and the drawn effect, on a page drawn with a real face.
 
     The column is the one that matters: it is the case `orientation` exists
     for, and it is measured from the ink rather than assumed from the language.
 
-    **What is asserted is what the page contains, not how many balloons the
-    detector recognised around it** — and that is a measured decision, not a
-    convenience. The balloon around the column is found on every face with the
-    right area, the right smallest side and the right solidity; what differs is
-    how much of a thin face's ink survives being filled into the interior
-    before the share is measured. On Noto Sans CJK it is 0.19% against a 1.5%
-    floor. That is the detector meeting the face, and making it
-    face-independent means changing balloon detection — a closed finding here,
-    with eleven measurements and 119 labelled balloons behind it: the page does
-    not carry the information locally, and the best any method reached was
-    F1 0.57.
-
-    `test_the_vertical_balloon_is_drawn_as_a_balloon` below holds the half this
-    fixture does control.
+    The counts were briefly weakened to "three pieces of lettering, one of them
+    a balloon", because the vertical balloon was found on one machine's face
+    and not on another's. That was a real detector defect, not a fact about
+    Japanese, and it is fixed:
+    `test_a_balloon_full_of_thin_strokes_is_still_a_balloon` below holds it.
     """
     totals = detect.detect_document(japanese_chapter)["totals"]
     doc = ir.load_doc(japanese_chapter)
     regions = doc["pages"][0]["regions"]
     # What was found, in the failure message: a bare `assert 1 == 2` says
-    # nothing about WHICH piece of lettering a runner lost.
+    # nothing about WHICH balloon a runner lost.
     found = ", ".join(
         f"{region['kind']}/{region['orientation']} at {region['bbox']} "
         f"conf={region.get('confidence', 0):.2f}"
@@ -80,20 +71,13 @@ def test_a_japanese_page_gives_up_its_text_and_its_effect(japanese_chapter):
     where = f"{totals} — {found}"
 
     assert totals["panels"] == 4, where
-    # Three pieces of lettering: the column, the horizontal line, the effect.
-    # None of them may go missing, whatever kind each is classified as.
-    assert totals["regions"] == 3, where
+    assert totals["speech"] == 2, where
+    assert totals["sfx"] == 1, f"the katakana effect was not found: {where}"
 
-    tall = [r for r in regions if r["orientation"] == "vertical"]
-    wide = [r for r in regions if r["orientation"] == "horizontal"]
-    assert tall, f"the column read across: {where}"
-    assert len(wide) == 2, where
-    column = tall[0]
-    assert column["bbox"][3] > 2 * column["bbox"][2], where
-
-    # A page of Japanese where NOTHING reads as speech is a detector
-    # regression, and that part does not depend on the face.
-    assert totals["speech"] >= 1, where
+    orientations = {r["id"]: r["orientation"] for r in regions
+                    if r["kind"] == "speech"}
+    assert "vertical" in orientations.values(), f"the column read across: {where}"
+    assert "horizontal" in orientations.values(), where
 
 
 def test_the_dakuten_does_not_cost_the_effect_its_detection():
@@ -161,59 +145,84 @@ def test_the_column_is_taller_than_it_is_wide(japanese_chapter):
     assert height > width * 1.5
 
 
-def test_the_vertical_balloon_is_drawn_as_a_balloon():
-    """The half of it this fixture controls.
+def _thinned(page, erode: int):
+    """The same page with its lettering eroded — a lighter face, deterministically.
 
-    A thin column of hiragana in a tall ellipse is the tight case for balloon
-    detection, and this fixture has broken it twice by drawing the ellipse
-    wrong: once sized from the ink, which produced a 57-pixel sliver, and once
-    padded so generously that the interior was mostly paper.
+    Thinning the strokes is what a light CJK face amounts to as far as balloon
+    detection is concerned, and doing it here means the regression below does
+    not depend on which faces the runner happens to carry.
+    """
+    import cv2
+    import numpy as np
+    from PIL import Image
 
-    So: the component around the column must exist with valid balloon geometry
-    — area, smallest side, solidity — on whatever face the runner has. The ink
-    share is REPORTED and not asserted: how much of a face's ink survives being
-    filled into the interior is the detector's number, and on Noto Sans CJK it
-    is 0.19% where here it is over 4%.
+    array = np.asarray(page.convert("L"))
+    ink = np.where(array < 128, np.uint8(255), np.uint8(0))
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (erode, erode))
+    thinner = cv2.erode(ink, kernel)
+    out = np.asarray(page).copy()
+    out[ink > 0] = 255                      # lift every mark off the page
+    out[thinner > 0] = 0                    # and put the thinned ones back
+    return Image.fromarray(out)
+
+
+@pytest.mark.parametrize("erode", [0, 2, 3])
+def test_a_balloon_full_of_thin_strokes_is_still_a_balloon(erode):
+    """THE REGRESSION, at the level it actually happens.
+
+    `_fill_lettering` absorbs a hole into the balloon interior only when its
+    solidity is at least 0.30, on the premise that "a letter is a solid blob".
+    Hiragana are thin strokes in a square em: **four of the seven holes in this
+    fixture are already under 0.30 on a heavy gothic face**, and all of them
+    are under it on a light one. The letters then stayed OUTSIDE the interior,
+    the ink measured inside it was the bare paper around them, and a balloon
+    that was the right size, the right shape and in the right place was
+    rejected for holding 0.19% ink.
+
+    Measured, by eroding this fixture's own strokes:
+
+        before the fix   erode=0: 0.0463   erode=3: 0.00007   <- the cliff
+        after            erode=0: 0.0631   erode=3: 0.0280
+
+    `_balloon_candidates` asks for the component PLUS what it encloses now,
+    which is what a balloon's interior means and needs no threshold at all.
     """
     import cv2
     import numpy as np
 
     page = japanese_page()
-    gray = cv2.cvtColor(np.asarray(page), cv2.COLOR_RGB2GRAY)
-    height, width = gray.shape[:2]
-    options = detect.DEFAULTS
+    if erode:
+        page = _thinned(page, erode)
+    gray = cv2.cvtColor(np.asarray(page.convert("RGB")), cv2.COLOR_RGB2GRAY)
 
-    _, light = cv2.threshold(gray, 0, 255,
-                             cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    solid = detect._fill_lettering(
-        light, np, options["glyph_max"] * min(height, width))
-    count, labels, stats = detect._components(solid, np)
+    column = [balloon
+              for balloon in detect._balloon_candidates(
+                  gray, detect.DEFAULTS, invert=False)
+              # The first panel, and taller than it is wide.
+              if balloon["bbox"][0] < page.width // 2
+              and balloon["bbox"][1] < page.height // 2
+              and balloon["bbox"][3] > balloon["bbox"][2]]
 
-    seen, report = [], []
-    for label in range(1, count):
-        x, y, w, h, area = (int(stats[label][index]) for index in range(5))
-        # In the first panel, taller than wide, and not the panel itself.
-        if not (x < width // 2 and y < height // 2 and h > w and 100 < h < 400):
-            continue
-        interior = (labels[y:y + h, x:x + w] == label)
-        window = gray[y:y + h, x:x + w]
-        share = float((window[interior] < 128).sum()) / max(
-            1.0, float(interior.sum()))
-        geometry = {
-            "area": (options["balloon_min_area"] * height * width
-                     <= area <= options["balloon_max_area"] * height * width),
-            "min_side": min(w, h) >= max(
-                12.0, options["balloon_min_side"] * min(height, width)),
-            "solidity": area / float(w * h) >= options["balloon_min_solidity"],
-        }
-        report.append(f"[{x},{y},{w},{h}] area={area} "
-                      f"solidity={area / (w * h):.3f} ink={share:.4f} "
-                      f"geometry_failed="
-                      f"{sorted(k for k, ok in geometry.items() if not ok)}")
-        if all(geometry.values()):
-            seen.append(share)
+    assert column, (
+        f"the column's balloon disappeared at erode={erode}; thin strokes are "
+        f"a light face, not a missing balloon")
+    assert column[0]["ink_share"] >= detect.DEFAULTS["ink_min"], column
 
-    assert seen, ("no balloon-shaped component around the vertical column; "
-                  + " | ".join(report or ["nothing tall in the first panel"]))
-    print(f"column balloon ink share: {max(seen):.4f} "
-          f"(detector floor {options['ink_min']})")
+
+def test_the_interior_of_a_balloon_includes_what_it_encloses():
+    """The mechanism, on a shape with a known answer.
+
+    A ring of ink around a square of paper with one blob in it: the interior is
+    the paper AND the blob, never the paper alone.
+    """
+    import numpy as np
+
+    region = np.zeros((40, 40), bool)
+    region[5:35, 5:35] = True
+    region[15:25, 15:25] = False          # a letter-shaped hole
+
+    filled = detect._enclosed(region, np)
+
+    assert filled[20, 20], "the hole was not counted as inside"
+    assert filled.sum() == 30 * 30
+    assert not filled[2, 2], "something outside the region was swallowed"
