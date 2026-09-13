@@ -10,11 +10,17 @@
 # Core — required for every run.
 pillow>=10.0                  # page IO, and the Persian text renderer
 numpy>=1.24                   # every pixel measurement
-opencv-python-headless>=4.8   # balloon detection, masks, inpainting
+# 4.8.1, not 4.8: 4.8.0.74 is YANKED on PyPI, and a floor nobody should install
+# is not a floor. Found by pinning the literal minimum in CI rather than the
+# `==4.8.*` patch series, which resolves past it.
+opencv-python-headless>=4.8.1 # balloon detection, masks, inpainting
 
 # Strongly recommended. Without it CBZ, CBR and folders still work, but PDF
 # input and PDF export do not.
-pymupdf>=1.24
+# 1.24.3, not 1.24: the scripts `import pymupdf`, and 1.24.0 through 1.24.2
+# only expose the module as `fitz` — they install cleanly and then fail at the
+# first PDF. The CI job that installs the literal minimum is what found it.
+pymupdf>=1.24.3
 
 # Persian shaping fallback. Pillow wheels normally ship RAQM, which does this
 # properly through HarfBuzz and FriBidi; these two are only used when it does
