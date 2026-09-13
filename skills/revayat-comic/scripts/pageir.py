@@ -33,13 +33,16 @@ from pathlib import Path
 # for them as `ir.translatable`, `ir.may_be_edited` and `ir.region_state`,
 # and that is the right name at the call site.
 from regions import (  # noqa: F401 - re-exported, see that module's docstring
+    ARTIFACT_ORDER,
     DERIVED_FROM_REGIONS,
     REGION_STATES,
     SFX_KEEP_POLICIES,
     add_audit,
     may_be_edited,
     region_state,
+    required_artifact,
     restore_blank_page,
+    shipped_artifact,
     translatable,
 )
 from typing import Any, Iterator, Sequence

@@ -12,7 +12,9 @@ import shutil
 
 import pytest
 
+import clean
 import export
+import masks
 import pageir as ir
 import qa
 import typeset
@@ -167,3 +169,132 @@ def test_every_error_is_counted_not_the_first_sixty(translated):
     assert report["errors"] >= 70
     assert state["blocking_count"] == report["errors"]
     assert len(state["blocking"]) == 20        # still readable
+
+
+# --------------------------------------------------------------------------- #
+# A page with no Persian on it still has to prove what it ships.
+# --------------------------------------------------------------------------- #
+
+def _erase_only(doc_path):
+    """A watermark-removal chapter: every region erased, nothing translated.
+
+    The honest workflow for one of these ends at `clean` — there is no Persian,
+    so `typeset` has nothing to draw and nobody runs it. That is also the whole
+    difficulty: the delivery certificate is written by `typeset`, so a chapter
+    that legitimately never reaches it ships uncertified bytes.
+    """
+    doc = ir.load_doc(doc_path)
+    for _page, region in ir.iter_regions(doc):
+        region["erase"] = True
+        for key in ("target_text", "target_full", "locked"):
+            region.pop(key, None)
+    ir.save_doc(doc, doc_path)
+    masks.build_document(doc_path)
+    clean.clean_document(doc_path)
+    return ir.load_doc(doc_path)
+
+
+def test_an_erase_only_chapter_publishes_its_cleaned_pages(translated, tmp_path):
+    """The control. Erasure is finished work, and it must be publishable
+    without a render that would have nothing to put on the page."""
+    _erase_only(translated)
+
+    state = qa.publication_preflight(translated)
+    assert state["ok"], state["blocking"]
+    report = export.export_document(translated, tmp_path / "erased.cbz")
+
+    assert set(report["sources"].values()) == {"clean"}
+
+
+def test_a_missing_cleaned_page_is_not_replaced_by_the_untouched_original(
+        translated, tmp_path):
+    """The defect this section exists for. `export` resolves the most finished
+    file that EXISTS, so deleting the cleaned page silently promoted the
+    original — with the watermark the reader approved removing still on it —
+    into an approved edition, counted as an untouched page and nothing else."""
+    doc = _erase_only(translated)
+    root = ir.doc_dir(translated)
+    (root / doc["pages"][0]["clean"]).unlink()
+
+    assert not qa.publication_preflight(translated)["ok"]
+    with pytest.raises(ValueError):
+        export.export_document(translated, tmp_path / "erased.cbz")
+
+
+def test_a_cleaned_status_without_a_cleaned_page_is_not_proof(translated):
+    """A stale success status is not evidence of current work: every region
+    still says `clean_status: cleaned` and there is no cleaned page at all."""
+    doc = _erase_only(translated)
+    root = ir.doc_dir(translated)
+    page = doc["pages"][0]
+    (root / page.pop("clean")).unlink()
+    ir.save_doc(doc, translated)
+
+    assert {region["clean_status"] for region in page["regions"]} == {"cleaned"}
+    assert not qa.publication_preflight(translated)["ok"]
+
+
+def test_a_cleaned_page_edited_after_cleaning_is_refused(translated):
+    """Nothing looked at these bytes. The preservation proof runs against a
+    render, and an erase-only chapter has none — so a hand-edited cleaned page
+    outside every mask was published unexamined."""
+    doc = _erase_only(translated)
+    root = ir.doc_dir(translated)
+    path = root / doc["pages"][0]["clean"]
+    image = ir.load_image(path)
+    image.paste((255, 0, 0), (0, 0, 24, 24))
+    ir.save_image(image, path)
+
+    assert not qa.publication_preflight(translated)["ok"]
+
+
+def test_restoring_the_original_over_the_cleaned_page_is_refused(translated):
+    """The erasure undone, at the right size, with every status still `cleaned`."""
+    doc = _erase_only(translated)
+    root = ir.doc_dir(translated)
+    page = doc["pages"][0]
+    shutil.copyfile(root / page["image"], root / page["clean"])
+
+    assert not qa.publication_preflight(translated)["ok"]
+
+
+def test_re_cleaning_certifies_the_page_again(translated, tmp_path):
+    """The route back, for the same reason the render has one."""
+    doc = _erase_only(translated)
+    root = ir.doc_dir(translated)
+    page = doc["pages"][0]
+    shutil.copyfile(root / page["image"], root / page["clean"])
+    assert not qa.publication_preflight(translated)["ok"]
+
+    clean.clean_document(translated, pages=[page["id"]])
+
+    state = qa.publication_preflight(translated)
+    assert state["ok"], state["blocking"]
+    export.export_document(translated, tmp_path / "again.cbz")
+
+
+@pytest.mark.parametrize("field", ["final", "clean", "writable"])
+def test_a_delivery_record_missing_one_field_does_not_skip_that_check(
+        finished, field):
+    """`if not recorded: continue` — so deleting a line of the certificate
+    bought exemption from the check it was there to make."""
+    doc = ir.load_doc(finished)
+    page = next(p for p in doc["pages"] if p.get("final") and p.get("clean"))
+    page["delivery"].pop(field)
+    ir.save_doc(doc, finished)
+
+    assert "delivery-mismatch" in _blocking_codes(finished)
+
+
+def test_a_cleaned_chapter_from_a_build_that_never_signed_it_is_unverified(
+        translated):
+    """Same upgrade rule as the render: an older build's work is not evidence
+    of anything wrong, and re-cleaning to satisfy new bookkeeping would be a
+    defect of the upgrade."""
+    doc = _erase_only(translated)
+    for page in doc["pages"]:
+        page.pop("cleaning", None)
+    ir.save_doc(doc, translated)
+
+    report = qa.check_document(translated)
+    assert report["ok"], report["findings"]

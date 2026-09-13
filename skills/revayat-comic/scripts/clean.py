@@ -396,6 +396,25 @@ def clean_page(
     relative = f"clean/{page['id']}.png"
     ir.save_image(Image.fromarray(base), root / relative)
     page["clean"] = relative
+
+    # What was repaired, signed by the run that repaired it — the same
+    # certificate `typeset` writes, for the stage that runs before it.
+    #
+    # It was only written during typesetting, and an erase-only chapter never
+    # reaches typesetting: there is no Persian to draw. So a watermark-removal
+    # job shipped uncertified bytes. `clean_status: cleaned` on every region
+    # said the work had been done; nothing said the file on disk was still the
+    # file the work produced, and a stale success status is not evidence of
+    # current work.
+    page["cleaning"] = {
+        "source": ir.sha256_file(root / page["image"]),
+        "mask": (ir.sha256_file(root / page["mask"])
+                 if page.get("mask") and (root / page["mask"]).exists()
+                 else None),
+        "clean": ir.sha256_file(root / relative),
+        "size": [page["width"], page["height"]],
+        "repaired": sum(counts[key] for key in ("flat", "inpaint", "external")),
+    }
     # Deliberately NOT writing `free_lettering_mask` here. `mask` owns it: it
     # is a fact about the masks on disk, and a value left behind by an earlier
     # clean contradicted masks that had since been rebuilt.
