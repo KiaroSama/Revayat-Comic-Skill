@@ -80,16 +80,37 @@ FINGERPRINT = re.compile(r"^#\s*fingerprint:\s*(?P<value>[0-9a-f]{64})\s*$", re.
 SCHEME_LINE = re.compile(r"^#\s*scheme:\s*(?P<value>\d+)\s*$", re.M)
 
 
+def _addresses_the_same_regions(blocks: dict[str, Any],
+                                page: dict[str, Any]) -> bool:
+    """Does this reply still name exactly the regions that are on the page?
+
+    What makes an unrecognised stamp safe to migrate. An old build hashed the
+    whole document, so a genuinely old reply matches nothing — but so does a
+    reply written before somebody split a balloon in two. The stamp cannot tell
+    them apart; the ids can. A reply whose `@@` blocks are precisely this page's
+    regions is addressing the same balloons whatever algorithm stamped it; one
+    that is missing a region, or names a region that is gone, is not, and it is
+    held for the reader to reconcile rather than migrated on trust.
+
+    An added `+slug` block is allowed: it is asking for a region the page does
+    not have yet, which is the one legitimate way the two sets differ.
+    """
+    addressed = {key for key in blocks if not key.startswith("+")}
+    return addressed == {region["id"] for region in page.get("regions", [])}
+
+
 def _stamp_state(reply: Path, pages: dict[str, dict[str, Any]],
-                 document_stamp: str) -> str:
+                 document_stamp: str,
+                 blocks: dict[str, Any] | None = None) -> str:
     """``fresh`` | ``stale`` | ``legacy`` | ``unstamped``.
 
     Three answers, because two were not enough. A stamp from an older build is
     not the same claim as a stamp that disagrees: the old algorithm hashed the
     whole document, so after the move to per-page hashes every genuinely old
     reply matched nothing and the reader was told to translate the chapter
-    again. `legacy` is taken on trust exactly once and re-stamped on the way
-    out, and it is reported rather than passed over in silence.
+    again. `legacy` is taken on trust exactly once — and only when its ids still
+    describe this page — and re-stamped on the way out, and it is reported
+    rather than passed over in silence.
     """
     text = ir.read_text(reply)
     stamped = FINGERPRINT.search(text)
@@ -102,7 +123,15 @@ def _stamp_state(reply: Path, pages: dict[str, dict[str, Any]],
     if value == document_stamp:
         return "fresh"          # the document-wide stamp this build still writes
     if not SCHEME_LINE.search(text):
-        return "legacy"
+        # Unrecognised, from a build that stamped differently. Migrated only if
+        # its ids still point at this page's regions; otherwise it is a reply
+        # about a page that has since moved, and trusting it merged one
+        # balloon's Persian into another.
+        if page is None:
+            return "stale"
+        if blocks is None:
+            blocks = parse_worksheet(text)
+        return "legacy" if _addresses_the_same_regions(blocks, page) else "stale"
     return "stale"
 
 
@@ -265,7 +294,25 @@ def merge_document(
             continue
 
         text = ir.read_text(path)
-        state = _stamp_state(path, by_page, document_stamp)
+        blocks = parse_worksheet(text)
+
+        # Structure FIRST, and before the shortcut. The shortcut compares a
+        # digest, and a reply corrupted by a pasted-in duplicate block or a
+        # second `fa:` line holding the same words hashed identically to the
+        # reply it corrupted — so a merge that should have refused reported the
+        # page as already landed and the reader was told nothing had changed.
+        # A reply is read whole and judged whole before any of it is trusted.
+        page_report: dict[str, list[str]] = {key: [] for key in list_keys}
+        for region_id, block in blocks.items():
+            if int(block.get("_seen", 1)) > 1:
+                page_report["duplicate_regions"].append(region_id)
+            repeated = block.get("_duplicate_fields", "")
+            for name in sorted({n for n in repeated.split(",") if n}):
+                page_report["duplicate_fields"].append(f"{region_id}: {name}")
+        malformed = (page_report["duplicate_regions"]
+                     + page_report["duplicate_fields"])
+
+        state = _stamp_state(path, by_page, document_stamp, blocks)
         if state == "stale" and not force:
             report["stale_worksheets"].append(page_id)
             continue
@@ -273,7 +320,8 @@ def merge_document(
             report["legacy_worksheets"].append(page_id)
 
         digest = reply_digest(text)
-        if page.get("worksheet_digest") == digest and page.get("worksheet_clean"):
+        if (not malformed and page.get("worksheet_digest") == digest
+                and page.get("worksheet_clean")):
             # This exact reply has already landed whole. Applying it again would
             # overwrite `falint`'s normalised Persian with the raw text the
             # reader typed, which is how a correction to a half-space got
@@ -282,15 +330,7 @@ def merge_document(
             consumed.append(path)
             continue
 
-        blocks = parse_worksheet(text)
         known = {region["id"] for region in page.get("regions", [])}
-        page_report: dict[str, list[str]] = {key: [] for key in list_keys}
-        for region_id, block in blocks.items():
-            if int(block.get("_seen", 1)) > 1:
-                page_report["duplicate_regions"].append(region_id)
-            repeated = block.get("_duplicate_fields", "")
-            for name in sorted({n for n in repeated.split(",") if n}):
-                page_report["duplicate_fields"].append(f"{region_id}: {name}")
         additions = sorted(key for key in blocks if key.startswith("+"))
         page_report["unknown_regions"] += sorted(set(blocks) - known - set(additions))
 
@@ -347,6 +387,15 @@ def merge_document(
         report["merged"] += merged
         consumed.append(path)
 
+    # THE DOCUMENT FIRST, then the replies that describe it. Restamping first
+    # made every reply claim a document state that the save had not reached
+    # yet: a failure there left the merged Persian unwritten and the replies on
+    # disk pointing at it, so the next run read them as fresh and merged
+    # nothing. No write may claim another write already succeeded.
+    stages.stamp_stage(doc, "worksheet", {"merged": report["merged"]},
+                       pages=list(by_page))
+    ir.save_doc(doc, doc_path)
+
     # Every consumed reply, not only the ones that added a region. A `kind:`
     # correction moves the page fingerprint just as surely as a new box does,
     # and it merged once and then reported itself stale on the next run.
@@ -354,10 +403,6 @@ def merge_document(
         page = by_page.get(path.name.split(".", 1)[0])
         if page is not None:
             _restamp(path, page)
-
-    stages.stamp_stage(doc, "worksheet", {"merged": report["merged"]},
-                       pages=list(by_page))
-    ir.save_doc(doc, doc_path)
 
     blocking = (
         report["missing_outputs"] or report["missing_regions"]

@@ -214,4 +214,9 @@ def page_worksheet(doc: dict[str, Any], page: dict[str, Any], fingerprint: str) 
             lines.append("erase: yes")
         for note in region.get("review", []):
             lines.append(f"note: {note}")
+        # What a stage recorded, as comments: the reader has to see that `clean`
+        # refused a patch, and the parser must never read it back as an answer
+        # the reader gave.
+        for note in region.get("audit", []):
+            lines.append(f"# {note}")
     return "\n".join(lines) + "\n"

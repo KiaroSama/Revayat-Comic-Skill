@@ -56,10 +56,21 @@ def _unescape(line: str) -> str:
     return line[1:] if line.startswith("\\#") else line
 
 
-def parse_worksheet(text: str) -> dict[str, dict[str, str]]:
-    """``{region id: {field: value}}``. Unknown lines continue the last field."""
-    blocks: dict[str, dict[str, str]] = {}
-    current: dict[str, str] | None = None
+#: Fields a block may legitimately carry more than once. `note:` is the only
+#: one, and the sheet WRITER emits one line per review note — so a page with two
+#: notes produced a sheet this tool then refused to merge back as malformed.
+#: Every other field is a scalar, and a second copy of it is a reader pasting a
+#: correction under the original: the merge must stop, not silently keep one.
+REPEATABLE = frozenset({"note"})
+
+
+def parse_worksheet(text: str) -> dict[str, dict[str, Any]]:
+    """``{region id: {field: value}}``. Unknown lines continue the last field.
+
+    A repeatable field's value is a list; every other field's is a string.
+    """
+    blocks: dict[str, dict[str, Any]] = {}
+    current: dict[str, Any] | None = None
     field: str | None = None
 
     for raw in text.splitlines():
@@ -85,19 +96,26 @@ def parse_worksheet(text: str) -> dict[str, dict[str, str]]:
         match = FIELD.match(raw)
         if match:
             field = match.group("name")
-            if field in current:
-                # Two `fa:` lines in one block silently kept the last one, so a
-                # reader who pasted a correction under the original shipped the
-                # original and never saw it happen.
-                current.setdefault("_duplicate_fields", "")
-                current["_duplicate_fields"] += f"{field},"
-            current[field] = _unescape(match.group("value").strip())
+            value = _unescape(match.group("value").strip())
+            if field in REPEATABLE:
+                current.setdefault(field, []).append(value)
+            else:
+                if field in current:
+                    # Two `fa:` lines in one block silently kept the last one,
+                    # so a reader who pasted a correction under the original
+                    # shipped the original and never saw it happen.
+                    current.setdefault("_duplicate_fields", "")
+                    current["_duplicate_fields"] += f"{field},"
+                current[field] = value
             continue
         if field is not None:
             # A continuation line. Keep the newline: a balloon that breaks its
             # own line does so for a reason, and the typesetter honours it.
-            current[field] = (current[field] + "\n"
-                              + _unescape(raw.strip())).strip()
+            tail = _unescape(raw.strip())
+            if field in REPEATABLE:
+                current[field][-1] = (current[field][-1] + "\n" + tail).strip()
+            else:
+                current[field] = (current[field] + "\n" + tail).strip()
     return blocks
 
 
@@ -177,7 +195,13 @@ def _apply(region: dict[str, Any], block: dict[str, str],
     source = block.get("src", "").strip()
     target = block.get("fa", "").strip()
     kind = block.get("kind", "").strip().lower()
-    note = block.get("note", "").strip()
+    # A repeatable field's value is a list. Normalised here because a caller
+    # that builds a block by hand — the API, a test — naturally writes one
+    # string, and iterating a string yields its letters.
+    raw_notes = block.get("note") or []
+    if isinstance(raw_notes, str):
+        raw_notes = [raw_notes]
+    notes_asked = [line.strip() for line in raw_notes if line.strip()]
 
     if kind:
         if kind not in ir.REGION_KINDS:
@@ -205,13 +229,23 @@ def _apply(region: dict[str, Any], block: dict[str, str],
             region["proposed"] = proposed
         else:
             region.pop("proposed", None)
-    if note:
-        # Only once. Merging the same reply twice is an ordinary thing to do —
-        # and it appended the note again each time, so a page re-merged three
-        # times carried the same sentence three times.
-        notes = region.setdefault("review", [])
-        if note not in notes:
-            notes.append(note)
+    # Replaces rather than accumulates, like `propose:` and `reviewed:`. A
+    # worksheet is a picture of the page in both directions: merging one twice
+    # appended the same sentence again each time, and a reader who DELETED a
+    # note found it still there because nothing ever removed one. Unconditional
+    # — an absent `note:` IS the deletion, since the sheet writes one line per
+    # note it knows about.
+    #
+    # Safe only because what a STAGE recorded lives in `audit` now. While the
+    # two shared this list, replacing it erased `clean`'s refusal record.
+    kept_notes: list[str] = []
+    for line in notes_asked:
+        if line not in kept_notes:
+            kept_notes.append(line)
+    if kept_notes:
+        region["review"] = kept_notes
+    else:
+        region.pop("review", None)
 
     region["source_text"] = source
     region["dropped"] = False
@@ -353,7 +387,7 @@ def _add_region(page: dict[str, Any], slug: str, block: dict[str, str],
 
 
 #: Bumped when the digest below starts covering something new.
-DIGEST_SCHEME = "2"
+DIGEST_SCHEME = "3"
 
 
 def reply_digest(text: str) -> str:
@@ -363,11 +397,17 @@ def reply_digest(text: str) -> str:
     rewritten in place after a merge that moved a box, so hashing the file made
     a reply that had just been consumed look like a different reply — and the
     page it had been merged into then read as never merged.
+
+    Everything the parser understood, including the `@@` header: `_kind` and
+    `_orientation` are the ONLY place an added region's kind is written, so
+    leaving them out made re-heading a `+box` block an invisible edit, and
+    leaving `_seen` and `_duplicate_fields` out made a pasted-in duplicate
+    hash identical to the reply it corrupted — which the no-change shortcut
+    then waved through as already merged.
     """
     blocks = parse_worksheet(text)
     payload = {
-        region_id: {name: value for name, value in sorted(block.items())
-                    if not name.startswith("_")}
+        region_id: dict(sorted(block.items()))
         for region_id, block in sorted(blocks.items())
     }
     return hashlib.sha256(

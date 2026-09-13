@@ -304,7 +304,8 @@ def clean_page(
                 region["lettering"] = dict(drawn)
                 if drawn["verdict"] == "unreliable":
                     region["fill"] = "keep"
-                    region.setdefault("review", []).append(
+                    ir.add_audit(
+                        region,
                         f"sound effect left as drawn: {drawn['reason']}")
                     counts["keep"] += 1
                     continue
@@ -366,8 +367,7 @@ def clean_page(
                 # says what actually happened, and `typeset` and `qa` both
                 # refuse to treat it as cleaned.
                 region["clean_status"] = "refused"
-                if SOLID_REFUSAL not in region.setdefault("review", []):
-                    region["review"].append(SOLID_REFUSAL)
+                ir.add_audit(region, SOLID_REFUSAL)
                 counts["refused"] += 1
                 continue
             repaired = _repair(window, mask, strategy, colour, np)

@@ -318,6 +318,23 @@ def find_region(doc: dict[str, Any], region_id: str) -> dict[str, Any] | None:
 SFX_KEEP_POLICIES = frozenset({"keep", "bilingual", "annotate"})
 
 
+def add_audit(region: dict[str, Any], note: str) -> None:
+    """Record something a STAGE observed about this region.
+
+    Separate from `review`, which holds what the READER wrote, and the two were
+    one list. That made a worksheet unable to be a faithful picture of the page
+    in both directions: writing the reply back replaced the list and erased
+    `clean`'s refusal record with it, and not replacing it meant a note the
+    reader deleted came back on the next merge.
+
+    The sheet prints these as comments, so a reader sees them and the parser
+    never reads one back as an answer.
+    """
+    notes = region.setdefault("audit", [])
+    if note not in notes:
+        notes.append(note)
+
+
 def may_be_edited(region: dict[str, Any], sfx_policy: str = "keep") -> bool:
     """Whether the cleaner may change this region's pixels at all.
 
@@ -416,7 +433,7 @@ def region_state(region: dict[str, Any], sfx_policy: str = "keep") -> str:
     # Seen and questioned by a reader, but left without an answer. That is a
     # different thing from never having been looked at, and it is worth the
     # distinction: one is a decision, the other is a hole.
-    if region.get("review"):
+    if region.get("review") or region.get("audit"):
         return "needs_review"
 
     return "unresolved"

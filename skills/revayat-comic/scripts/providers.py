@@ -48,6 +48,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol, runtime_checkable
 
+import pageir as ir
+
 #: Seconds a single provider call may take before the stage gives up on it.
 #: Generous, because a hosted image model on a large page is genuinely slow, and
 #: bounded, because a stage that hangs is worse than a stage that falls back.
@@ -477,18 +479,17 @@ def apply(region: dict[str, Any], field_name: str, result: Result, *,
             kept = repr(existing) if existing else "empty"
             note = (f"{result.provider} read this as {text!r}; the {held} "
                     f"value {kept} was kept")
-            if note not in region.get("review", []):
-                region.setdefault("review", []).append(note)
+            ir.add_audit(region, note)
             return "needs_review"
         provenance.append(record({**result.as_provenance(), "outcome": outcome}))
         return outcome
 
     if result.confidence is not None and result.confidence < min_confidence:
         provenance.append(record({**result.as_provenance(), "outcome": "low_confidence"}))
-        region.setdefault("review", []).append(
-            f"{result.provider} was only {result.confidence:.2f} confident here; "
-            f"nothing was written"
-        )
+        ir.add_audit(
+            region,
+            f"{result.provider} was only {result.confidence:.2f} confident "
+            f"here; nothing was written")
         return "needs_review"
 
     if not text:
