@@ -189,8 +189,62 @@ def _clear_previous_outcome(region: dict[str, Any]) -> None:
     region.pop("clean_status", None)
 
 
+def _invalidate_geometry(region: dict[str, Any]) -> None:
+    """Everything derived from where this region is and how it reads."""
+    for derived in ("balloon", "mask", "mask_box"):
+        region[derived] = None
+    # `lettering` too. It is the measurement of the ink inside the OLD box —
+    # stroke weight, curve, the shape `typeset` renders the Persian into — and
+    # it survived a correction that moved the box somewhere else entirely.
+    region.pop("lettering", None)
+    region["fill"] = "none"
+    _clear_previous_outcome(region)
+
+
+def _correct_geometry(region: dict[str, Any], block: dict[str, str],
+                      page: dict[str, Any],
+                      report: dict[str, list[str]]) -> None:
+    """A corrected box or polarity on a region the DETECTOR found.
+
+    The parser accepts both fields on any block and the merge applied them only
+    to a `+slug` the reader had added, so somebody correcting a balloon the
+    detector had drawn a little too tight — or a white-on-black balloon read as
+    light, which decides the mask and the text colour — was answered with
+    silence: the sheet came back with the same wrong numbers on it and nothing
+    anywhere said the correction had been ignored.
+    """
+    moved = False
+    raw = (block.get("box") or "").strip()
+    if raw:
+        match = BOX.match(raw)
+        if not match:
+            report["bad_added_regions"].append(
+                f"{region['id']}: `box: {raw}` — needs `box: x y w h`")
+        else:
+            width, height = page.get("width") or 0, page.get("height") or 0
+            bbox = [int(value) for value in match.groups()]
+            if width and height:
+                bbox = ir.clamp_bbox(bbox, width, height)
+            if bbox[2] < 2 or bbox[3] < 2:
+                report["bad_added_regions"].append(
+                    f"{region['id']}: box falls outside the page")
+            elif bbox != list(region.get("bbox") or []):
+                region["bbox"] = bbox
+                moved = True
+
+    asked = (block.get("polarity") or "").strip().lower()
+    if asked in {"dark", "light"} and asked != region.get("polarity"):
+        region["polarity"] = asked
+        moved = True
+
+    if moved:
+        _invalidate_geometry(region)
+        report["reclassified"].append(f"{region['id']} -> corrected geometry")
+
+
 def _apply(region: dict[str, Any], block: dict[str, str],
-           report: dict[str, list[str]]) -> bool:
+           report: dict[str, list[str]],
+           page: dict[str, Any] | None = None) -> bool:
     # Checked together, before any of them is acted on. `drop` returned
     # immediately, so `drop: yes` beside `keep: yes` or `erase: yes` never
     # reached the conflict check at all and the page merged as if the reader
@@ -258,6 +312,8 @@ def _apply(region: dict[str, Any], block: dict[str, str],
         elif kind != region["kind"]:
             region["kind"] = kind
             report["reclassified"].append(f"{region['id']} -> {kind}")
+    if page is not None:
+        _correct_geometry(region, block, page, report)
     _set_or_clear(region, block, "speaker", "speaker")
     if "reviewed" in block:
         # Lint codes the reader has looked at and settled, so the gate stops
@@ -424,16 +480,7 @@ def _add_region(page: dict[str, Any], slug: str, block: dict[str, str],
         existing["orientation"] = orientation
         existing["polarity"] = polarity
         if moved:
-            for derived in ("balloon", "mask", "mask_box"):
-                existing[derived] = None
-            # `lettering` too. It is the measurement of the ink inside the OLD
-            # box — stroke weight, curve, the shape `typeset` renders the
-            # Persian into — and it survived a correction that moved the box
-            # somewhere else entirely, so the effect was set in the geometry of
-            # whatever used to be there.
-            existing.pop("lettering", None)
-            existing["fill"] = "none"
-            _clear_previous_outcome(existing)
+            _invalidate_geometry(existing)
         _apply(existing, block, report)
         filled = bool((existing.get("target_text") or "").strip())
         if not filled and _owes_persian(existing, policy):
@@ -506,7 +553,7 @@ def _apply_page(page: dict[str, Any], blocks: dict[str, dict[str, str]],
         if block is None:
             report["missing_regions"].append(region["id"])
             continue
-        if _apply(region, block, report):
+        if _apply(region, block, report, page):
             merged += 1
         elif not region.get("dropped") and ir.translatable(region, policy):
             report["empty_translation"].append(region["id"])
