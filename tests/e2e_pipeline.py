@@ -124,8 +124,15 @@ def main() -> int:
         print("mask")
         regions = sum(page["regions"] for page in run("detect", "--doc", doc)["pages"])
         report = run("mask", "--doc", doc)
-        check("a mask per region", report["masks_written"] == regions,
-              f"{report['masks_written']} masks for {regions} regions")
+        # Every region is accounted for, and NOT every region is masked. A
+        # sound effect the policy keeps is artwork: masking it would put
+        # artwork inside the area the cleaner may rewrite and inside the
+        # denominator the preservation proof divides by.
+        masked = report["masks_written"]
+        unmasked = sum(page["not_masked"] for page in report["pages"])
+        check("every region is masked or explicitly left alone",
+              masked + unmasked == regions and masked > 0,
+              f"{masked} masked + {unmasked} left alone for {regions} regions")
         check("coverage stays sane", not report["excessive_coverage"])
 
         print("crops")

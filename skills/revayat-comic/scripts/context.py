@@ -173,6 +173,45 @@ SECTION_LIMITS = {
 }
 
 
+def _speaking_on(doc: dict[str, Any], page_id: str) -> set[str]:
+    """Who actually talks on the page being translated."""
+    for page in doc["pages"]:
+        if page["id"] == page_id:
+            return {(region.get("speaker") or "").strip()
+                    for region in page.get("regions", [])
+                    if not region.get("dropped") and region.get("speaker")}
+    return set()
+
+
+def _fit_speakers(everyone: list[dict[str, Any]], current: set[str],
+                  limit: int, over: list[str]) -> list[dict[str, Any]]:
+    """Trim the cast to its budget, and trim the right end of it.
+
+    `_speakers` is ordered by first appearance so the package is stable between
+    runs, and the plain trim pops from the end — which is precisely where the
+    characters who have just walked on are. A long chapter therefore spent its
+    whole speaker budget on people who left twenty pages ago and dropped the
+    two who are talking, and the translator lost the register and the
+    relationship it needed most.
+
+    Whoever speaks on this page is kept. The history fills what is left.
+    """
+    if len(ir.dumps(everyone)) <= limit:
+        return everyone
+    over.append("speakers")
+    here = [entry for entry in everyone if entry["speaker"] in current]
+    history = [entry for entry in everyone if entry["speaker"] not in current]
+    kept = list(here)
+    for entry in history:
+        if len(ir.dumps(kept + [entry])) > limit:
+            break
+        kept.append(entry)
+    # Sent whole when the page's own speakers do not fit: `over` already says
+    # the budget was exceeded, and a translator who cannot see who is talking
+    # is worse off than one given a long list.
+    return sorted(kept, key=everyone.index)
+
+
 def _fit(value, limit: int, name: str, over: list[str]):
     """One informational section, cut to its own limit and named if cut."""
     if len(ir.dumps(value)) <= limit:
@@ -204,7 +243,7 @@ def unmerged_before(doc_path: Path, doc: dict[str, Any],
 
     Returns the offending page ids, nearest first. Empty is the good case.
     """
-    folder = Path(worksheets) if worksheets else doc_path.parent / "worksheets"
+    folder = ir.worksheet_folder(doc_path, doc, worksheets)
     if not folder.is_dir():
         return [], []
     behind: list[str] = []
@@ -247,10 +286,7 @@ def worksheet_folder(doc_path: Path, doc: dict[str, Any],
     who keeps replies somewhere else got an empty answer from every guard —
     the folder was not there, so nothing was unmerged, so nothing was refused.
     """
-    if worksheets:
-        return Path(worksheets)
-    recorded = (doc.get("meta") or {}).get("worksheets")
-    return Path(recorded) if recorded else doc_path.parent / "worksheets"
+    return ir.worksheet_folder(doc_path, doc, worksheets)
 
 
 def preflight(doc_path: Path, doc: dict[str, Any], page_id: str, *,
@@ -266,18 +302,53 @@ def preflight(doc_path: Path, doc: dict[str, Any], page_id: str, *,
     folder = worksheet_folder(doc_path, doc, worksheets)
     behind, unverified = unmerged_before(doc_path, doc, page_id,
                                          worksheets=folder)
+    moved = _merged_onto_moved_geometry(doc, page_id)
     return {
         "page": page_id,
         "worksheets": str(folder),
         "unmerged": behind,
         "unverified": unverified,
+        # Merged, and then the page it was merged into changed underneath.
+        "moved": moved,
         "allow_unmerged": bool(allow_unmerged),
-        "ok": allow_unmerged or not behind,
+        "ok": (allow_unmerged or not behind) and not moved,
     }
+
+
+def _merged_onto_moved_geometry(doc: dict[str, Any], page_id: str) -> list[str]:
+    """Pages whose reply landed on regions that have since moved.
+
+    "Was this reply consumed" is half the question. A reply merged whole and
+    then overtaken by a `detect` run describes balloons that are not there any
+    more, and the context built from it hands the translator a previous page's
+    dialogue attached to the wrong speakers — which is worse than missing it,
+    because it reads like knowledge.
+
+    Only pages that actually consumed a reply are judged: a page nobody has
+    answered yet is not stale, it is unstarted.
+    """
+    import stages
+
+    answered = {page["id"] for page in doc["pages"]
+                if page.get("worksheet_digest")}
+    if not answered:
+        return []
+    upto = [page["id"] for page in doc["pages"]]
+    upto = upto[:upto.index(page_id) + 1] if page_id in upto else upto
+    return [page_id for page_id in stages.stale_pages(doc, "worksheet")
+            if page_id in answered and page_id in upto]
 
 
 def refusal(state: dict[str, Any], doc_path: str | Path) -> str:
     """What to say when the preflight fails. One wording, wherever it is hit."""
+    if state.get("moved"):
+        return (
+            f"{', '.join(state['moved'])} were answered and then the regions "
+            f"on them moved, so their approved Persian no longer describes the "
+            f"balloons it was written for.\n"
+            f"Run:  revayat-comic worksheet build --doc {doc_path}\n"
+            f"and merge the corrected replies before translating from them."
+        )
     return (
         f"{', '.join(state['unmerged'])} have been translated but not merged, "
         f"so this context would be missing them.\n"
@@ -322,8 +393,9 @@ def build(doc: dict[str, Any], page_id: str, *,
                        SECTION_LIMITS["style_notes"], "style_notes", over)
     series_notes = _fit(meta.get("series_notes") or [],
                         SECTION_LIMITS["series_notes"], "series_notes", over)
-    speakers = _fit(_speakers(doc, page_id), SECTION_LIMITS["speakers"],
-                    "speakers", over)
+    speakers = _fit_speakers(_speakers(doc, page_id),
+                             _speaking_on(doc, page_id),
+                             SECTION_LIMITS["speakers"], over)
     spent = sum(len(row["fa"]) + len(row["src"]) for row in previous)
 
     sizes = {
@@ -341,7 +413,13 @@ def build(doc: dict[str, Any], page_id: str, *,
         "constraints": {
             "glossary": glossary,
             "policy": {
-                **ir.title_policy(meta),
+                # `sfx` under `title_policy` is a person's PROSE about sound
+                # effects — "keep the Japanese for the big ones, translate the
+                # small" — and it was spread into the same key as the
+                # operational enum below, which then overwrote it. The decision
+                # somebody wrote down disappeared and nothing said so.
+                **{("sfx_note" if key == "sfx" else key): value
+                   for key, value in ir.title_policy(meta).items()},
                 # Prose that names a different policy from the enum every stage
                 # obeys is two instructions, not one. Named here so the
                 # translator sees which one wins before writing a line.

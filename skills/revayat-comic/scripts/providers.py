@@ -48,6 +48,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol, runtime_checkable
 
+import pageir as ir
+
 #: Seconds a single provider call may take before the stage gives up on it.
 #: Generous, because a hosted image model on a large page is genuinely slow, and
 #: bounded, because a stage that hangs is worse than a stage that falls back.
@@ -372,6 +374,25 @@ def call(provider, role: str, *args, timeout: float = DEFAULT_TIMEOUT,
 # Writing a result back into the IR
 # --------------------------------------------------------------------------- #
 
+def engine_identity(engine: Any) -> str:
+    """A name for WHICH model is about to answer, with no secret in it.
+
+    Two adapters of the same class pointed at different models gave answers of
+    different quality, and a resume could not tell them apart: the record said
+    a provider had written the value, and both were that provider. Only
+    non-secret identity fields are read, and nothing is guessed from the
+    object's own attributes beyond the ones named here — a key, a token or a
+    URL with credentials in it must never reach a digest that is written to
+    the document.
+    """
+    parts = [type(engine).__name__, str(getattr(engine, "name", "") or "")]
+    for field_name in ("model", "version", "prompt_version"):
+        value = getattr(engine, field_name, None)
+        if value is not None:
+            parts.append(f"{field_name}={value}")
+    return "|".join(part for part in parts if part)
+
+
 def request_identity(**parts: Any) -> str:
     """A short name for everything an answer was produced from.
 
@@ -411,7 +432,15 @@ def completed(region: dict[str, Any], role: str, field_name: str, *,
     for record in reversed(region.get("provenance", []) or []):
         if record.get("role") != role:
             continue
-        if record.get("outcome") != "applied" or record.get("wrote") != existing:
+        wrote_it = (record.get("outcome") == "applied"
+                    and record.get("wrote") == existing)
+        # A provider asked this exact question and answered with exactly what
+        # is already here. It did not write the value — a person may have — and
+        # it does not need to: the question is answered, and asking again buys
+        # the same sentence at the price of a call.
+        confirmed_it = (record.get("outcome") in ("unchanged", "locked")
+                        and record.get("read") == existing)
+        if not (wrote_it or confirmed_it):
             continue
         if identity is None:
             return True
@@ -477,18 +506,23 @@ def apply(region: dict[str, Any], field_name: str, result: Result, *,
             kept = repr(existing) if existing else "empty"
             note = (f"{result.provider} read this as {text!r}; the {held} "
                     f"value {kept} was kept")
-            if note not in region.get("review", []):
-                region.setdefault("review", []).append(note)
+            ir.add_audit(region, note)
             return "needs_review"
-        provenance.append(record({**result.as_provenance(), "outcome": outcome}))
+        # `read` on this path too. Without it, a source corrected to something
+        # whose translation is the SAME Persian could never be closed: the
+        # answer matched what was there, so nothing was written, so no record
+        # said the new question had been asked — and the next run paid for the
+        # same call again, for ever.
+        provenance.append(record({**result.as_provenance(), "outcome": outcome,
+                                  **({"read": text} if text is not None else {})}))
         return outcome
 
     if result.confidence is not None and result.confidence < min_confidence:
         provenance.append(record({**result.as_provenance(), "outcome": "low_confidence"}))
-        region.setdefault("review", []).append(
-            f"{result.provider} was only {result.confidence:.2f} confident here; "
-            f"nothing was written"
-        )
+        ir.add_audit(
+            region,
+            f"{result.provider} was only {result.confidence:.2f} confident "
+            f"here; nothing was written")
         return "needs_review"
 
     if not text:

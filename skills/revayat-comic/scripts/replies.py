@@ -52,14 +52,54 @@ def _is_comment(raw: str) -> bool:
 
 
 def _unescape(line: str) -> str:
-    """A leading '\\#' is a literal `#`, so a balloon can start with one."""
-    return line[1:] if line.startswith("\\#") else line
+    """One leading backslash escapes the whole line.
+
+    It began as `\\#` alone, which covered a balloon starting with a hash and
+    nothing else: a continuation line reading `fa: بله` was still parsed as a
+    second `fa:` field — a duplicate, so the page was refused — and one reading
+    `@@ چی` started a new block and swallowed the rest of the balloon. Any line
+    the protocol would otherwise claim is written with a backslash in front of
+    it, and `\\\\` is a literal backslash.
+    """
+    return line[1:] if line.startswith("\\") else line
 
 
-def parse_worksheet(text: str) -> dict[str, dict[str, str]]:
-    """``{region id: {field: value}}``. Unknown lines continue the last field."""
-    blocks: dict[str, dict[str, str]] = {}
-    current: dict[str, str] | None = None
+def escape(line: str) -> str:
+    """The inverse, applied by whoever writes a value line into a sheet."""
+    if (line.startswith("\\")
+            or (line.startswith("#") and (len(line) == 1 or line[1] in " \t"))
+            or HEADER.match(line) or FIELD.match(line)):
+        return "\\" + line
+    return line
+
+
+def field_lines(name: str, value: str) -> list[str]:
+    """`name: value`, with every continuation line escaped.
+
+    The first line needs nothing — it is already behind `name: ` — and every
+    line after it is at the start of a line, where the protocol is looking.
+    """
+    first, _, rest = str(value).partition("\n")
+    out = [f"{name}: {first}"]
+    out += [escape(line) for line in rest.split("\n")] if rest else []
+    return out
+
+
+#: Fields a block may legitimately carry more than once. `note:` is the only
+#: one, and the sheet WRITER emits one line per review note — so a page with two
+#: notes produced a sheet this tool then refused to merge back as malformed.
+#: Every other field is a scalar, and a second copy of it is a reader pasting a
+#: correction under the original: the merge must stop, not silently keep one.
+REPEATABLE = frozenset({"note"})
+
+
+def parse_worksheet(text: str) -> dict[str, dict[str, Any]]:
+    """``{region id: {field: value}}``. Unknown lines continue the last field.
+
+    A repeatable field's value is a list; every other field's is a string.
+    """
+    blocks: dict[str, dict[str, Any]] = {}
+    current: dict[str, Any] | None = None
     field: str | None = None
 
     for raw in text.splitlines():
@@ -85,19 +125,26 @@ def parse_worksheet(text: str) -> dict[str, dict[str, str]]:
         match = FIELD.match(raw)
         if match:
             field = match.group("name")
-            if field in current:
-                # Two `fa:` lines in one block silently kept the last one, so a
-                # reader who pasted a correction under the original shipped the
-                # original and never saw it happen.
-                current.setdefault("_duplicate_fields", "")
-                current["_duplicate_fields"] += f"{field},"
-            current[field] = _unescape(match.group("value").strip())
+            value = _unescape(match.group("value").strip())
+            if field in REPEATABLE:
+                current.setdefault(field, []).append(value)
+            else:
+                if field in current:
+                    # Two `fa:` lines in one block silently kept the last one,
+                    # so a reader who pasted a correction under the original
+                    # shipped the original and never saw it happen.
+                    current.setdefault("_duplicate_fields", "")
+                    current["_duplicate_fields"] += f"{field},"
+                current[field] = value
             continue
         if field is not None:
             # A continuation line. Keep the newline: a balloon that breaks its
             # own line does so for a reason, and the typesetter honours it.
-            current[field] = (current[field] + "\n"
-                              + _unescape(raw.strip())).strip()
+            tail = _unescape(raw.strip())
+            if field in REPEATABLE:
+                current[field][-1] = (current[field][-1] + "\n" + tail).strip()
+            else:
+                current[field] = (current[field] + "\n" + tail).strip()
     return blocks
 
 
@@ -126,6 +173,22 @@ def _set_or_clear(region: dict[str, Any], block: dict[str, str],
         region.pop(key, None)
 
 
+def _clear_previous_outcome(region: dict[str, Any]) -> None:
+    """Drop what an EARLIER decision produced, keeping the audit record.
+
+    A new answer about a region invalidates the old answer's results: the
+    render, the cleaner's verdict, the measurement taken off a box that has
+    since moved. Leaving them made a resolved problem permanent — `clean`
+    refused a solid patch, the reader answered `keep: yes`, and the refusal
+    stayed on the region and blocked publication for ever, because nothing
+    that ran afterwards had any reason to touch it.
+
+    `audit` is deliberately not cleared: what happened, happened.
+    """
+    region["typeset"] = {}
+    region.pop("clean_status", None)
+
+
 def _apply(region: dict[str, Any], block: dict[str, str],
            report: dict[str, list[str]]) -> bool:
     # Checked together, before any of them is acted on. `drop` returned
@@ -142,12 +205,15 @@ def _apply(region: dict[str, Any], block: dict[str, str],
         region["dropped"] = True
         region["target_text"] = ""
         region["source_text"] = ""
-        # Forget what an earlier run did to it. A region dropped after it had
-        # already been cleaned and typeset kept that run's `fill` and `typeset`
-        # records, and those stale values then spoke for a region nobody was
-        # cleaning any more.
+        _clear_previous_outcome(region)
+        # `keep` and `erase` are the two answers this one replaces, and the
+        # early return left them standing: a region kept and then dropped
+        # carried both, the rebuilt sheet printed `drop: yes` beside
+        # `keep: yes`, and every later merge refused the page as contradicting
+        # itself — a state no reader could get out of.
+        region.pop("keep", None)
+        region.pop("erase", None)
         region["fill"] = "none"
-        region["typeset"] = {}
         report["dropped"].append(region["id"])
         return True
 
@@ -161,6 +227,7 @@ def _apply(region: dict[str, Any], block: dict[str, str],
     kept = "keep" in asked
     if kept:
         region["keep"] = True
+        region.pop("erase", None)
     else:
         region.pop("keep", None)
 
@@ -177,7 +244,13 @@ def _apply(region: dict[str, Any], block: dict[str, str],
     source = block.get("src", "").strip()
     target = block.get("fa", "").strip()
     kind = block.get("kind", "").strip().lower()
-    note = block.get("note", "").strip()
+    # A repeatable field's value is a list. Normalised here because a caller
+    # that builds a block by hand — the API, a test — naturally writes one
+    # string, and iterating a string yields its letters.
+    raw_notes = block.get("note") or []
+    if isinstance(raw_notes, str):
+        raw_notes = [raw_notes]
+    notes_asked = [line.strip() for line in raw_notes if line.strip()]
 
     if kind:
         if kind not in ir.REGION_KINDS:
@@ -192,9 +265,17 @@ def _apply(region: dict[str, Any], block: dict[str, str],
         codes = [code.strip() for code
                  in PROPOSALS.split(block["reviewed"]) if code.strip()]
         if codes:
+            import falint
+
             region["review_ack"] = codes
+            # WHAT they settled, not only that they settled something. A bare
+            # code silenced the line for ever, so an ambiguity introduced by a
+            # later edit was waved through by a decision taken about a
+            # different pair of words.
+            region["review_ack_spans"] = falint.ambiguous_spans(target)
         else:
             region.pop("review_ack", None)
+            region.pop("review_ack_spans", None)
     if "propose" in block:
         # Replaces rather than accumulates, like every other field here: a
         # worksheet is a picture of the page, and a merge run twice must not
@@ -205,13 +286,23 @@ def _apply(region: dict[str, Any], block: dict[str, str],
             region["proposed"] = proposed
         else:
             region.pop("proposed", None)
-    if note:
-        # Only once. Merging the same reply twice is an ordinary thing to do —
-        # and it appended the note again each time, so a page re-merged three
-        # times carried the same sentence three times.
-        notes = region.setdefault("review", [])
-        if note not in notes:
-            notes.append(note)
+    # Replaces rather than accumulates, like `propose:` and `reviewed:`. A
+    # worksheet is a picture of the page in both directions: merging one twice
+    # appended the same sentence again each time, and a reader who DELETED a
+    # note found it still there because nothing ever removed one. Unconditional
+    # — an absent `note:` IS the deletion, since the sheet writes one line per
+    # note it knows about.
+    #
+    # Safe only because what a STAGE recorded lives in `audit` now. While the
+    # two shared this list, replacing it erased `clean`'s refusal record.
+    kept_notes: list[str] = []
+    for line in notes_asked:
+        if line not in kept_notes:
+            kept_notes.append(line)
+    if kept_notes:
+        region["review"] = kept_notes
+    else:
+        region.pop("review", None)
 
     region["source_text"] = source
     region["dropped"] = False
@@ -219,7 +310,7 @@ def _apply(region: dict[str, Any], block: dict[str, str],
     if kept:
         region["target_text"] = ""
         region["fill"] = "none"
-        region["typeset"] = {}
+        _clear_previous_outcome(region)
         # A keep IS a review — the reader looked at the region and decided.
         # Without this the decision reads as "never reviewed": `qa` warns
         # `low-confidence-region` on it and a later `detect` run is free to
@@ -230,7 +321,8 @@ def _apply(region: dict[str, Any], block: dict[str, str],
 
     if erased:
         region["target_text"] = ""
-        region["typeset"] = {}
+        _clear_previous_outcome(region)
+        region.pop("fill", None)
         # Deliberately NOT `fill = "none"`. That is what `keep` sets to tell the
         # cleaner to leave the pixels alone, and it is the opposite of what this
         # asks for: an erase region goes through the ordinary tier ladder —
@@ -253,6 +345,17 @@ def _apply(region: dict[str, Any], block: dict[str, str],
     return bool(target)
 
 
+def _owes_persian(region: dict[str, Any], policy: str) -> bool:
+    """Is a missing translation a hole here, or the answer?
+
+    The added-box path asked its own narrower version of this — dropped or
+    kept — so a box the reader added purely to ERASE a watermark, and a sound
+    effect a policy keeps, were both reported as untranslated work. They are
+    finished; `ir.translatable` has always known it, and now both paths ask it.
+    """
+    return not region.get("dropped") and ir.translatable(region, policy)
+
+
 def _next_region_id(page: dict[str, Any]) -> str:
     """The next free `pNNNNrMMM` on this page."""
     used = 0
@@ -264,7 +367,8 @@ def _next_region_id(page: dict[str, Any]) -> str:
 
 
 def _add_region(page: dict[str, Any], slug: str, block: dict[str, str],
-                report: dict[str, Any]) -> bool:  # noqa: C901 - one flow, read top to bottom
+                report: dict[str, Any],
+                policy: str = "keep") -> bool:  # noqa: C901 - one flow, read top to bottom
     """Create a region the detector never found, from a `box:` the reader read.
 
     The counterpart to `drop`, and the page needs both. Detection returns the
@@ -323,11 +427,17 @@ def _add_region(page: dict[str, Any], slug: str, block: dict[str, str],
         if moved:
             for derived in ("balloon", "mask", "mask_box"):
                 existing[derived] = None
+            # `lettering` too. It is the measurement of the ink inside the OLD
+            # box — stroke weight, curve, the shape `typeset` renders the
+            # Persian into — and it survived a correction that moved the box
+            # somewhere else entirely, so the effect was set in the geometry of
+            # whatever used to be there.
+            existing.pop("lettering", None)
             existing["fill"] = "none"
-            existing["typeset"] = {}
+            _clear_previous_outcome(existing)
         _apply(existing, block, report)
         filled = bool((existing.get("target_text") or "").strip())
-        if not filled and not existing.get("dropped") and not existing.get("keep"):
+        if not filled and _owes_persian(existing, policy):
             report["empty_translation"].append(existing["id"])
         return filled
 
@@ -345,7 +455,7 @@ def _add_region(page: dict[str, Any], slug: str, block: dict[str, str],
     _apply(region, block, report)
     report["added"].append(f"{region['id']} ({slug})")
     filled = bool((region.get("target_text") or "").strip())
-    if not filled and not region.get("dropped") and not region.get("keep"):
+    if not filled and _owes_persian(region, policy):
         # A box the reader added with no Persian in it is exactly as unfinished
         # as a detected balloon with no Persian in it, and reported as clean.
         report["empty_translation"].append(region["id"])
@@ -353,7 +463,7 @@ def _add_region(page: dict[str, Any], slug: str, block: dict[str, str],
 
 
 #: Bumped when the digest below starts covering something new.
-DIGEST_SCHEME = "2"
+DIGEST_SCHEME = "3"
 
 
 def reply_digest(text: str) -> str:
@@ -363,11 +473,17 @@ def reply_digest(text: str) -> str:
     rewritten in place after a merge that moved a box, so hashing the file made
     a reply that had just been consumed look like a different reply — and the
     page it had been merged into then read as never merged.
+
+    Everything the parser understood, including the `@@` header: `_kind` and
+    `_orientation` are the ONLY place an added region's kind is written, so
+    leaving them out made re-heading a `+box` block an invisible edit, and
+    leaving `_seen` and `_duplicate_fields` out made a pasted-in duplicate
+    hash identical to the reply it corrupted — which the no-change shortcut
+    then waved through as already merged.
     """
     blocks = parse_worksheet(text)
     payload = {
-        region_id: {name: value for name, value in sorted(block.items())
-                    if not name.startswith("_")}
+        region_id: dict(sorted(block.items()))
         for region_id, block in sorted(blocks.items())
     }
     return hashlib.sha256(
@@ -397,7 +513,8 @@ def _apply_page(page: dict[str, Any], blocks: dict[str, dict[str, str]],
             report["empty_translation"].append(region["id"])
 
     for slug in additions:
-        if _add_region(page, slug[1:] or "added", blocks[slug], report):
+        if _add_region(page, slug[1:] or "added", blocks[slug], report,
+                       policy):
             merged += 1
     if additions:
         # A new box changes what comes before what, and it has no mask yet.

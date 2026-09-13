@@ -197,6 +197,23 @@ def _candidate_paths() -> list[Path]:
     return found
 
 
+def font_identity(font_path: Path | str) -> str:
+    """A name for the FILE, not for its filename.
+
+    Two different faces are routinely installed under one basename — a system
+    Vazirmatn and a project copy, a hinted and an unhinted build — and they set
+    a balloon differently. Recording `font_path.name` gave both the same render
+    identity, so swapping them left every page looking current.
+    """
+    path = Path(font_path)
+    try:
+        return f"{path.name}:{ir.sha256_file(path)[:16]}"
+    except OSError:
+        # The face may live inside a collection or be unreadable here; the name
+        # is still better than nothing, and it says which it is.
+        return f"{path.name}:unreadable"
+
+
 def find_font(preferred: str | None = None) -> Path:
     """Locate a font that can actually draw Persian."""
     _, _, ImageFont = _pil()

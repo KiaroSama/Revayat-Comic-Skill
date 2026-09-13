@@ -56,6 +56,7 @@ from typefont import (  # noqa: F401 - re-exported: `typeset.find_font`
     VAZIR_FONTS,                              # tests have always used.
     ZWNJ,
     Shaper,
+    font_identity,
     _numpy,
     _pil,
     _supports_persian,
@@ -204,6 +205,7 @@ def typeset_page(
     unreliable: list[str] = []
     refused: list[str] = []
     glossed: list[str] = []
+    fresh_notes: list[dict[str, Any]] = []
     skipped = 0
     for region in page.get("regions", []):
         text = (region.get("target_text") or "").strip()
@@ -224,11 +226,10 @@ def typeset_page(
             # No placement is invented. The gloss is recorded against the page
             # so a letterer, a sidecar or a later feature can place it, and
             # `qa` says it has nowhere to go.
-            page.setdefault("annotations", []).append({
-                "region": region["id"], "kind": region["kind"],
-                "source": (region.get("source_text") or "").strip(),
-                "fa": text, "reason": "no reserved place for a gloss",
-            })
+            fresh_notes.append(
+                {"region": region["id"], "kind": region["kind"],
+                 "source": (region.get("source_text") or "").strip(),
+                 "fa": text, "reason": "no reserved place for a gloss"})
             glossed.append(region["id"])
             skipped += 1
             continue
@@ -283,9 +284,9 @@ def typeset_page(
             region["typeset"] = {"status": "unreliable",
                                  "style": "unreliable",
                                  "reason": drawn.get("reason", "")}
-            note = f"sound effect left as drawn: {drawn.get('reason', '')}"
-            if note not in region.get("review", []):
-                region.setdefault("review", []).append(note)
+            ir.add_audit(
+                region,
+                f"sound effect left as drawn: {drawn.get('reason', '')}")
             unreliable.append(region["id"])
             skipped += 1
             continue
@@ -311,7 +312,8 @@ def typeset_page(
                 region["typeset"] = {"status": "unreliable", "style": drawn["verdict"],
                                      "reason": "the Persian does not fit the "
                                                "shape the lettering was drawn in"}
-                region.setdefault("review", []).append(
+                ir.add_audit(
+                    region,
                     f"sound effect restored as drawn: the Persian does not fit "
                     f"the {drawn['verdict']} shape it was lettered in")
                 unreliable.append(region["id"])
@@ -396,10 +398,24 @@ def typeset_page(
                         overflow.append(region["id"])
 
         region["typeset"] = record
-        placed += 1
+        # Only what is still on the page. A region painted, measured, found to
+        # have spilled past its authorisation and taken back off again was
+        # counted as placed alongside the rest, so the report's headline number
+        # described ink that is not there.
+        if record.get("status") == "ok":
+            placed += 1
 
     for region in page.get("regions", []):
         region.pop("_page_image", None)
+
+    # The annotations this run produced REPLACE the ones it produced before,
+    # for every region it looked at. Appending meant a rerun carried the same
+    # unresolved note three times, and switching the policy to `translate` —
+    # which replaces the effect instead of glossing it — left the obsolete
+    # gloss on the page with `qa` still reporting it.
+    visited = {region["id"] for region in page.get("regions", [])}
+    page["annotations"] = [row for row in (page.get("annotations") or [])
+                           if row.get("region") not in visited] + fresh_notes
 
     relative = f"final/{page['id']}.png"
     ir.save_image(canvas, root / relative)
@@ -409,6 +425,25 @@ def typeset_page(
     ir.write_bytes(root / writable_path,
                    mask_tools._encode_png(Image.fromarray(writable, mode="L")))
     page["writable"] = writable_path
+
+    # What was actually delivered, signed by the run that delivered it.
+    #
+    # A filename and `typeset.status: ok` say a page was written; they say
+    # nothing about WHICH pixels are in the file now. Copying the cleaned,
+    # textless page over `final/` left every count correct, every status `ok`,
+    # the size identical and every pixel inside the authorised mask — so the
+    # preservation proof passed it and the chapter shipped with no Persian on
+    # it. Nothing in the document could tell the difference, because nothing in
+    # the document had ever looked at the bytes.
+    page["delivery"] = {
+        "final": ir.sha256_file(root / relative),
+        "writable": ir.sha256_file(root / writable_path),
+        "clean": (ir.sha256_file(root / page["clean"])
+                  if page.get("clean") and (root / page["clean"]).exists()
+                  else None),
+        "size": [page["width"], page["height"]],
+        "placed": placed,
+    }
 
     return {"placed": placed, "overflow": overflow, "skipped": skipped,
             "unreliable": unreliable, "refused_clean": refused,
@@ -468,7 +503,7 @@ def typeset_document(
         # The face and the shaper are options, not results: the same text set
         # in Tahoma instead of Vazir is a different page, and a fallback shaper
         # breaks lines somewhere else.
-        options={"font": font_path.name, "shaping": shaper.mode,
+        options={"font": font_identity(font_path), "shaping": shaper.mode,
                  "max_size": max_size, "min_size": min_size,
                  "stylise": stylise},
         pages=pages)
@@ -543,7 +578,12 @@ def main(argv: list[str] | None = None) -> int:
         stylise=not args.flat_sfx,
     )
     ir.emit(report)
-    return 0
+    # Non-zero when required work was not done. It exited zero with its only
+    # line overflowing, so a script that checked the status code shipped a page
+    # with no Persian on it and nothing in the pipeline noticed until `qa`.
+    # `unreliable` and `unplaced_gloss` are decisions, not failures: the effect
+    # stays as drawn and the gloss is recorded for a person.
+    return 1 if report["overflow"] or report.get("refused_clean") else 0
 
 
 if __name__ == "__main__":

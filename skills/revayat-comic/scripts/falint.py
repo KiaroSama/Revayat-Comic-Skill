@@ -48,14 +48,23 @@ _LATIN_TO_PERSIAN_DIGIT = {str(n): chr(0x06F0 + n) for n in range(10)}
 PERSIAN_LETTER = r"ء-غف-يٮ-ۓۺ-ۿ"
 PERSIAN_DIGIT = r"۰-۹"
 
-_PROTECTED = re.compile(
-    r"""(?xi)
+#: A span that is Latin because of what it IS — an address, not a word. These
+#: are the ones a script-mix check has to look past: an email address in a
+#: balloon is not an untranslated sentence, and no edit can make it Persian.
+_STRUCTURED = r"""
     (?:https?://|www\.)\S+
     | [\w.+-]+@[\w-]+\.[\w.-]+
     | \b[0-9]{1,4}(?:[.:/-][0-9]{1,4})+\b
+"""
+#: Everything the FIXER keeps its hands off: the above, plus any Latin word,
+#: because folding an Arabic kaf or pairing a quote inside one corrupts it.
+_PROTECTED = re.compile(
+    rf"""(?xi)
+    {_STRUCTURED}
     | \b[A-Za-z][\w.'’-]*\b
     """
 )
+_STRUCTURED_ONLY = re.compile(rf"(?xi){_STRUCTURED}")
 
 # The plural and possessive family, joined automatically. `<noun> ها` is the
 # plural in every register that appears in comic dialogue; the interjection
@@ -63,8 +72,13 @@ _PROTECTED = re.compile(
 _ZWNJ_SUFFIXES = (
     "هایشان", "هایتان", "هایمان", "هایی", "هایم", "هایت", "هایش", "های", "ها",
 )
-#: `نمی` is not a Persian word by itself, so this one can never be wrong.
-_ZWNJ_PREFIXES = ("نمی",)
+#: Prefixes joined automatically: none.
+#:
+#: `نمی` was here on the grounds that it "is not a Persian word by itself". It
+#: is: نَمی, *a trace of moisture* — `نمی از باران روی صورتم نشست` is an
+#: ordinary sentence, and the rule turned its subject into the negative prefix
+#: of the following preposition.
+_ZWNJ_PREFIXES: tuple[str, ...] = ()
 
 # `تر` is both the comparative suffix and the adjective "wet". `موهایم تر شد`
 # means "my hair got wet"; joined, it says something else entirely. Nothing
@@ -88,9 +102,18 @@ _AMBIGUOUS_SUFFIXES = ("ترین", "تری", "تر")
 #: (*expensive wine*). A guess that changes the meaning of a sentence is worse
 #: than no rule, because the reader is never asked.
 #:
-#: So: a closed list of the conjugated forms that actually follow the prefix.
-#: Narrow, checkable, and extended by adding a word — never by widening a
-#: pattern. Everything outside it is a `zwnj-review` for a person to settle.
+#: A closed list of conjugated forms was tried next, and a closed list is still
+#: a guess about the word AFTER it, which is the word that decides. `بر` is on
+#: it as the stem of *بردن*, and it is also the preposition *on*:
+#: `می بر زمین ریخت` — *the wine spilled on the ground* — became `می‌بر`. `ده`
+#: is on it, and `می ده‌ساله را آورد` became `می‌ده‌ساله`.
+#:
+#: **So nothing prefixed with `می` is joined automatically any more.** The list
+#: below survives as the vocabulary the REVIEW note reads from, so the
+#: suggestion can say which reading it has in mind; it applies nothing. Three
+#: more exceptions would not have closed this — the rule was unsafe in kind,
+#: not in coverage, and this module's own comment says it: a tool that quietly
+#: rewrites a sentence is worse than one that leaves a typo.
 _MI_STEMS = (
     "رو", "کن", "شو", "خواه", "توان", "دان", "گوی", "بین", "آی", "گیر",
     "ده", "خور", "زن", "برم", "بر", "آور", "افت", "رس", "مان", "نویس",
@@ -107,18 +130,18 @@ MI_VERBS = frozenset(
 _SUFFIX_SPACE = re.compile(
     rf"([{PERSIAN_LETTER}]{{2,}}) +({'|'.join(_ZWNJ_SUFFIXES)})\b"
 )
-_PREFIX_SPACE = re.compile(
-    rf"\b({'|'.join(_ZWNJ_PREFIXES)}) +([{PERSIAN_LETTER}]{{2,}})"
-)
-#: `می` followed by a form this project can name as a verb. Applied.
+#: `می` followed by a form this project can name as a verb — REPORTED, so the
+#: note can say "this looks like the imperfective prefix" rather than only
+#: "something here is ambiguous".
 _MI_VERB = re.compile(
     rf"\b(می) +({'|'.join(sorted(MI_VERBS, key=len, reverse=True))})\b"
 )
-#: What is left over for a reader to decide.
+#: Everything a reader has to decide: a comparative that may be the adjective
+#: *wet*, and every `می`/`نمی` — both of which are ordinary nouns as well as
+#: prefixes, and neither of which any pattern here can tell apart.
 _AMBIGUOUS_JOIN = re.compile(
     rf"[{PERSIAN_LETTER}]{{2,}} +(?:{'|'.join(_AMBIGUOUS_SUFFIXES)})\b"
-    rf"|\bمی +(?!(?:{'|'.join(sorted(MI_VERBS, key=len, reverse=True))})\b)"
-    rf"[{PERSIAN_LETTER}]{{2,}}"
+    rf"|\b(?:نمی|می) +[{PERSIAN_LETTER}]{{2,}}"
 )
 
 _PERSIAN_PUNCT = "،؛؟!:.»…"
@@ -201,11 +224,15 @@ def _fix_segment(text: str, options: Options, persian_line: bool) -> str:
         # a typo, and a balloon has no room for either way of finding out.
         text = _EMPHATIC.sub(r"\1\1\1", text)
     if options.zwnj:
+        # The plural and possessive family only. `<noun> ها` is the plural in
+        # every register that appears in comic dialogue, and the interjection
+        # `ها` does not sit immediately after a noun with a space before it —
+        # which is the whole test for whether a join belongs here: not "this is
+        # usually right", but "this cannot be wrong".
+        #
         # "کتاب ها ی" style chains need more than one pass to settle.
         for _ in range(3):
             replaced = _SUFFIX_SPACE.sub(rf"\1{ZWNJ}\2", text)
-            replaced = _PREFIX_SPACE.sub(rf"\1{ZWNJ}\2", replaced)
-            replaced = _MI_VERB.sub(rf"\1{ZWNJ}\2", replaced)
             if replaced == text:
                 break
             text = replaced
@@ -238,6 +265,19 @@ def unprotected(text: str) -> str:
     """The line with every protected span blanked, for a check to read."""
     return "".join(" " * len(piece) if guarded else piece
                    for guarded, piece in segments(text))
+
+
+def without_addresses(text: str) -> str:
+    """The line with URLs, emails and numeric runs blanked — Latin WORDS kept.
+
+    The narrower view, for the checks that ask what script this line is in.
+    `unprotected` blanks every Latin word, so an English sentence left
+    untranslated came back as blanks and the gate that exists to catch exactly
+    that stopped firing. An address, by contrast, is Latin because of what it
+    is: no edit makes it Persian, so measuring it as missing translation asks
+    for a change nobody can make.
+    """
+    return _STRUCTURED_ONLY.sub(lambda m: " " * len(m.group(0)), text)
 
 
 def _pair_quotes(text: str, options: Options) -> str:
@@ -302,13 +342,33 @@ _DOUBLE_PUNCT = re.compile(r"([،؛])\1+")
 _ARABIC_LEFTOVER = re.compile(r"[يكىـ٠-٩]")
 
 
-def lint_text(text: str, *, acknowledged: Sequence[str] = ()) -> list[dict[str, str]]:
+def ambiguous_spans(text: str) -> list[str]:
+    """Every `X Y` a reader would be asked about, in order.
+
+    What a `zwnj-review` acknowledgment is recorded AGAINST, so it settles the
+    words somebody actually looked at.
+    """
+    if not (text or "").strip():
+        return []
+    return [match.group(0)
+            for match in _AMBIGUOUS_JOIN.finditer(unprotected(text))]
+
+
+def lint_text(text: str, *, acknowledged: Sequence[str] = (),
+              acknowledged_spans: Sequence[str] | None = None
+              ) -> list[dict[str, str]]:
     """What a reader still has to decide about this line.
 
     `acknowledged` are codes somebody has already looked at and settled — a
     `zwnj-review` on a word they confirmed is two words. Without it strict QA
     asked for the same unsafe edit on every run, and the only ways to silence
     it were to make the edit or to stop running the gate.
+
+    `acknowledged_spans` is what that decision was ABOUT. A bare code settled
+    the line for ever, so a later edit that introduced a different ambiguity
+    was silenced by a decision taken about a different pair of words. `None`
+    means the region predates this record and the code alone still stands —
+    an older document is not evidence of anything wrong.
     """
     issues: list[dict[str, str]] = []
     if not (text or "").strip():
@@ -332,16 +392,33 @@ def lint_text(text: str, *, acknowledged: Sequence[str] = ()) -> list[dict[str, 
         note("latin-quotes", "Latin quotation marks in Persian dialogue")
     if _DOUBLE_PUNCT.search(visible):
         note("double-punctuation", "repeated punctuation mark")
-    ambiguous = _AMBIGUOUS_JOIN.search(visible)
+    ambiguous = next(
+        (match for match in _AMBIGUOUS_JOIN.finditer(visible)
+         if acknowledged_spans is None
+         or match.group(0) not in set(acknowledged_spans)),
+        None)
+    if ambiguous and acknowledged_spans is not None:
+        # The decision was about specific words; the code alone no longer
+        # silences a pair nobody has seen.
+        settled.discard("zwnj-review")
     if ambiguous:
+        found = ambiguous.group(0)
+        looks_verbal = bool(_MI_VERB.fullmatch(found))
         note("zwnj-review",
-             f"`{ambiguous.group(0)}` may want a ZWNJ, or may be two words "
-             "— only a reader can tell; not changed automatically")
+             f"`{found}` may want a ZWNJ"
+             + (" — this reads like the imperfective prefix" if looks_verbal
+                else ", or may be two words")
+             + " — only a reader can tell; not changed automatically")
 
-    counts = ir.script_counts(text)
+    # `visible`, not `text`. A protected span — an email address, a URL — is
+    # Latin by construction and the fixer will never touch it, so measuring the
+    # script mix over the raw line reported `untranslated` on a balloon that
+    # was correct and offered no edit that could ever clear it.
+    addressless = without_addresses(text)
+    counts = ir.script_counts(addressless)
     total = sum(counts.values())
     if total:
-        match = _LATIN_SENTENCE.search(text)
+        match = _LATIN_SENTENCE.search(addressless)
         if match and counts["latin"] / total > 0.35:
             note("untranslated", f"long Latin passage: {match.group(0)[:70]}")
         source_script = counts["hiragana"] + counts["katakana"] + counts["han"] + counts["hangul"]
@@ -351,7 +428,8 @@ def lint_text(text: str, *, acknowledged: Sequence[str] = ()) -> list[dict[str, 
         if counts["arabic"] == 0:
             note("untranslated", "no Persian characters at all")
 
-    if re.search(rf"[{PERSIAN_LETTER}][A-Za-z]|[A-Za-z][{PERSIAN_LETTER}]", text):
+    if re.search(rf"[{PERSIAN_LETTER}][A-Za-z]|[A-Za-z][{PERSIAN_LETTER}]",
+                 addressless):
         note("script-collision", "Latin and Persian letters with no space between")
     return issues
 

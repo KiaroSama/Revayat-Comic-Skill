@@ -275,6 +275,43 @@ def save_doc(doc: dict[str, Any], path: str | os.PathLike[str]) -> Path:
     return write_text(path, dumps(doc) + "\n")
 
 
+class workspace_lock:
+    """Exclusive use of one working folder, for the length of a `with`.
+
+    Two imports into the same folder interleaved: each wrote its own pages and
+    then its own document, and whichever saved last published ITS document over
+    the other's pages — a chapter whose `comic.json` described a different book
+    from the images beside it, with every hash correct because each half was
+    internally consistent.
+
+    A file created with `O_EXCL` is the lock: it either exists or it does not,
+    on every filesystem this runs on, with no daemon and no cleanup thread. A
+    stale one is reported rather than removed — a lock nobody can explain is
+    not a lock this code should break on its own.
+    """
+
+    def __init__(self, folder: str | os.PathLike[str], *, what: str = "write"):
+        self.path = Path(folder) / ".revayat-lock"
+        self.what = what
+
+    def __enter__(self) -> "workspace_lock":
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            handle = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            raise RuntimeError(
+                f"another run is already writing {self.path.parent}.\n"
+                f"Wait for it to finish. If nothing is running, the previous "
+                f"one was killed: delete {self.path} and try again."
+            ) from None
+        with os.fdopen(handle, "w", encoding="utf-8") as out:
+            out.write(f"{self.what} pid={os.getpid()}\n")
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.path.unlink(missing_ok=True)
+
+
 def doc_dir(path: str | os.PathLike[str]) -> Path:
     """The folder a document's relative asset paths resolve against."""
     return Path(path).resolve().parent
@@ -310,6 +347,75 @@ def find_region(doc: dict[str, Any], region_id: str) -> dict[str, Any] | None:
         if region["id"] == region_id:
             return region
     return None
+
+
+#: Sound-effect policies that leave the effect drawn in the artwork. `keep`
+#: says nothing more; `bilingual` and `annotate` add the Persian somewhere else
+#: and still leave the original where the artist drew it.
+SFX_KEEP_POLICIES = frozenset({"keep", "bilingual", "annotate"})
+
+
+def worksheet_folder(doc_path: Path | str, doc: dict[str, Any],
+                     override: str | Path | None = None) -> Path:
+    """Where this document's worksheets live.
+
+    Three call sites answered this separately and two of them forgot the
+    document: `worksheet build --out elsewhere` records the folder in `meta`,
+    and then `worksheet build` and `worksheet status` with no `--out` looked
+    in `work/worksheets`, found nothing, and reported a chapter with a full
+    set of finished replies as having none.
+
+    Order: what this call was told, then what the document remembers, then the
+    default beside the document.
+    """
+    if override:
+        return Path(override)
+    recorded = (doc.get("meta") or {}).get("worksheets")
+    return Path(recorded) if recorded else Path(doc_path).parent / "worksheets"
+
+
+def add_audit(region: dict[str, Any], note: str) -> None:
+    """Record something a STAGE observed about this region.
+
+    Separate from `review`, which holds what the READER wrote, and the two were
+    one list. That made a worksheet unable to be a faithful picture of the page
+    in both directions: writing the reply back replaced the list and erased
+    `clean`'s refusal record with it, and not replacing it meant a note the
+    reader deleted came back on the next merge.
+
+    The sheet prints these as comments, so a reader sees them and the parser
+    never reads one back as an answer.
+    """
+    notes = region.setdefault("audit", [])
+    if note not in notes:
+        notes.append(note)
+
+
+def may_be_edited(region: dict[str, Any], sfx_policy: str = "keep") -> bool:
+    """Whether the cleaner may change this region's pixels at all.
+
+    The other half of `translatable`, and a different question: that one asks
+    whether Persian is owed here, this one asks who owns the pixels. They
+    disagree on an erasure (nothing is owed, the pixels go) and on a sound
+    effect under `bilingual` (Persian is owed, and the effect stays drawn).
+
+    It lives here because two modules were answering it separately and drifting:
+    the masker wrote authority over effects `clean` would never touch, and when
+    that was corrected `clean` stopped recognising them at all. A region the
+    cleaner may not edit gets no mask — masking it puts artwork inside the area
+    the cleaner may rewrite and inside the denominator the preservation proof
+    divides by.
+    """
+    if region.get("erase"):
+        # "Remove this and put nothing back" is a decision to touch the pixels,
+        # and it outranks the policy: an SFX policy is about lettering that
+        # belongs to the artwork, not about a stamp put on top of it.
+        return True
+    if region.get("dropped") or region.get("keep"):
+        return False
+    if region["kind"] == "sfx":
+        return sfx_policy not in SFX_KEEP_POLICIES
+    return True
 
 
 def translatable(region: dict[str, Any], sfx_policy: str = "keep") -> bool:
@@ -383,7 +489,7 @@ def region_state(region: dict[str, Any], sfx_policy: str = "keep") -> str:
     # Seen and questioned by a reader, but left without an answer. That is a
     # different thing from never having been looked at, and it is worth the
     # distinction: one is a decision, the other is a hole.
-    if region.get("review"):
+    if region.get("review") or region.get("audit"):
         return "needs_review"
 
     return "unresolved"

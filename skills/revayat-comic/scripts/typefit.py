@@ -148,13 +148,41 @@ def _tokens(text: str) -> list[list[str]]:
     return paragraphs
 
 
-def stroke_for(size: int) -> int:
+#: What a STYLED effect draws, as a fraction of the type size, taken from the
+#: renderer's own constants: an outline of up to `MAX_STROKE`, widened by one
+#: pixel on the heavy side of a modulated pair, and a shadow offset down and
+#: right by `SHADOW_OFFSET`.
+STYLED_STROKE = 0.22
+STYLED_SHADOW = 0.11
+
+
+def stroke_for(size: int, styled: bool = False) -> int:
     """The outline width the renderer adds at this size.
 
     Asked in ONE place, because the fitter and the renderer disagreeing about
-    it is the whole of the bug below.
+    it is the whole of the bug below — and they did disagree for the styled
+    path, which is the one that draws the most. The plain renderer adds
+    `size // 12` on every side, about 8%; a styled effect adds up to 22% plus a
+    shadow, so an 80x50 strip accepted size 35, was drawn with an outline
+    bounding box of (-6, 11, 86, 52), and was clipped by the page.
+
+    The extra pixel is the heavy half of a modulated stroke, which the renderer
+    adds to `stroke_width` and the fitter never knew about.
     """
-    return max(1, int(size) // 12)
+    size = int(size)
+    if styled:
+        return max(1, int(round(size * STYLED_STROKE)) + 1)
+    return max(1, size // 12)
+
+
+def shadow_for(size: int, styled: bool = False) -> int:
+    """How far past the glyphs a styled effect's shadow reaches.
+
+    Down and to the right only, but the fit is measured as a box, so it is
+    reserved on every side rather than modelled as a direction — the cheaper
+    answer, and the one that cannot be wrong in the direction that clips.
+    """
+    return max(1, int(round(int(size) * STYLED_SHADOW))) if styled else 0
 
 
 def _measure(draw, text: str, font, shaper: Shaper,
@@ -287,8 +315,11 @@ def fit_region(
 
     for size in range(int(max_size), int(min_size) - 1, -1):
         font = ImageFont.truetype(str(font_path), size, layout_engine=shaper.layout)
-        # What this size will really cost once the outline is on it.
-        stroke_px = stroke_for(size) if stroke else 0
+        # What this size will really cost once the outline AND the shadow are
+        # on it. `stroke` means "this is drawn as a styled effect", which is
+        # the path with the heavy outline, the modulation and the shadow.
+        stroke_px = (stroke_for(size, styled=True) + shadow_for(size, styled=True)
+                     if stroke else 0)
         step = max(1, int(round(size * LINE_SPACING)))
 
         placement: list[int] | None = None

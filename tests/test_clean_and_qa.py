@@ -369,6 +369,7 @@ def test_an_unresolved_region_is_counted_and_still_blocks(finished):
     region["target_text"] = ""
     region["typeset"] = {}
     region["review"] = []
+    region["audit"] = []
     region["dropped"] = False
     ir.save_doc(doc, finished)
 
@@ -643,12 +644,16 @@ def test_qa_reports_a_render_older_than_the_translation_it_shows(finished):
     assert "stale-stage" not in {item["code"] for item in clean_report["findings"]}
 
     doc = ir.load_doc(finished)
-    for region in doc["pages"][0]["regions"]:
-        if region.get("translation"):
-            region["translation"] = region["translation"] + " و باز هم"
-            break
-    else:
-        pytest.skip("this fixture has no translated region to correct")
+    # `target_text`, which is the field a region actually carries. It read
+    # `region["translation"]` — a name nothing in this project has ever used —
+    # so the loop found nothing, the `else` skipped, and the test that exists
+    # to prove a corrected line invalidates its render had never once run. The
+    # prerequisite is now ASSERTED: a `finished` fixture with no translated
+    # region is a broken fixture, not a reason to pass quietly.
+    corrected = [region for region in doc["pages"][0]["regions"]
+                 if (region.get("target_text") or "").strip()]
+    assert corrected, "the finished fixture carries no translated region"
+    corrected[0]["target_text"] += " و باز هم"
     ir.save_doc(doc, finished)
 
     report = qa.check_document(finished)
@@ -708,7 +713,11 @@ def test_a_kept_or_dropped_region_is_not_given_cleaning_authority(translated):
     page = ir.load_doc(translated)["pages"][0]
     assert page["regions"][0]["mask"] is None
     assert page["regions"][1]["mask"] is None
-    assert report["pages"][0]["not_masked"] == 2
+    # Three, not two: the fixture also carries a sound effect the default
+    # policy keeps, and a kept effect is artwork the cleaner may not rewrite.
+    kept = sum(1 for region in page["regions"]
+               if not ir.may_be_edited(region, doc["meta"].get("sfx_policy", "keep")))
+    assert report["pages"][0]["not_masked"] == kept == 3
 
 
 def test_an_unrepaired_region_takes_no_persian_and_fails_the_gate(finished):

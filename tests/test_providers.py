@@ -104,7 +104,7 @@ def test_a_locked_region_is_never_overwritten():
     result = providers.call(providers.FakeOCR(text="やめる"), "ocr", "x.png", "ja")
     assert providers.apply(region, "source_text", result) == "needs_review"
     assert region["source_text"] == "やめろ！"
-    assert any("read this as" in note for note in region["review"])
+    assert any("read this as" in note for note in region["audit"])
     # `disagreed` rather than `locked`: the distinction is whether the provider
     # said something different, not whether the field happened to be locked.
     assert region["provenance"][-1]["outcome"] == "disagreed"
@@ -115,7 +115,7 @@ def test_a_locked_region_that_agrees_needs_no_review():
     region = _region(locked=True, source_text="やめろ")
     result = providers.call(providers.FakeOCR(text="やめろ"), "ocr", "x.png", "ja")
     assert providers.apply(region, "source_text", result) == "locked"
-    assert not region.get("review")
+    assert not region.get("audit")
 
 
 def test_a_low_confidence_answer_becomes_a_note_never_text():
@@ -208,7 +208,7 @@ def test_a_field_locked_while_empty_is_still_locked():
     assert providers.apply(region, "source_text", result) == "needs_review"
     assert region["source_text"] == "", "a deliberate empty was overwritten"
     assert region["provenance"][-1]["outcome"] == "disagreed"
-    assert any("read this as" in note for note in region["review"])
+    assert any("read this as" in note for note in region["audit"])
 
 
 def test_an_empty_field_nobody_locked_is_still_filled():
