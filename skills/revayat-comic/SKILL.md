@@ -447,8 +447,8 @@ $PY $SKILL_DIR/scripts/revayat-comic.py qa check --doc $WORK/comic.json
 | `clean-refused` | `clean` had no repair for this patch and left the original lettering on the page | give it `--external`, a working `--provider`, or re-run `mask --free-lettering glyphs` for that page |
 | `region-not-rendered` | this region has approved Persian and its render is missing or overflowed | run `typeset`, or shorten the line until it fits |
 | `erase-unfinished` | a region is marked for erasure and the cleaner has not acted on it | run `clean` before publishing |
-| `delivery-mismatch` | the finished page, the mask it was drawn inside, or the cleaned page under it is not the file `typeset` committed | re-run `typeset`, or restore the page it rendered |
-| `delivery-unverified` | this page was rendered before finished pages were signed, so there is nothing to check the file against | re-run `typeset` to certify it |
+| `delivery-mismatch` | the finished page, the mask it was drawn inside, the cleaned page under it, or the original it was repaired from is not the file the stage committed — or the certificate does not cover it at all | re-run the stage it names, or restore the file it used |
+| `delivery-unverified` | this page was rendered or cleaned before those outputs were signed, so there is nothing to check the file against | re-run the stage it names to certify it |
 | `annotation-unplaced` | a `bilingual`/`annotate` gloss was produced and nothing reserves a place for it | place it by hand, or use `--sfx-policy translate` to replace the effect instead |
 | `compressed-variant` | a line was shortened to fit and the full-meaning version is recorded beside it | read both, then mark it `reviewed: compressed-variant` |
 | `archive-duplicate-page` | two pages in the package are byte-identical where the export wrote two different ones | re-run `export`; if it repeats, a page failed to write |
@@ -458,6 +458,7 @@ $PY $SKILL_DIR/scripts/revayat-comic.py qa check --doc $WORK/comic.json
 | `page-missing` / `page-size-changed` | an output is gone or resized | re-run the stage that makes it |
 | `untranslated-region` | a region has no Persian | translate it, or `drop: yes` |
 | `page-not-rendered` | the page carries Persian that was never drawn onto it | run `typeset`; it is a draft until you do |
+| `page-not-cleaned` | the cleaner repaired this page and the repaired image is gone, so the package would ship the original with everything that was erased still on it | re-run `clean`, or restore the file |
 | `source-script-left` | Japanese, Korean or Chinese survives inside the Persian | re-do that region |
 | `not-persian` | the target text is not Persian at all | re-do that region |
 | `text-overflow` | it does not fit at the minimum size, and the words were **not drawn** — ink that would land outside the balloon is taken back off the page | shorten the translation, merge and typeset again |
