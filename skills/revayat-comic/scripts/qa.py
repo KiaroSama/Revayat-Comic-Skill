@@ -657,7 +657,8 @@ def check_document(doc_path: str | Path, *, strict: bool = False,
             # on every run. Asking forever leaves two ways out: make the
             # unsafe edit, or stop running the gate.
             for issue in falint.lint_text(
-                    target, acknowledged=region.get("review_ack") or ()):
+                    target, acknowledged=region.get("review_ack") or (),
+                    acknowledged_spans=region.get("review_ack_spans")):
                 if issue["code"] in {"untranslated", "source-script-left"}:
                     continue  # already reported above, with better detail
                 findings.add("typography", region["id"],
