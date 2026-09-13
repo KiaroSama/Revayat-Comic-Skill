@@ -66,11 +66,28 @@ _PROTECTED = re.compile(
 )
 _STRUCTURED_ONLY = re.compile(rf"(?xi){_STRUCTURED}")
 
-# The plural and possessive family, joined automatically. `<noun> ها` is the
-# plural in every register that appears in comic dialogue; the interjection
-# `ها` does not sit immediately after a noun with a space before it.
+# The possessive family, joined automatically. These carry a personal ending —
+# `هایم`, `هایت`, `هایشان` — and the interjection takes none, so no reading of
+# them is anything but the plural plus a possessive. That is morphology, not a
+# guess about which word is likelier.
 _ZWNJ_SUFFIXES = (
-    "هایشان", "هایتان", "هایمان", "هایی", "هایم", "هایت", "هایش", "های", "ها",
+    "هایشان", "هایتان", "هایمان", "هایی", "هایم", "هایت", "هایش",
+)
+
+#: Bare `ها` and `های` are NOT in that list, and the comment that used to
+#: justify them said "the interjection does not sit immediately after a noun
+#: with a space before it" — which the code never tested. It tested for two
+#: Persian letters, and in conversational Persian `حواست باشه ها!` and
+#: `این کار رو نکن ها.` carry the warning particle after a VERB. They came out
+#: as `باشه‌ها` and `نکن‌ها`, which is not what either sentence says. `های` is
+#: no safer: `های های گریه کرد` is sobbing, not a plural.
+#:
+#: So the bare forms are joined only where the NEXT word settles it. `را` is
+#: the direct-object marker and a bare `ی` is the ezafe; both can only follow a
+#: complete noun phrase, and the particle never closes one. Everything else
+#: goes to a reader.
+_ANCHORED_PLURAL = re.compile(
+    rf"([{PERSIAN_LETTER}]{{2,}}) +(های|ها)(?= +(?:را|ی)\b)"
 )
 #: Prefixes joined automatically: none.
 #:
@@ -141,8 +158,15 @@ _MI_VERB = re.compile(
 #: prefixes, and neither of which any pattern here can tell apart.
 _AMBIGUOUS_JOIN = re.compile(
     rf"[{PERSIAN_LETTER}]{{2,}} +(?:{'|'.join(_AMBIGUOUS_SUFFIXES)})\b"
+    # A bare plural nothing anchors: the plural suffix, or the colloquial
+    # particle that turns a sentence into a warning.
+    rf"|[{PERSIAN_LETTER}]{{2,}} +(?:های|ها)\b(?! +(?:را|ی)\b)"
     rf"|\b(?:نمی|می) +[{PERSIAN_LETTER}]{{2,}}"
 )
+
+#: The bare plural, for a note that can name both readings instead of saying
+#: only that something here is ambiguous.
+_BARE_PLURAL = re.compile(rf"[{PERSIAN_LETTER}]{{2,}} +(?:های|ها)\b")
 
 _PERSIAN_PUNCT = "،؛؟!:.»…"
 _COMMA = re.compile(rf"(?<=[{PERSIAN_LETTER}{PERSIAN_DIGIT}]) *,")
@@ -224,15 +248,14 @@ def _fix_segment(text: str, options: Options, persian_line: bool) -> str:
         # a typo, and a balloon has no room for either way of finding out.
         text = _EMPHATIC.sub(r"\1\1\1", text)
     if options.zwnj:
-        # The plural and possessive family only. `<noun> ها` is the plural in
-        # every register that appears in comic dialogue, and the interjection
-        # `ها` does not sit immediately after a noun with a space before it —
-        # which is the whole test for whether a join belongs here: not "this is
-        # usually right", but "this cannot be wrong".
+        # The possessive family, plus a bare plural the next word anchors. The
+        # test for whether a join belongs here is not "this is usually right"
+        # but "this cannot be wrong".
         #
         # "کتاب ها ی" style chains need more than one pass to settle.
         for _ in range(3):
-            replaced = _SUFFIX_SPACE.sub(rf"\1{ZWNJ}\2", text)
+            replaced = _ANCHORED_PLURAL.sub(rf"\1{ZWNJ}\2", text)
+            replaced = _SUFFIX_SPACE.sub(rf"\1{ZWNJ}\2", replaced)
             if replaced == text:
                 break
             text = replaced
@@ -354,6 +377,51 @@ def ambiguous_spans(text: str) -> list[str]:
             for match in _AMBIGUOUS_JOIN.finditer(unprotected(text))]
 
 
+def record_acknowledgement(region: dict[str, Any], codes: Sequence[str],
+                           target: str) -> None:
+    """Store what a reader settled, and the exact text it was settled about.
+
+    One writer, so a waiver cannot be recorded in a shape only one reader
+    understands. The spans are what stop a bare code silencing a line for ever:
+    a later edit introduces words nobody has looked at, and a decision taken
+    about a different pair must not cover them.
+    """
+    region["review_ack"] = list(codes)
+    spans = ambiguous_spans(target)
+    if "compressed-variant" in codes:
+        # What that one is about is the shortened line itself. Recorded the
+        # same way, so the same rule applies to it: change the line and the
+        # pair has to be read again.
+        spans.append((target or "").strip())
+    region["review_ack_spans"] = spans
+
+
+def settled(region: dict[str, Any], code: str, span: str | None = None) -> bool:
+    """Has a reader settled `code` here, for these words?
+
+    `review_ack_spans` missing means the region predates span records and the
+    code alone still stands — an older document is not evidence of anything
+    wrong.
+    """
+    if code not in (region.get("review_ack") or ()):
+        return False
+    spans = region.get("review_ack_spans")
+    return spans is None or span is None or span in set(spans)
+
+
+def lint_region(region: dict[str, Any]) -> list[dict[str, str]]:
+    """Lint one region with that region's own acknowledgements.
+
+    One entry point, because there were two and they disagreed: the gate passed
+    the codes AND the spans, `lint_document` passed only the codes — so the
+    standalone linter honoured a waiver for ever while the gate re-asked, and
+    which answer a reader got depended on which command they ran.
+    """
+    return lint_text(region.get("target_text") or "",
+                     acknowledged=region.get("review_ack") or (),
+                     acknowledged_spans=region.get("review_ack_spans"))
+
+
 def lint_text(text: str, *, acknowledged: Sequence[str] = (),
               acknowledged_spans: Sequence[str] | None = None
               ) -> list[dict[str, str]]:
@@ -403,12 +471,16 @@ def lint_text(text: str, *, acknowledged: Sequence[str] = (),
         settled.discard("zwnj-review")
     if ambiguous:
         found = ambiguous.group(0)
-        looks_verbal = bool(_MI_VERB.fullmatch(found))
+        if _MI_VERB.fullmatch(found):
+            reading = " — this reads like the imperfective prefix"
+        elif _BARE_PLURAL.fullmatch(found):
+            reading = (" — the plural suffix, or the colloquial particle that "
+                       "makes this a warning")
+        else:
+            reading = ", or may be two words"
         note("zwnj-review",
-             f"`{found}` may want a ZWNJ"
-             + (" — this reads like the imperfective prefix" if looks_verbal
-                else ", or may be two words")
-             + " — only a reader can tell; not changed automatically")
+             f"`{found}` may want a ZWNJ{reading}"
+             " — only a reader can tell; not changed automatically")
 
     # `visible`, not `text`. A protected span — an email address, a URL — is
     # Latin by construction and the fixer will never touch it, so measuring the
@@ -460,8 +532,7 @@ def lint_document(doc_path: str | Path) -> dict[str, Any]:
     for _, region in ir.iter_regions(doc):
         if region.get("dropped"):
             continue
-        for issue in lint_text(region.get("target_text") or "",
-                               acknowledged=region.get("review_ack") or ()):
+        for issue in lint_region(region):
             findings.append({"region": region["id"], **issue})
     by_code: dict[str, int] = {}
     for finding in findings:
