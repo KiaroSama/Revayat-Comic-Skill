@@ -313,7 +313,13 @@ def clean_page(
                 # The whole measurement, not a summary: `typeset` renders from
                 # it, and a second measurement of the same region could disagree
                 # with the one that decided whether to erase.
-                region["lettering"] = dict(drawn)
+                #
+                # Stamped with the mask it was taken from. `typeset` reuses this
+                # rather than measuring again, and a mask rebuilt in between —
+                # a different grow, a re-traced balloon — leaves a description
+                # of lettering that was erased from somewhere else.
+                region["lettering"] = dict(
+                    drawn, mask_sha=ir.sha256_file(root / region["mask"]))
                 if drawn["verdict"] == "unreliable":
                     region["fill"] = "keep"
                     ir.add_audit(

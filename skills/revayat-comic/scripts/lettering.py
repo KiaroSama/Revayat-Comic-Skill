@@ -446,6 +446,35 @@ def measure(mask, np, origin: Sequence[float] = (0.0, 0.0)) -> dict[str, Any] | 
 # Rendering
 # --------------------------------------------------------------------------- #
 
+def strip_envelope(style: dict[str, Any], size: int, outlined: bool) -> int:
+    """Exactly what `_strip` will draw beyond the glyphs, for THIS effect.
+
+    The fitter was given the worst case for any styled effect — the widest
+    outline the renderer will ever ask for, at the heaviest modulation — and a
+    delicate effect was then refused room it was never going to use. The
+    numbers below are the ones `_strip` computes a few lines further down; they
+    are here so the fitter can ask the same question before choosing a size.
+
+    Reserved on every side although the shadow falls down and to the right
+    only: the fit is measured as a box, and the cheap answer is the one that
+    cannot be wrong in the direction that clips.
+    """
+    reserve = max(1, int(round(size * SHADOW_OFFSET)))
+    if not outlined:
+        return reserve
+    measured = float(style.get("stroke") or 0.0)
+    if measured > 0.0:
+        fraction = min(MAX_STROKE, max(MIN_STROKE, measured / 2.0))
+        width = max(2, int(round(size * fraction)))
+    else:
+        width = max(2, int(size) // 8)
+    swell = abs(float(style.get("modulation") or 0.0))
+    if swell >= MIN_MODULATION:
+        # The heavy half of the modulated pair, which is what actually lands.
+        width = max(width + 1, int(round(width * (1.0 + swell / 2.0))))
+    return reserve + width
+
+
 def _strip(text: str, style: dict[str, Any], shaper, font_path, fill, stroke,
            np, fit_region, pil, *, max_size: int, min_size: int):
     """The Persian, shaped and drawn once, horizontally, with its shadow.
@@ -460,12 +489,14 @@ def _strip(text: str, style: dict[str, Any], shaper, font_path, fill, stroke,
 
     layer = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(layer)
-    # `stroke=` for the same reason as the balloon path: the fitter has to
-    # measure the outline the draw below adds, or it accepts a size whose ink
-    # is wider than the space it was fitted to.
+    # This effect's own envelope, not the widest any effect could need. The
+    # fitter used to be told `stroke=bool(stroke)` — "is this outlined" — and
+    # read it as "is this styled", so an un-outlined effect reserved nothing
+    # and was still given a shadow, hanging over the edge of its own strip.
     fitted = fit_region(draw, text, np.full((height, width), 255, np.uint8), np,
                         shaper, font_path, max_size=max_size, min_size=min_size,
-                        stroke=bool(stroke))
+                        envelope=lambda size: strip_envelope(
+                            style, size, bool(stroke)))
     if fitted is None:
         return None, None
 
