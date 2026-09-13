@@ -474,15 +474,23 @@ def typeset_document(
     shaper = Shaper(force_fallback=force_fallback)
 
     placed = 0
+    blanked = 0
     overflow: list[str] = []
     unreliable: list[str] = []
     refused_pages: list[str] = []
     unplaced: list[str] = []
     per_page: list[dict[str, Any]] = []
     for page in doc["pages"]:
-        if pages and page["id"] not in pages:
+        if pages is not None and page["id"] not in pages:
             continue
         if not page.get("regions"):
+            # Nothing to draw, and nothing drawn earlier may stay: a render is
+            # a claim that this page's Persian is on it.
+            blanked += bool(ir.restore_blank_page(page))
+            per_page.append({"page": page["id"], "placed": 0, "overflow": [],
+                             "skipped": 0, "unreliable": [],
+                             "refused_clean": [], "unplaced_gloss": [],
+                             "restored": True})
             continue
         result = typeset_page(
             doc_path, page, shaper, font_path,
@@ -498,7 +506,8 @@ def typeset_document(
 
     stages.stamp_stage(
         doc, "typeset",
-        {"placed": placed, "font": font_path.name, "shaping": shaper.mode,
+        {"placed": placed, "restored_blank": blanked,
+         "font": font_path.name, "shaping": shaper.mode,
          "vazir": is_vazir(font_path)},
         # The face and the shaper are options, not results: the same text set
         # in Tahoma instead of Vazir is a different page, and a fallback shaper
@@ -526,6 +535,10 @@ def typeset_document(
         "font_note": note,
         "shaping": shaper.mode,
         "placed": placed,
+        # Pages whose last region was removed, restored to the original the
+        # importer wrote. Reported rather than silent: a page losing its render
+        # is a transition somebody should see in the run that did it.
+        "restored_blank": blanked,
         "overflow": overflow[:30],
         "overflow_count": len(overflow),
         "unreliable": unreliable[:30],

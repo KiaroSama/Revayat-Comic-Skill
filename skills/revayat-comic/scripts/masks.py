@@ -260,23 +260,35 @@ def region_mask(
 
 
 def _retire_assets(root: Path, page: dict[str, Any],
-                   keep: set[str]) -> list[str]:
-    """Delete the mask files this rebuild did not write.
+                   written: set[str]) -> list[str]:
+    """Delete the mask files a PREVIOUS MASK RUN wrote and this one did not.
 
     A rebuild that leaves the previous run's files behind leaves authority
     behind with them: remove every region from a page and the union mask still
-    said the cleaner could rewrite most of it. The sweep is bounded to this
-    page's own mask folder, and it removes only names this rebuild did not
-    produce.
+    said the cleaner could rewrite most of it.
+
+    Scoped by OWNERSHIP, not by folder. Sweeping every name the run did not
+    write took `masks/<page>/writable.png` with it — which `typeset` writes,
+    and which the delivery certificate checks — so an ordinary re-mask made the
+    page fail publication for a file nobody had touched. It would take a
+    letterer's own notes out of that folder too.
+
+    So each run records what it wrote in `page["mask_assets"]`, and the next
+    one retires exactly the difference. A file this stage has never written is
+    not this stage's to delete.
     """
+    owned = [name for name in (page.get("mask_assets") or [])
+             if isinstance(name, str)]
     folder = root / "masks" / page["id"]
-    if not folder.is_dir():
-        return []
     retired = []
-    for child in sorted(folder.iterdir()):
-        if child.is_file() and child.name not in keep:
+    for name in owned:
+        if name in written:
+            continue
+        child = folder / name
+        if child.is_file():
             child.unlink()
-            retired.append(f"{page['id']}/{child.name}")
+            retired.append(f"{page['id']}/{name}")
+    page["mask_assets"] = sorted(written)
     return retired
 
 
@@ -303,7 +315,7 @@ def build_document(
     retired: list[str] = []
     per_page: list[dict[str, Any]] = []
     for page in doc["pages"]:
-        if pages and page["id"] not in pages:
+        if pages is not None and page["id"] not in pages:
             continue
         if not page.get("regions"):
             # A page with nothing on it still has to be REBUILT, not skipped.
@@ -320,8 +332,12 @@ def build_document(
             page["mask_options"] = {"grow": grow, "pad": pad,
                                     "solid_free": bool(solid_free)}
             retired += _retire_assets(root, page, {"union.png"})
+            # Everything downstream was derived from regions this page no
+            # longer has.
+            cleared = ir.restore_blank_page(page)
             per_page.append({"page": page["id"], "regions": 0,
-                             "not_masked": 0, "coverage": 0.0})
+                             "not_masked": 0, "coverage": 0.0,
+                             "restored": cleared})
             continue
 
         written_names: set[str] = set()

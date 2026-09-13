@@ -238,7 +238,7 @@ def build_document(
 
     produced: list[dict[str, Any]] = []
     for page in doc["pages"]:
-        if pages and page["id"] not in pages:
+        if pages is not None and page["id"] not in pages:
             continue
         image = ir.load_image(root / page["image"])
         folder = f"crops/{page['id']}"

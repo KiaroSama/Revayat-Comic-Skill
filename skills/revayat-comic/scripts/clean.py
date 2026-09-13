@@ -252,6 +252,13 @@ def clean_page(
 
     counts = {"flat": 0, "inpaint": 0, "external": 0, "keep": 0, "skipped": 0,
               "refused": 0}
+    if not page.get("regions"):
+        # Nothing to repair. The page a reader gets is the page that was
+        # imported, and any repaired image from when this page HAD regions is
+        # a claim about work nobody is doing any more.
+        ir.restore_blank_page(page)
+        return counts
+
     for region in page.get("regions", []):
         if region.get("dropped"):
             counts["skipped"] += 1
