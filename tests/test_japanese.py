@@ -149,31 +149,62 @@ def test_the_column_is_taller_than_it_is_wide(japanese_chapter):
     assert height > width * 1.5
 
 
-def test_the_vertical_balloon_holds_enough_ink_for_a_narrow_face():
+def test_the_vertical_balloon_is_a_balloon_on_this_machines_face():
     """THE REGRESSION, at the level it actually happens.
 
-    A balloon's interior must hold at least `ink_min` of ink or the detector
-    does not believe it is a balloon. This fixture's vertical one is the tight
-    case: a thin column of hiragana in a tall ellipse, and how much ink that is
-    depends on the face the runner has. Measured here on the page this fixture
-    really draws, against the threshold that really rejects it — so padding it
-    generously again fails here rather than on one runner's Japanese test.
+    A balloon candidate has to clear five thresholds, and a thin column of
+    hiragana in a tall ellipse is the tight case for two of them: how much of
+    the interior is ink, and how small the smaller side is. Both depend on the
+    face the runner has — thinner glyphs put less ink in the same balloon, and
+    a narrower column lets the ellipse be narrower.
+
+    So this measures the page the fixture really draws, against the thresholds
+    that really reject it, and **says which one it fell to**. Without that a
+    failure here costs a round trip to the runner to find out.
     """
     import cv2
     import numpy as np
 
     page = japanese_page()
     gray = cv2.cvtColor(np.asarray(page), cv2.COLOR_RGB2GRAY)
-    candidates = [balloon
-                  for balloon in detect._balloon_candidates(
-                      gray, detect.DEFAULTS, invert=False)
-                  # The first panel, top-left, which is where the column is.
-                  if balloon["bbox"][0] < page.width // 2
-                  and balloon["bbox"][1] < page.height // 2]
+    height, width = gray.shape[:2]
+    options = detect.DEFAULTS
 
-    assert candidates, "no balloon around the vertical column at all"
-    column = max(candidates, key=lambda balloon: balloon["bbox"][3])
-    # A face narrower than this one puts proportionally less ink in the same
+    _, light = cv2.threshold(gray, 0, 255,
+                             cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    solid = detect._fill_lettering(
+        light, np, options["glyph_max"] * min(height, width))
+    count, labels, stats = detect._components(solid, np)
+
+    # The component holding the column: in the first panel, and tall.
+    best, report = None, []
+    for label in range(1, count):
+        x, y, w, h, area = (int(stats[label][index]) for index in range(5))
+        if not (x < width // 2 and y < height // 2 and h > w and h > 100):
+            continue
+        interior = (labels[y:y + h, x:x + w] == label)
+        window = gray[y:y + h, x:x + w]
+        share = float((window[interior] < 128).sum()) / max(1.0,
+                                                            float(interior.sum()))
+        checks = {
+            "area_min": area >= options["balloon_min_area"] * height * width,
+            "area_max": area <= options["balloon_max_area"] * height * width,
+            "min_side": min(w, h) >= max(
+                12.0, options["balloon_min_side"] * min(height, width)),
+            "solidity": area / float(w * h) >= options["balloon_min_solidity"],
+            "ink_min": share >= options["ink_min"],
+            "ink_max": share <= options["ink_max"],
+        }
+        report.append(
+            f"[{x},{y},{w},{h}] area={area} solidity={area / (w * h):.3f} "
+            f"ink={share:.4f} failed={sorted(k for k, ok in checks.items() if not ok)}")
+        if all(checks.values()):
+            best = share
+
+    assert best is not None, (
+        "no component around the vertical column is a balloon candidate; "
+        + " | ".join(report or ["nothing tall in the first panel at all"]))
+    # A face thinner than this one puts proportionally less ink in the same
     # balloon, so a share that only just clears the floor here is a balloon
-    # that disappears on another machine. Held at a third above it.
-    assert column["ink_share"] >= detect.DEFAULTS["ink_min"] * 1.33, column
+    # that disappears on another machine. Held well above it.
+    assert best >= options["ink_min"] * 1.5, " | ".join(report)
