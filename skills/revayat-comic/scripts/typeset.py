@@ -205,6 +205,7 @@ def typeset_page(
     unreliable: list[str] = []
     refused: list[str] = []
     glossed: list[str] = []
+    fresh_notes: list[dict[str, Any]] = []
     skipped = 0
     for region in page.get("regions", []):
         text = (region.get("target_text") or "").strip()
@@ -225,11 +226,10 @@ def typeset_page(
             # No placement is invented. The gloss is recorded against the page
             # so a letterer, a sidecar or a later feature can place it, and
             # `qa` says it has nowhere to go.
-            page.setdefault("annotations", []).append({
-                "region": region["id"], "kind": region["kind"],
-                "source": (region.get("source_text") or "").strip(),
-                "fa": text, "reason": "no reserved place for a gloss",
-            })
+            fresh_notes.append(
+                {"region": region["id"], "kind": region["kind"],
+                 "source": (region.get("source_text") or "").strip(),
+                 "fa": text, "reason": "no reserved place for a gloss"})
             glossed.append(region["id"])
             skipped += 1
             continue
@@ -398,10 +398,24 @@ def typeset_page(
                         overflow.append(region["id"])
 
         region["typeset"] = record
-        placed += 1
+        # Only what is still on the page. A region painted, measured, found to
+        # have spilled past its authorisation and taken back off again was
+        # counted as placed alongside the rest, so the report's headline number
+        # described ink that is not there.
+        if record.get("status") == "ok":
+            placed += 1
 
     for region in page.get("regions", []):
         region.pop("_page_image", None)
+
+    # The annotations this run produced REPLACE the ones it produced before,
+    # for every region it looked at. Appending meant a rerun carried the same
+    # unresolved note three times, and switching the policy to `translate` —
+    # which replaces the effect instead of glossing it — left the obsolete
+    # gloss on the page with `qa` still reporting it.
+    visited = {region["id"] for region in page.get("regions", [])}
+    page["annotations"] = [row for row in (page.get("annotations") or [])
+                           if row.get("region") not in visited] + fresh_notes
 
     relative = f"final/{page['id']}.png"
     ir.save_image(canvas, root / relative)
@@ -564,7 +578,12 @@ def main(argv: list[str] | None = None) -> int:
         stylise=not args.flat_sfx,
     )
     ir.emit(report)
-    return 0
+    # Non-zero when required work was not done. It exited zero with its only
+    # line overflowing, so a script that checked the status code shipped a page
+    # with no Persian on it and nothing in the pipeline noticed until `qa`.
+    # `unreliable` and `unplaced_gloss` are decisions, not failures: the effect
+    # stays as drawn and the gloss is recorded for a person.
+    return 1 if report["overflow"] or report.get("refused_clean") else 0
 
 
 if __name__ == "__main__":
