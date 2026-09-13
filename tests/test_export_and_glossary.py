@@ -9,6 +9,7 @@ import pytest
 
 import export
 import pageir as ir
+import writers
 import qa
 import stages
 
@@ -113,7 +114,7 @@ def test_pdf_export_keeps_the_page_count(finished, tmp_path):
 def test_an_interrupted_export_leaves_no_half_written_archive(finished, tmp_path):
     out = tmp_path / "chapter-fa.cbz"
     export.export_document(finished, out)
-    assert not list(tmp_path.glob("*.part"))
+    assert not list(tmp_path.glob("*.revayat-part"))
 
 
 def test_an_unknown_format_is_refused(finished, tmp_path):
@@ -223,7 +224,7 @@ def test_a_pdf_export_that_fails_mid_chapter_keeps_the_previous_one(
     good = out.read_bytes()
     assert len(good) > 1000
 
-    real = export._page_source
+    real = writers._page_source
     calls = {"n": 0}
 
     def explode(root, page):
@@ -232,11 +233,11 @@ def test_a_pdf_export_that_fails_mid_chapter_keeps_the_previous_one(
             raise OSError("disk full")
         return real(root, page)
 
-    monkeypatch.setattr(export, "_page_source", explode)
+    monkeypatch.setattr(writers, "_page_source", explode)
     with pytest.raises(OSError):
         export.export_document(finished, out, fmt="pdf")
     assert out.read_bytes() == good, "a failed export replaced a good package"
-    assert not list(tmp_path.glob("*.part")), "staging residue was left behind"
+    assert not list(tmp_path.glob("*.revayat-part")), "staging residue was left behind"
 
 
 def test_an_interrupted_dir_export_leaves_the_previous_one_intact(
@@ -456,19 +457,20 @@ def test_a_failed_archive_leaves_the_previous_package_and_no_debris(
     export.export_document(finished, out)
     before = out.read_bytes()
 
-    monkeypatch.setattr(export, "_encode",
+    monkeypatch.setattr(writers, "_encode",
                         lambda *_a, **_k: (_ for _ in ()).throw(OSError("nope")))
     with pytest.raises(OSError):
         export.export_document(finished, out)
 
     assert out.read_bytes() == before
     assert not [child for child in tmp_path.iterdir()
-                if ".part-" in child.name]
+                if ".revayat-" in child.name]
 
 
-def test_two_exports_of_one_chapter_do_not_share_a_scratch_name(finished, tmp_path):
+def test_an_operators_own_part_file_is_not_the_export_s(finished, tmp_path):
     """`<name>.part` was predictable, so an operator's own `<name>.part` was
-    overwritten and then deleted."""
+    overwritten and then deleted. The staging name is deterministic again —
+    that is what serializes two writers — but it is ours: `.revayat-part`."""
     out = tmp_path / "chapter.cbz"
     mine = tmp_path / "chapter.cbz.part"
     mine.write_bytes(b"something of mine")
