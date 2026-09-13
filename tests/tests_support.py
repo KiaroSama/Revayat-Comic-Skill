@@ -230,11 +230,11 @@ def japanese_page(width: int = 1000, height: int = 1500):
 
     # --- a vertical balloon, the column running top to bottom ----------------
     px0, py0, _, _ = panels[0]
-    step = 46 * scale
+    step = 44 * scale
     column_text = "\u3084\u3081\u308d\u3063\u3066"          # やめろって
     cx = px0 + panel_w * 0.52
     top = py0 + 60 * scale
-    pad_y = 16 * scale
+    pad_y = 14 * scale
     # Sized in EMS and sized TIGHT, and the second half is the one that took
     # three attempts to find. The detector requires a balloon interior to hold
     # at least `ink_min` (1.5%) of ink. A face whose hiragana are much narrower
@@ -252,24 +252,29 @@ def japanese_page(width: int = 1000, height: int = 1500):
     # committed it: "a fixture that leaves more says more about the fixture
     # than the page."
     em = font.size
+    # Every glyph placed by its own CENTRE. `draw.text((x, y), glyph)` positions
+    # relative to the ascender line, and ascent differs between faces: the same
+    # call puts Noto Sans CJK's ink lower in its cell than MS Gothic's, so a
+    # balloon drawn tight around an assumed cell clipped the real ink at the
+    # bottom. `anchor="mm"` makes the band this column occupies a fact this
+    # function knows on every face.
+    cells = [(cx + 0.5 * em, top + step * (index + 0.5))
+             for index in range(len(column_text))]
     furigana = []
     if small is not None:
-        ry = top + 4 * scale
-        for glyph in "\u3061\u304b\u3089":                    # ちから
-            furigana.append(((cx + 42 * scale, ry), glyph))
-            ry += 21 * scale
+        for index, glyph in enumerate("\u3061\u304b\u3089"):   # ちから
+            furigana.append(((cx + 1.30 * em, top + 0.52 * em * (index + 0.5)),
+                             glyph))
     right = cx + (1.65 * em if furigana else 1.0 * em)
     draw.ellipse([cx - 0.22 * em, top - pad_y,
                   right + 0.22 * em, top + step * len(column_text) + pad_y],
                  fill=WHITE, outline=BLACK, width=outline)
-    y = top
-    for glyph in column_text:
-        draw.text((cx, y), glyph, font=font, fill=BLACK)
-        y += step
+    for position, glyph in zip(cells, column_text):
+        draw.text(position, glyph, font=font, fill=BLACK, anchor="mm")
     # Furigana: a smaller column to the *right* of the main one, which is where
     # a reading goes in vertical Japanese.
     for position, glyph in furigana:
-        draw.text(position, glyph, font=small, fill=BLACK)
+        draw.text(position, glyph, font=small, fill=BLACK, anchor="mm")
 
     # --- a horizontal balloon, so the page carries both orientations ---------
     px0, py0, _, _ = panels[1]
