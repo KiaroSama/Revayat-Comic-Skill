@@ -275,6 +275,13 @@ are missing from the package.
 >   - `propose: <name>, <name>` — a name or term this balloon *mentions*
 >     but does not say. It reaches the glossary without claiming somebody
 >     else is talking.
+>   - `note: <anything a person should read>` — the one field that may
+>     appear more than once in a block. A rebuilt worksheet prints every
+>     note the region carries, and the merge takes the sheet as the whole
+>     truth: a note you edit is edited, a note you delete is deleted.
+>     Lines beginning `# ` are what the pipeline itself recorded — that
+>     `clean` refused a patch, that an effect was left as drawn — and they
+>     are read back as comments, never as your answer.
 > - **Check every crop for two balloons in one box.** This is the commonest way
 >   the page loses text, it happens several times a volume, and the detector
 >   cannot see it — four different measurements were tried and none separates a

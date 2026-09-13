@@ -369,6 +369,7 @@ def test_an_unresolved_region_is_counted_and_still_blocks(finished):
     region["target_text"] = ""
     region["typeset"] = {}
     region["review"] = []
+    region["audit"] = []
     region["dropped"] = False
     ir.save_doc(doc, finished)
 
