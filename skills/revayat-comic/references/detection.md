@@ -21,9 +21,22 @@ balloons with white lettering.
 
 The lettering inside is absorbed first, so a balloon crossed by a long vertical
 line of kanji comes back as one region rather than two. That fill is by
-*solidity*, not by size: a letter is a solid blob and a balloon outline is a
-thin ring, and only the blobs are filled. Filling every enclosed hole fills the
-outline as well, and welds the balloon to the page background.
+*solidity*, not by size — filling every enclosed hole would fill the outline as
+well and weld the balloon to the page background.
+
+**Solidity decides connectivity, and nothing else.** It used to decide how much
+ink a balloon was measured as holding, on the premise that "a letter is a solid
+blob": that premise is false for CJK at any normal weight, because hiragana are
+thin strokes in a square em. Four of the seven glyphs on this project's own
+Japanese fixture fall under the 0.30 floor on a heavy gothic face, and all of
+them do on a light one — so the letters were not absorbed, the interior kept
+letter-shaped holes, and the ink measured inside it was the bare paper around
+them. A balloon holding 4.6% ink was rejected for holding 0.19%.
+
+How much ink a balloon holds is now asked of the balloon itself: its interior
+is the white component **plus everything that component encloses**, which is
+what the word means and needs no threshold. A page set in a light face is
+detected the same as one set in a heavy face.
 
 Then the text box inside is the bounding box of the glyph-sized components,
 with the outline's own ring excluded.
@@ -103,6 +116,7 @@ means.
 | --- | --- | --- |
 | whole panels detected as balloons | sparse pages; a panel interior is also a light region inside an outline | lower `--balloon-max-area` |
 | balloons missed | thin or broken outlines, or heavy screentone inside | raise `--ink-max`, lower `--balloon-min-solidity` |
+| balloons missed on a page set in a light face | was a real defect until the interior stopped being measured through the absorption heuristic; if you still see it, the outline itself is broken rather than the type being thin | check the outline with `--balloon-min-solidity`, not `--ink-min` |
 | every line of text sprouts small extra regions | the gaps between letters passing as balloons | raise `--balloon-min-side` |
 | dozens of low-confidence regions on a textured page | screentone clustering as lettering | `--no-sfx`, then `drop: yes` on anything left |
 | a sound effect comes back as several regions | letters spaced further apart than usual | raise `--sfx-min-side` is *wrong* here; the clustering is size-relative, so check the marks were seeded at all with `--glyph-max` |
