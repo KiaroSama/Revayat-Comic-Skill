@@ -78,14 +78,20 @@ translation of a manga is not a wrong word — it is a correct word in the wrong
 register, so that a fifteen-year-old shouting at his brother sounds like a
 government notice.
 
-| The art shows | The Persian should be |
+| The art shows | What it is usually evidence of |
 | --- | --- |
-| shouting, motion lines, a jagged balloon | short, blunt, no polite verb endings |
-| a thought balloon | quieter, more interior, often unfinished |
-| a narration box | narrative past tense, more formal than any dialogue |
-| a small trailing balloon | a mutter; keep it small in words too |
-| a child | plain vocabulary, simple structures |
-| a formal or older character | full verb forms, no clipping |
+| shouting, motion lines, a jagged balloon | urgency and volume — often short and blunt, and loud is not the same as rude: a character being polite at the top of their voice stays polite |
+| a thought balloon | something interior, often quieter and unfinished |
+| a narration box | a step back from the scene — frequently narrative past tense, and just as often a wry present-tense aside |
+| a small trailing balloon | a mutter; usually small in words too |
+| a child | usually plain vocabulary and simple structures |
+| a formal or older character | often full verb forms with no clipping |
+
+**Every row is an observation about what the art tends to mean, not an
+instruction.** The two that used to read as rules — *shouting is informal*,
+*narration is past tense* — were both wrong often enough to matter, and a rule
+that is wrong often enough to need a paragraph of exceptions under it is an
+example wearing the wrong clothes.
 
 **That table is what the art suggests, not a lookup.** Register comes from how
 these two characters actually speak *to each other*, and the dialogue overrides
