@@ -372,16 +372,30 @@ def test_removing_every_region_leaves_no_edit_authority(translated):
 
 
 def test_a_retired_regions_mask_file_is_swept(translated):
+    """A region's mask outlives the region it was made for, and the rebuild is
+    what removes it — otherwise the union still says the cleaner may rewrite
+    pixels nobody is masking any more.
+
+    Stated against a mask a run actually WROTE, because that is the scope of
+    the sweep. It used to delete every name in the folder the run did not
+    produce, which took `typeset`'s `writable.png` with it — one of the three
+    files the delivery certificate checks — so an ordinary re-mask made the
+    page fail publication for a file nobody had touched.
+    """
     masks.build_document(translated)
     root = ir.doc_dir(translated)
     doc = ir.load_doc(translated)
     page = doc["pages"][0]
-    orphan = root / "masks" / page["id"] / "r999.png"
-    orphan.write_bytes((root / page["regions"][0]["mask"]).read_bytes())
+    victim = [region for region in page["regions"] if region.get("mask")][-1]
+    retired = root / victim["mask"]
+    assert retired.is_file(), "the fixture masked nothing"
 
+    page["regions"] = [region for region in page["regions"]
+                       if region["id"] != victim["id"]]
+    ir.save_doc(doc, translated)
     masks.build_document(translated, pages=[page["id"]])
 
-    assert not orphan.exists(), "a mask for a region that is gone survived"
+    assert not retired.exists(), "a mask for a region that is gone survived"
 
 
 def test_lettering_the_policy_keeps_is_not_given_cleaning_authority(translated):
