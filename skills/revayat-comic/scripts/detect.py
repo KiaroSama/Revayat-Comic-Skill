@@ -238,6 +238,30 @@ def _fill_lettering(mask, np, max_side: float):
     return cv2.bitwise_or(mask, keep)
 
 
+def _enclosed(region, np) -> Any:
+    """`region` plus every pixel it encloses.
+
+    A balloon's interior is the white area inside its outline — including the
+    letters sitting in it, which are holes in that white area. Asking the
+    question this way needs no threshold and is exact for a letter of any
+    stroke weight, where `_fill_lettering`'s solidity test is a guess that
+    fails on thin type (measured: four of seven hiragana holes fall under it on
+    a heavy face, all of them on a light one).
+
+    The flood starts from a zero frame around the box, so it reaches everything
+    outside `region` that is not walled in by it; whatever it cannot reach is
+    enclosed. Bounded to the caller's own box, which is what keeps it from
+    welding an interior to the page background.
+    """
+    cv2 = _cv2()
+    height, width = region.shape
+    canvas = np.zeros((height + 2, width + 2), np.uint8)
+    canvas[1:-1, 1:-1] = np.where(region, np.uint8(255), np.uint8(0))
+    cv2.floodFill(canvas, np.zeros((height + 4, width + 4), np.uint8),
+                  (0, 0), 128)
+    return canvas[1:-1, 1:-1] != 128
+
+
 def _balloon_candidates(gray, options: dict[str, float], invert: bool) -> list[dict[str, Any]]:
     cv2, np = _cv2(), _numpy()
     height, width = gray.shape[:2]
@@ -271,7 +295,11 @@ def _balloon_candidates(gray, options: dict[str, float], invert: bool) -> list[d
         if touches >= 2:
             continue
 
-        interior = (labels[y:y + h, x:x + w] == label)
+        # The component, plus the letters it encloses. Measuring the component
+        # alone asks "how much ink is in the paper around the letters", whose
+        # answer is none — which is how a balloon full of thin type was
+        # rejected for holding 0.19% ink.
+        interior = _enclosed(labels[y:y + h, x:x + w] == label, np)
         window = source[y:y + h, x:x + w]
         # Ink *inside the balloon only* — measuring the whole bounding box lets
         # artwork in the corners outside a round balloon count as lettering.
