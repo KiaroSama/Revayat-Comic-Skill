@@ -267,12 +267,11 @@ def _apply(region: dict[str, Any], block: dict[str, str],
         if codes:
             import falint
 
-            region["review_ack"] = codes
             # WHAT they settled, not only that they settled something. A bare
             # code silenced the line for ever, so an ambiguity introduced by a
             # later edit was waved through by a decision taken about a
             # different pair of words.
-            region["review_ack_spans"] = falint.ambiguous_spans(target)
+            falint.record_acknowledgement(region, codes, target)
         else:
             region.pop("review_ack", None)
             region.pop("review_ack_spans", None)

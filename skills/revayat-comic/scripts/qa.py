@@ -412,8 +412,8 @@ def check_document(doc_path: str | Path, *, strict: bool = False,
     for _page, region in ir.iter_regions(doc):
         full = (region.get("target_full") or "").strip()
         shown = (region.get("target_text") or "").strip()
-        if full and full != shown and "compressed-variant" not in (
-                region.get("review_ack") or []):
+        if full and full != shown and not falint.settled(
+                region, "compressed-variant", shown):
             # Not a judgement about the shortening — only a person can make
             # that one. The pair is surfaced so it is made, instead of the
             # shorter line quietly becoming the translation.
@@ -576,7 +576,12 @@ def check_document(doc_path: str | Path, *, strict: bool = False,
                 continue
 
             stats["translated"] += 1
-            counts = ir.script_counts(target)
+            # The same view the linter uses. A URL or an email address is Latin
+            # because of what it IS — no edit makes it Persian — and counting
+            # it as part of the script mix made a long link outweigh the
+            # Persian around it and fail an otherwise correct balloon.
+            visible = falint.without_addresses(target)
+            counts = ir.script_counts(visible)
             leftover = (counts["hiragana"] + counts["katakana"]
                         + counts["han"] + counts["hangul"])
             if leftover:
@@ -592,7 +597,7 @@ def check_document(doc_path: str | Path, *, strict: bool = False,
             # judged, so an English sentence left in place is still caught.
             lexical = sum(counts.values()) > 0
             if (target_language == "fa" and lexical
-                    and not ir.looks_like(target, "fa")):
+                    and not ir.looks_like(visible, "fa")):
                 findings.add("not-persian", region["id"],
                              f"target text is not Persian: {target[:40]}")
 
@@ -600,9 +605,7 @@ def check_document(doc_path: str | Path, *, strict: bool = False,
             # two words really are two words — must not be demanded again
             # on every run. Asking forever leaves two ways out: make the
             # unsafe edit, or stop running the gate.
-            for issue in falint.lint_text(
-                    target, acknowledged=region.get("review_ack") or (),
-                    acknowledged_spans=region.get("review_ack_spans")):
+            for issue in falint.lint_region(region):
                 if issue["code"] in {"untranslated", "source-script-left"}:
                     continue  # already reported above, with better detail
                 findings.add("typography", region["id"],
