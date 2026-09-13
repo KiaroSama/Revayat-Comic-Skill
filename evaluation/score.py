@@ -31,10 +31,24 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 CASES = HERE / "cases.json"
 
-#: Persian negation is a prefix on the verb: `نـ` or `نمی‌`. Checked as a
-#: prefix on a word, not as a bare letter, because `ن` starts many words that
-#: negate nothing.
-NEGATION = re.compile(r"(?:^|\s)(?:نمی|نَمی|ن)[ء-ۿ‌]{2,}")
+#: Negation this file is willing to DECIDE: the imperfective negative prefix,
+#: and the free negative words. Each of these negates and nothing else is
+#: spelled that way.
+NEGATION_CERTAIN = re.compile(
+    # The imperfective negative prefix, attached to a verb.
+    r"(?:^|\s)(?:نمی|نَمی)[ء-ۿ‌]{2,}"
+    # A free negative word, whole: `نه` is negation, `نهار` is lunch.
+    r"|(?:^|\s)(?:نه|هیچ|هرگز|بدون)(?![ء-ۿ])"
+    # And the privative prefix, which is attached by definition.
+    r"|(?:^|\s)بی‌[ء-ۿ]{2,}")
+#: And negation it can only SUSPECT: a bare `ن` in front of a word. It is the
+#: perfective negative prefix — `نرفت`, *he did not go* — and it is also the
+#: first letter of an enormous number of ordinary words. `نادر آمد.` is
+#: *Nader came*, an affirmative sentence about a man, and it was counted as
+#: evidence that the negation had been preserved.
+#:
+#: A guess is reported for review, never scored.
+NEGATION_MAYBE = re.compile(r"(?:^|\s)ن[ء-ۿ‌]{2,}")
 #: Persian and ASCII digits, so a rendering may use either.
 DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩", "01234567890123456789")
 ELLIPSIS = re.compile(r"(?:…|\.{2,})")
@@ -51,8 +65,32 @@ def load_cases(path: Path = CASES) -> list[dict]:
     return payload["cases"]
 
 
+#: A numeric token: an optional sign, digits, and an optional decimal part.
+#: Persian and ASCII digits are normalised first, and `٫` — the Arabic decimal
+#: separator — reads as a point.
+NUMBER = re.compile(r"[-−+]?\d+(?:[.,]\d+)?")
+
+
 def _digits_in(text: str) -> set[str]:
-    return set(re.findall(r"\d+", text.translate(DIGITS)))
+    """Every numeric token in the line, normalised.
+
+    Whole tokens, because membership was tested with `in` against the raw
+    string as well: a case requiring `3` was satisfied by a line that said
+    `30`, which is not the same quantity and is exactly the kind of error this
+    axis exists to catch.
+    """
+    normalised = text.translate(DIGITS).replace("٫", ".")
+    return {_canonical_number(token) for token in NUMBER.findall(normalised)}
+
+
+def _canonical_number(token: str) -> str:
+    """`+3`, `3`, `3.0` and `۳` are one quantity; `3` and `30` are two."""
+    token = token.replace("−", "-").replace(",", ".").lstrip("+")
+    try:
+        value = float(token)
+    except ValueError:              # pragma: no cover - NUMBER cannot produce it
+        return token
+    return str(int(value)) if value == int(value) else repr(value)
 
 
 def _units(text: str) -> int:
@@ -64,7 +102,15 @@ def check_preserved(case: dict, answer: str) -> dict[str, object]:
     wanted = case.get("must_preserve") or {}
     out: dict[str, object] = {}
     if wanted.get("negation"):
-        out["negation"] = bool(NEGATION.search(answer))
+        if NEGATION_CERTAIN.search(answer):
+            out["negation"] = True
+        elif NEGATION_MAYBE.search(answer):
+            # Neither a pass nor a failure. A word beginning with `ن` may be a
+            # negated verb or may be a name; this file cannot tell, and a
+            # checker that guesses here is worse than one that asks.
+            out["negation"] = "review"
+        else:
+            out["negation"] = False
     if wanted.get("numbers"):
         # Each entry is one number, given as the spellings that count for it.
         # `"سه و ربع"` is 3:15 and `"ساعت ۳:۱۵"` is 3:15, and no rule this file
@@ -73,7 +119,20 @@ def check_preserved(case: dict, answer: str) -> dict[str, object]:
         missing = []
         for entry in wanted["numbers"]:
             spellings = [entry] if isinstance(entry, str) else list(entry)
-            if not any(s in present or s in answer for s in spellings):
+            found = False
+            for spelling in spellings:
+                digits = _digits_in(spelling)
+                if digits:
+                    # A numeric spelling matches a numeric TOKEN. `3` is not
+                    # satisfied by `30`, and `۳` and `3` are the same number.
+                    found = digits <= present
+                else:
+                    # A written-out spelling — `سه و ربع` — is a phrase, and a
+                    # phrase is matched as text.
+                    found = spelling in answer
+                if found:
+                    break
+            if not found:
                 missing.append(spellings[0])
         out["numbers"] = {"missing": missing, "ok": not missing}
     if wanted.get("terms"):
@@ -91,6 +150,11 @@ def check_preserved(case: dict, answer: str) -> dict[str, object]:
 def fits(case: dict, answer: str, *, page=(1000, 1500)) -> object:
     """Whether the line sets inside this case's balloon, measured by the real
     fitter. ``None`` when the typesetting stack is not installed."""
+    if not case.get("balloon"):
+        # No balloon recorded for this case, so there is nothing to fit it in.
+        # Unmeasured, which is not the same as "does not fit" — the difference
+        # the report keeps under `fit_not_measured`.
+        return None
     sys.path.insert(0, str(HERE.parent / "skills" / "revayat-comic" / "scripts"))
     try:
         import numpy as np
@@ -117,9 +181,14 @@ def score_one(case: dict, answer: str) -> dict[str, object]:
     answer = (answer or "").strip()
     human = bool(case.get("human_only"))
     preserved = {} if human else check_preserved(case, answer)
+    # `"review"` is neither. A check this file cannot decide must not be
+    # counted as passed and must not fail the run; it is named so a person
+    # looks at it.
     machine_failed = [name for name, value in preserved.items()
                       if value is False or (isinstance(value, dict)
                                             and not value.get("ok"))]
+    needs_review = [name for name, value in preserved.items()
+                    if value == "review"]
     units = _units(answer)
     return {
         "case": case["id"],
@@ -130,6 +199,7 @@ def score_one(case: dict, answer: str) -> dict[str, object]:
         "adequacy": {
             "machine_checks": preserved,
             "machine_ok": bool(answer) and not machine_failed,
+            "needs_review": needs_review,
             "human": None,
             "ask": "does it say what the source says? read both.",
         },
@@ -165,8 +235,19 @@ def score(answers: dict[str, str], cases: list[dict] | None = None) -> dict:
                                       and not row["adequacy"]["machine_ok"]],
         "unit_count_flags": [row["case"] for row in rows
                              if row["omissions_additions"]["flag"]],
+        # Named rather than silently absent. An evaluation with four missing
+        # answers and no failures reported the same summary as a complete one.
+        "unanswered": [row["case"] for row in rows if not row["answered"]],
+        "needs_review": [row["case"] for row in rows
+                         if row["adequacy"].get("needs_review")],
         "does_not_fit": [row["case"] for row in rows
                          if row["visual_fit"]["fits"] is False],
+        # A missing typesetting stack is not a scorer defect and not a failure:
+        # the fit could not be measured, and saying which is the difference
+        # between "this line does not fit" and "nothing asked".
+        "fit_not_measured": [row["case"] for row in rows
+                             if row["answered"]
+                             and row["visual_fit"]["fits"] is None],
         "awaiting_human_score": [row["case"] for row in rows
                                  if row["answered"]],
         "rows": rows,
@@ -182,6 +263,9 @@ def main(argv: list[str] | None = None) -> int:
                         help='JSON: {"case-id": "the Persian"}')
     parser.add_argument("--cases", default=str(CASES))
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--complete", action="store_true",
+                        help="require an answer for every case; an unanswered "
+                             "one fails the run rather than being skipped")
     args = parser.parse_args(argv)
 
     answers = json.loads(Path(args.answers).read_text(encoding="utf-8"))
@@ -189,7 +273,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=1))
-        return 0
+        return _status(report, complete=args.complete)
 
     print(f"{report['answered']}/{report['cases']} answered")
     for name, key in (("machine adequacy failures", "machine_adequacy_failures"),
@@ -198,8 +282,26 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{name}: {', '.join(report[key]) or 'none'}")
     print(f"\nawaiting a human score on fluency, voice and adequacy: "
           f"{len(report['awaiting_human_score'])} case(s)")
+    if report["needs_review"]:
+        print(f"undecidable, read them: {', '.join(report['needs_review'])}")
+    if args.complete and report["unanswered"]:
+        print(f"unanswered: {', '.join(report['unanswered'])}")
     print(report["note"])
-    return 1 if report["machine_adequacy_failures"] else 0
+    return _status(report, complete=args.complete)
+
+
+def _status(report: dict, *, complete: bool) -> int:
+    """One verdict, whatever the output format asked for.
+
+    `--json` returned 0 unconditionally, so the same failing evaluation exited
+    1 as text and 0 as JSON — and a machine reading it, which is who asks for
+    JSON, was told everything passed.
+    """
+    if report["machine_adequacy_failures"]:
+        return 1
+    if complete and report["unanswered"]:
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

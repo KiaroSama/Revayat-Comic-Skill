@@ -15,13 +15,19 @@ from typing import Any
 import pageir as ir
 from qa import IMAGE_SUFFIXES, Findings
 
-def _page_size(payload: bytes) -> tuple[int, int] | None:
-    """The image's dimensions, or ``None`` when those bytes will not decode.
+def _page_size(payload: bytes) -> tuple[tuple[int, int] | None, str]:
+    """``(size, problem)``. `problem` is "" when the page really decoded.
 
     DECODED, not merely parsed. `Image.open` is lazy: it reads the header and
     stops, so a PNG whose chunk CRCs are correct and whose compressed pixels
     are rubbish reported its declared size and passed. `load()` is what a
     reader will do to it, and it is what fails.
+
+    A page over the decode limit is REFUSED, not measured. It used to return
+    the declared size and nothing else looked at it, so the one input designed
+    to make a checker give up — a decompression bomb — turned a resource limit
+    into a passing verification. A limit that cannot be reached safely is an
+    unknown, and an unknown is not a pass.
     """
     import io
 
@@ -31,13 +37,14 @@ def _page_size(payload: bytes) -> tuple[int, int] | None:
         with Image.open(io.BytesIO(payload)) as image:
             size = image.size
             if size[0] * size[1] > MAX_DECODE_PIXELS:
-                # A decompression bomb in a package is not a page; refusing to
-                # decode it is the right answer and so is saying its size.
-                return size
+                return size, (
+                    f"declares {size[0]}x{size[1]}, over the "
+                    f"{MAX_DECODE_PIXELS:,}-pixel decode limit, so it was not "
+                    f"opened and cannot be verified")
             image.load()
-            return image.size
+            return image.size, ""
     except Exception:
-        return None
+        return None, "is not an image the reader can open"
 
 
 #: Refuse to decode more than this in one page. A packaged chapter is checked
@@ -92,10 +99,13 @@ def _check_identity(findings: Findings, where: str,
             findings.add("archive-invalid", where,
                          f"{name} sorts into position {index + 1}; the export "
                          f"wrote {manifest[index]['name']} there")
-        if not row.get("lossy") and row.get("sha256"):
-            if ir.sha256_bytes(payload) != row["sha256"]:
-                findings.add("archive-invalid", where,
-                             f"{name} is not the bytes that were exported")
+        # Every row, lossy or not. `sha256` is the hash of the bytes the
+        # export WROTE — the re-encoded JPEG, not the PNG it came from — so it
+        # is always comparable, and gating it behind `lossy` left every JPEG
+        # page in every package unverified.
+        if row.get("sha256") and ir.sha256_bytes(payload) != row["sha256"]:
+            findings.add("archive-invalid", where,
+                         f"{name} is not the bytes that were exported")
 
 
 def _check_pages(findings: Findings, where: str, sizes: list[tuple[str, bytes]],
@@ -109,10 +119,9 @@ def _check_pages(findings: Findings, where: str, sizes: list[tuple[str, bytes]],
     """
     expected = [(page["width"], page["height"]) for page in doc["pages"]]
     for index, (name, payload) in enumerate(sizes):
-        size = _page_size(payload)
-        if size is None:
-            findings.add("archive-invalid", where,
-                         f"{name} is not an image the reader can open")
+        size, problem = _page_size(payload)
+        if problem:
+            findings.add("archive-invalid", where, f"{name} {problem}")
             continue
         if index < len(expected) and size != expected[index]:
             findings.add(
@@ -120,6 +129,66 @@ def _check_pages(findings: Findings, where: str, sizes: list[tuple[str, bytes]],
                 f"{name} is {size[0]}x{size[1]}; the document says page "
                 f"{index + 1} is {expected[index][0]}x{expected[index][1]}",
             )
+
+
+#: How much of a page an image must cover before it counts as the page's
+#: content. A placed thumbnail, a logo, or a resource left in the page's
+#: dictionary and never drawn are all "an image on the page" to a resource
+#: listing, and none of them is the artwork.
+MIN_PAGE_IMAGE_SHARE = 0.5
+
+
+def _check_pdf_page(findings: Findings, where: str, document: Any, page: Any,
+                    index: int, manifest: list[dict[str, Any]]) -> None:
+    """Does this sheet actually show the page the export wrote?
+
+    The old test was `page.get_images(full=True)` — does the page's resource
+    dictionary mention an image at all. It does not ask whether the image is
+    drawn, whether it is on the sheet, or whether it is THIS chapter's page: an
+    XObject placed off the edge satisfied it, and so did an unrelated picture
+    of the same shape.
+    """
+    import io
+
+    from PIL import Image
+
+    rect = page.rect
+    area = abs(rect.width * rect.height) or 1.0
+    placed = []
+    for info in page.get_image_info(xrefs=True):
+        bbox = info.get("bbox")
+        xref = info.get("xref")
+        if not bbox or not xref:
+            continue
+        drawn = pymupdf_rect(bbox) & rect
+        if abs(drawn.width * drawn.height) / area >= MIN_PAGE_IMAGE_SHARE:
+            placed.append(xref)
+    if not placed:
+        findings.add("archive-invalid", where,
+                     f"page {index + 1} shows no image covering the sheet")
+        return
+
+    row = manifest[index] if index < len(manifest) else None
+    wanted = (row or {}).get("pixels")
+    if not wanted:
+        return          # a package from a build that did not record them
+    for xref in placed:
+        try:
+            payload = document.extract_image(xref)["image"]
+            with Image.open(io.BytesIO(payload)) as image:
+                if ir.sha256_bytes(image.convert("RGB").tobytes()) == wanted:
+                    return
+        except Exception:
+            continue
+    findings.add("archive-invalid", where,
+                 f"page {index + 1} does not show the page this export wrote")
+
+
+def pymupdf_rect(bbox: Any) -> Any:
+    """A `Rect` from whatever shape PyMuPDF handed back."""
+    import pymupdf
+
+    return pymupdf.Rect(bbox)
 
 
 def check_package(package: str | Path, doc_path: str | Path) -> dict[str, Any]:
@@ -161,6 +230,7 @@ def check_package(package: str | Path, doc_path: str | Path) -> dict[str, Any]:
     elif package.suffix.lower() == ".pdf":
         pymupdf = ir.require("pymupdf", "pymupdf", "verifying a PDF")
         try:
+            manifest = _manifest_of(doc)
             with pymupdf.open(str(package)) as document:
                 found = document.page_count
                 # Counting pages proves the chapter has the right number of
@@ -181,9 +251,8 @@ def check_package(package: str | Path, doc_path: str | Path) -> dict[str, Any]:
                             f"page {index + 1} is {page.rect.width:.0f}x"
                             f"{page.rect.height:.0f}, a different shape from "
                             f"{want['width']}x{want['height']}")
-                    if not page.get_images(full=True):
-                        findings.add("archive-invalid", package.name,
-                                     f"page {index + 1} carries no image")
+                    _check_pdf_page(findings, package.name, document, page,
+                                    index, manifest)
         except Exception as error:
             findings.add("archive-invalid", package.name, f"cannot open: {error}")
     else:

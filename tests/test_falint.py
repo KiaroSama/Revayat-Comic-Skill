@@ -50,8 +50,14 @@ def test_a_plural_suffix_gets_a_zero_width_non_joiner():
     assert fix("کتاب ها") == f"کتاب{ZWNJ}ها"
 
 
-def test_a_verb_prefix_gets_one_too():
-    assert fix("می روم") == f"می{ZWNJ}روم"
+def test_a_verb_prefix_is_offered_rather_than_applied():
+    """It used to be joined. `می` is the imperfective prefix AND the noun
+    *wine*, and the word after it is what decides — which is the word no
+    pattern here can classify. `می بر زمین ریخت` was rewritten into nonsense,
+    so the suggestion goes to a reader instead."""
+    assert fix("می روم") == "می روم"
+    assert "zwnj-review" in [issue["code"]
+                             for issue in falint.lint_text("می روم")]
 
 
 def test_chained_suffixes_settle():
@@ -200,11 +206,17 @@ def test_an_independent_mi_is_not_glued_to_the_next_word():
 
 
 def test_the_joins_that_cannot_be_ambiguous_still_happen():
-    """Narrowing this must not switch the feature off. `نمی` is not a word on
-    its own, and neither are the long possessive forms, so those are safe."""
-    assert fix("نمی روم") == f"نمی{ZWNJ}روم"
+    """Narrowing this must not switch the feature off.
+
+    `نمی` left the safe list: نَمی is *a trace of moisture*, and
+    `نمی از باران روی صورتم نشست` is an ordinary sentence the rule turned into
+    a negated preposition. The possessive family stays — those forms are not
+    words on their own."""
     assert fix("کتاب هایم") == f"کتاب{ZWNJ}هایم"
     assert fix("کتاب هایشان") == f"کتاب{ZWNJ}هایشان"
+    assert fix("نمی روم") == "نمی روم"
+    assert "zwnj-review" in [issue["code"]
+                             for issue in falint.lint_text("نمی روم")]
 
 
 @pytest.mark.parametrize("opaque", [
@@ -289,8 +301,15 @@ def test_wine_is_not_joined_to_the_adjective_after_it(line, meaning):
 
 
 @pytest.mark.parametrize("line,joined", VERB)
-def test_a_verb_this_project_can_name_is_still_joined(line, joined):
-    assert joined in falint.fix_line(line, falint.Options())
+def test_a_verb_this_project_can_name_is_offered_to_the_reader(line, joined):
+    """These used to be joined automatically, on a closed list of conjugated
+    stems. The list cannot help: `بر` is the stem of *to take* and also the
+    preposition *on*, `ده` is *give* and also *ten*. The reading the list has
+    in mind is now what the review NOTE says, and the text is left alone."""
+    assert falint.fix_line(line, falint.Options()) == line
+    issues = falint.lint_text(line)
+    assert any(issue["code"] == "zwnj-review" for issue in issues)
+    assert any("imperfective prefix" in issue["detail"] for issue in issues)
 
 
 @pytest.mark.parametrize("line,_meaning", WINE)
@@ -352,3 +371,104 @@ def test_a_deliberate_line_break_survives():
 
 def test_a_numeral_only_balloon_is_left_readable():
     assert falint.fix_line("۱۲۳", falint.Options()) == "۱۲۳"
+
+
+# --- C06: the pass fixes characters, and stops guessing morphology ----------
+
+@pytest.mark.parametrize("line", [
+    # Every one cited in the repair brief, and every one an ordinary sentence.
+    "می بر زمین ریخت.",              # the WINE spilled ON the ground
+    "می ده‌ساله را آورد.",           # he brought the ten-year-old wine
+    "نمی از باران روی صورتم نشست.",  # a trace of rain settled on my face
+    "می شیرین را نوشید.",            # he drank the sweet wine
+    "موهایم تر شد.",                 # my hair got WET, not "wetter"
+])
+def test_a_nominal_reading_is_never_rewritten(line):
+    """A closed stem list is still a guess about the word AFTER it, and that is
+    the word that decides. Three more exceptions would not have closed this:
+    the rule was unsafe in kind, not in coverage."""
+    assert falint.fix_text(line) == line
+
+
+@pytest.mark.parametrize("line", [
+    "می روم خانه.",
+    "نمی دانم.",
+    "موهایم تر شد.",
+])
+def test_an_uncertain_join_is_reported_instead(line):
+    codes = [issue["code"] for issue in falint.lint_text(falint.fix_text(line))]
+    assert "zwnj-review" in codes, codes
+
+
+@pytest.mark.parametrize("line,expected", [
+    ("کتاب ها را بردم.", "کتاب\u200cها را بردم."),
+    ("بچه هایش آمدند.", "بچه\u200cهایش آمدند."),
+])
+def test_the_plural_family_is_still_joined(line, expected):
+    """What stays automatic is what cannot be wrong: `<noun> ها` is the plural
+    in every register comic dialogue uses."""
+    assert falint.fix_text(line) == expected
+    assert "zwnj-review" not in [issue["code"]
+                                 for issue in falint.lint_text(expected)]
+
+
+def test_fixing_twice_changes_nothing_further():
+    """Idempotent, which is what lets the value be stored."""
+    for line in ("کتاب ها را بردم.", "می بر زمین ریخت.", "سلام!!!!!!",
+                 "به mobin.example@mail.com ایمیل بزن"):
+        once = falint.fix_text(line)
+        assert falint.fix_text(once) == once, line
+
+
+# --- one segmentation, two questions ----------------------------------------
+
+@pytest.mark.parametrize("line", [
+    "به mobin.example@mail.com ایمیل بزن",
+    "برو https://example.com/a/b را ببین",
+    "ساعت ۳ یا 12:30 قرار است",
+])
+def test_an_address_is_not_an_untranslated_passage(line):
+    """It stayed intact — and the linter measured the raw line, so the Latin
+    inside it was reported as missing translation and no edit could ever clear
+    that, because the fixer refuses to touch the span."""
+    fixed = falint.fix_text(line)
+    codes = [issue["code"] for issue in falint.lint_text(fixed)]
+    assert "untranslated" not in codes and "script-collision" not in codes, codes
+
+
+def test_a_latin_sentence_is_still_caught():
+    """The narrow view is for ADDRESSES. Blanking every Latin word instead
+    silenced the gate that exists to catch an untranslated line."""
+    codes = [issue["code"] for issue in falint.lint_text(
+        "This is a long English sentence nobody translated")]
+    assert "untranslated" in codes, codes
+
+
+# --- a decision is about words, not about a code ----------------------------
+
+def test_an_acknowledgment_settles_the_words_it_was_about():
+    line = "می روم خانه."
+    spans = falint.ambiguous_spans(line)
+    assert spans
+
+    assert not falint.lint_text(line, acknowledged=["zwnj-review"],
+                                acknowledged_spans=spans)
+
+
+def test_an_acknowledgment_does_not_settle_a_later_edit():
+    """A bare code silenced the line for ever, so an ambiguity introduced by a
+    later edit was waved through by a decision about different words."""
+    settled = falint.ambiguous_spans("می روم خانه.")
+
+    codes = [issue["code"] for issue in falint.lint_text(
+        "می روم خانه. موهایم تر شد.", acknowledged=["zwnj-review"],
+        acknowledged_spans=settled)]
+
+    assert "zwnj-review" in codes, codes
+
+
+def test_a_region_from_an_older_build_keeps_its_bare_acknowledgment():
+    """`None` means the region predates this record. An older document is not
+    evidence of anything wrong."""
+    assert not falint.lint_text("می روم خانه.", acknowledged=["zwnj-review"],
+                                acknowledged_spans=None)

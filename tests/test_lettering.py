@@ -275,7 +275,9 @@ def test_an_unreadable_effect_is_left_drawn_and_sent_to_review(translated):
     after_doc = ir.load_doc(translated)
     after_region = after_doc["pages"][0]["regions"][0]
     assert after_region["typeset"]["status"] == "unreliable"
-    assert after_region["review"], "the reader was never told why"
+    # `audit`, not `review`: this is what `typeset` observed, and a reader
+    # editing their worksheet must not be able to delete it.
+    assert after_region["audit"], "the reader was never told why"
     assert ir.region_state(after_region, "translate") == "needs_review"
 
     final = np.asarray(ir.load_image(root / after_doc["pages"][0]["final"]))
@@ -347,7 +349,7 @@ def test_a_stylised_effect_that_will_not_fit_is_restored_not_flattened(
     after = after_doc["pages"][0]["regions"][0]
     assert after["typeset"]["status"] == "unreliable"
     assert after["typeset"]["style"] == "curved"
-    assert after.get("review")
+    assert after.get("audit")
 
     final = np.asarray(ir.load_image(root / after_doc["pages"][0]["final"]))
     x, y, w, h = after["mask_box"]
@@ -662,7 +664,7 @@ def test_a_missing_external_page_is_not_recorded_as_a_repair(detected, tmp_path)
     after_doc = ir.load_doc(detected)
     region = after_doc["pages"][0]["regions"][0]
     assert region["fill"] == "keep", "a repair that never happened was recorded"
-    assert region.get("review"), "the reader was never told to act"
+    assert region.get("audit"), "the reader was never told to act"
     assert report["totals"]["refused"] == 1
     after = np.asarray(ir.load_image(root / after_doc["pages"][0]["clean"]))
     assert np.array_equal(after, before), "the artwork was repainted"
@@ -683,7 +685,7 @@ def test_a_provider_that_fails_is_not_recorded_as_a_repair(detected, monkeypatch
     assert report["provider_calls"][0]["outcome"] == "wrong_size"
     region = ir.load_doc(detected)["pages"][0]["regions"][0]
     assert region["fill"] == "keep", "a repair that never happened was recorded"
-    assert region.get("review"), "the reader was never told to act"
+    assert region.get("audit"), "the reader was never told to act"
     assert report["totals"]["refused"] == 1
 
 

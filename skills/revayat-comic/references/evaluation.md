@@ -26,10 +26,12 @@ nobody can check, which defeats the point.
 Twenty to forty pages is enough to be useful. Two hundred sentence pairs with
 no images is not a substitute.
 
-**There is a starter set in this repository**, at `evaluation/`: fifteen
+**There is a starter set in this repository**, at `evaluation/`: twenty
 cases across Japanese, Korean, Chinese and English, each with several
 acceptable Persian renderings, plus a page generated for each one and a
-scorer that grades the axes separately and refuses to produce a total.
+scorer that grades the axes separately and refuses to produce a total. Five
+of the twenty are adversarial controls — inputs designed to make a checker
+say yes when the answer is no.
 
 Its source lines were written for it rather than taken from a published
 comic, and its pages are drawn rather than scanned. That is what makes it

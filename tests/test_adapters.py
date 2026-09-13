@@ -295,18 +295,26 @@ def test_a_hosted_repair_that_repaints_everything_reaches_nothing_outside_the_ma
     would take.
     """
     adapters.register_all()
-    masks.build_document(translated)
+    # The policy and the kinds are decided BEFORE masking, the order a real run
+    # uses. Setting them afterwards left the masks describing a document that
+    # no longer existed: the effects were masked under a policy that keeps them
+    # and then asked to be translated, and which regions the provider is even
+    # offered depended on that stale pairing.
     doc = ir.load_doc(translated)
     page = doc["pages"][0]
     root = ir.doc_dir(translated)
-    before = np.asarray(ir.load_image(root / page["image"]).convert("RGB")).copy()
-
-    endpoint.image = {"data": [{"b64_json": _repainted(root / page["image"])}]}
     for region in page["regions"]:
         region["kind"] = "sfx"
+        region["balloon"] = None      # free lettering: no balloon to read from
     doc["meta"]["sfx_policy"] = "translate"
-    doc["meta"]["free_lettering_mask"] = "solid"
     ir.save_doc(doc, translated)
+
+    # `--free-lettering solid` is the tier that exists FOR a provider: a solid
+    # patch has no unmasked pixel to read a repair from, so the deterministic
+    # tiers refuse it and the model is the only answer.
+    masks.build_document(translated, solid_free=True)
+    before = np.asarray(ir.load_image(root / page["image"]).convert("RGB")).copy()
+    endpoint.image = {"data": [{"b64_json": _repainted(root / page["image"])}]}
 
     clean.clean_document(translated, provider=adapters.HostedImageEdit.name)
 

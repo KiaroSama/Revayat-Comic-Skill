@@ -175,7 +175,8 @@ def read_document(
                         timeout=timeout, name=vision)
                     if verdict.ok:
                         row["vision"] = str(verdict.data)[:300]
-                        region.setdefault("review", []).append(
+                        ir.add_audit(
+                            region,
                             f"{vision} on the disagreement: {row['vision']}")
                     region.setdefault("provenance", []).append(
                         verdict.as_provenance())
