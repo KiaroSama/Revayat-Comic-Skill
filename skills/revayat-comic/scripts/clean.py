@@ -65,7 +65,7 @@ PROVIDER_TIMEOUT = 180.0
 #: the only one that takes it away: `bilingual` keeps the original and adds a
 #: Persian gloss beside it, `annotate` keeps it and records the meaning off the
 #: page. Erasing the artwork for either would delete the very thing they promise
-#: to show, and there would be nothing left for the gloss to sit beside.
+#: to show, and there would be nothing left for the gloss to sit beside it.
 KEEP_POLICIES = ir.SFX_KEEP_POLICIES
 
 #: Said to the reader when the generative repair a solid patch needs is missing
@@ -536,7 +536,7 @@ def main(argv: list[str] | None = None) -> int:
         provider=args.provider,
     )
     ir.emit(report)
-    return 0
+    return 1 if report.get("refused_pages") else 0
 
 
 if __name__ == "__main__":
