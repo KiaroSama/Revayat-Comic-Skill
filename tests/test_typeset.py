@@ -630,10 +630,9 @@ def test_the_break_the_translation_asked_for_becomes_a_line():
     assert [line["text"] for line in apart["lines"]] == ["بله", "نه"]
 
 
-def test_blank_lines_do_not_become_empty_rows():
-    """A trailing newline or a double break is whitespace, not a request for an
-    empty line in the middle of a balloon."""
-    assert typeset._tokens("بله\n\n\nنه\n") == [["بله"], ["نه"]]
+def test_explicit_blank_paragraphs_survive_typesetting_tokens():
+    """Intentional hard breaks survive; entirely whitespace-only input is empty."""
+    assert typeset._tokens("بله\n\n\nنه\n") == [["بله"], [], [], ["نه"], []]
     assert typeset._tokens("   \n  ") == []
 
 

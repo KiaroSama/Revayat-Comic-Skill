@@ -281,7 +281,9 @@ def _supports_persian(font_path: Path) -> bool:
     """
     Image, ImageDraw, ImageFont = _pil()
     try:
-        font = ImageFont.truetype(str(font_path), 32)
+        # Probe nominal glyphs. RAQM can insert a dotted circle for an isolated
+        # missing combining mark, making its tofu differ from the missing probe.
+        font = ImageFont.truetype(str(font_path), 32, layout_engine=ImageFont.Layout.BASIC)
     except OSError:
         return False
 
