@@ -34,6 +34,7 @@ venv/
 *.egg-info/
 .pytest_cache/
 .ruff_cache/
+logs/
 
 # --- Revayat Comic working directories and outputs ---
 *_revayat-comic/
@@ -102,3 +103,6 @@ junit*.xml
 resolved-versions.txt
 floor-versions.txt
 /evaluation/pages/
+
+/.specify/
+/specs/
