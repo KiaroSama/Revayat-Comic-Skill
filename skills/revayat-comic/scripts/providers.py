@@ -268,7 +268,8 @@ def wants(provider, role: str, keyword: str) -> bool:
         # A C callable or a wrapper with no introspectable signature. Offering
         # it an argument it may not take is the riskier guess, so decline.
         return False
-    if keyword in parameters:
+    if keyword in parameters and parameters[keyword].kind in (
+            inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY):
         return True
     return any(p.kind is inspect.Parameter.VAR_KEYWORD
                for p in parameters.values())
@@ -293,6 +294,29 @@ def _not_a_confidence(value: Any) -> str:
     return ""
 
 
+def validate_timeout(value: Any) -> float:
+    """Reject an unusable deadline before a worker or paid request starts."""
+    try:
+        valid = (not isinstance(value, bool) and isinstance(value, numbers.Real)
+                 and math.isfinite(value) and 0 < value <= threading.TIMEOUT_MAX)
+    except (OverflowError, TypeError, ValueError):
+        valid = False
+    if not valid:
+        raise ValueError("timeout must be a finite positive number within the platform limit")
+    return float(value)
+
+
+def validate_confidence(value: Any) -> float:
+    """The acceptance threshold obeys the same contract as returned confidence."""
+    try:
+        wrong = _not_a_confidence(value)
+    except (OverflowError, TypeError, ValueError):
+        wrong = "is not a finite probability"
+    if wrong:
+        raise ValueError(f"minimum confidence {wrong}")
+    return float(value)
+
+
 def call(provider, role: str, *args, timeout: float = DEFAULT_TIMEOUT,
          name: str | None = None, **kwargs) -> Result:
     """Run one provider call and turn every possible outcome into a `Result`.
@@ -305,6 +329,10 @@ def call(provider, role: str, *args, timeout: float = DEFAULT_TIMEOUT,
     it is the reason a provider should be given a network timeout of its own.
     """
     label = name or getattr(provider, "name", type(provider).__name__)
+    try:
+        timeout = validate_timeout(timeout)
+    except ValueError as error:
+        return Result(False, "error", label, role, detail=str(error))
     if provider is None:
         return Result(False, "unavailable", "none", role,
                       detail="no provider configured; the host agent does this")
@@ -340,7 +368,14 @@ def call(provider, role: str, *args, timeout: float = DEFAULT_TIMEOUT,
     started = time.monotonic()
     worker = threading.Thread(target=_work, name=f"provider-{label}",
                               daemon=True)
-    worker.start()
+    try:
+        worker.start()
+    except Exception as error:
+        # No worker owns the permit until start succeeds. Do not exhaust the
+        # process-wide budget after a temporary failure to create a thread.
+        _OUTSTANDING.release()
+        return Result(False, "error", label, role,
+                      detail=f"provider worker could not start ({type(error).__name__})")
     worker.join(timeout)
     elapsed = time.monotonic() - started
 
@@ -366,6 +401,13 @@ def call(provider, role: str, *args, timeout: float = DEFAULT_TIMEOUT,
         return Result(False, "refused", label, role,
                       detail="the provider declined to answer",
                       elapsed=elapsed)
+    if role in {"ocr", "translation"}:
+        if not isinstance(value, str):
+            return Result(False, "error", label, role,
+                          detail="a text provider must return text", elapsed=elapsed)
+        if not value.strip():
+            return Result(False, "refused", label, role,
+                          detail="the text provider returned no text", elapsed=elapsed)
     return Result(True, "ok", label, role, data=value,
                   confidence=confidence, elapsed=elapsed)
 
@@ -480,6 +522,7 @@ def apply(region: dict[str, Any], field_name: str, result: Result, *,
     source text is the one failure this pipeline cannot recover from, because
     every later stage trusts it.
     """
+    min_confidence = validate_confidence(min_confidence)
     provenance = region.setdefault("provenance", [])
 
     def record(outcome_record: dict[str, Any]) -> dict[str, Any]:
@@ -497,6 +540,15 @@ def apply(region: dict[str, Any], field_name: str, result: Result, *,
 
     existing = (region.get(field_name) or "").strip()
     locked = bool(region.get("locked"))
+
+    # Agreement is not an exemption from the requested confidence floor.
+    # Otherwise a weak answer confirms an existing reading and is resumed
+    # forever without ever satisfying the stricter policy.
+    if result.confidence is not None and result.confidence < min_confidence:
+        provenance.append(record({**result.as_provenance(), "outcome": "low_confidence"}))
+        ir.add_audit(region, f"{result.provider} was only {result.confidence:.2f} confident "
+                            "here; nothing was written")
+        return "needs_review"
 
     # **A provider fills a hole; it never replaces content, and a locked field
     # is not a hole.** That single rule covers locking, resume and disagreement
@@ -532,14 +584,6 @@ def apply(region: dict[str, Any], field_name: str, result: Result, *,
         provenance.append(record({**result.as_provenance(), "outcome": outcome,
                                   **({"read": text} if text is not None else {})}))
         return outcome
-
-    if result.confidence is not None and result.confidence < min_confidence:
-        provenance.append(record({**result.as_provenance(), "outcome": "low_confidence"}))
-        ir.add_audit(
-            region,
-            f"{result.provider} was only {result.confidence:.2f} confident "
-            f"here; nothing was written")
-        return "needs_review"
 
     if not text:
         provenance.append(record({**result.as_provenance(), "outcome": "empty"}))
