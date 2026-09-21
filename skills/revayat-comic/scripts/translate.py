@@ -73,7 +73,8 @@ def translate_document(
             allow_unmerged=allow_unmerged)
         if not state["ok"]:
             refused.append({"page": page["id"],
-                            "unmerged": state["unmerged"]})
+                            "unmerged": state["unmerged"],
+                            "moved": state["moved"]})
             counts["skipped"] += len(regions)
             continue
 
@@ -153,7 +154,9 @@ def translate_document(
         "refused": refused,
         "next": (chapter_context.refusal(
             {"unmerged": sorted({p for entry in refused
-                                 for p in entry["unmerged"]})}, doc_path)
+                                 for p in entry["unmerged"]}),
+             "moved": sorted({p for entry in refused
+                              for p in entry["moved"]})}, doc_path)
             if refused else None),
         "document": str(doc_path),
         "provider": provider,
@@ -196,9 +199,9 @@ def main(argv: list[str] | None = None) -> int:
         allow_unmerged=args.allow_unmerged,
     )
     ir.emit(report)
-    # A refused page is not a translated page, and exiting 0 told a script it
-    # was.
-    return 1 if report.get("refused") else 0
+    # Preserve partial progress, but do not tell a caller that failed work
+    # succeeded. A recorded second-opinion disagreement remains advisory.
+    return 1 if report.get("refused") or report["totals"]["failed"] else 0
 
 
 if __name__ == "__main__":
