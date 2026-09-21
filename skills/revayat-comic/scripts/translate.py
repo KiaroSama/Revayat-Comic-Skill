@@ -52,6 +52,7 @@ def translate_document(
     built its own package and asked nothing, so the automatic route did
     silently what the manual route was written to refuse.
     """
+    timeout = providers.validate_timeout(timeout)
     doc_path = Path(doc_path)
     doc = ir.load_doc(doc_path)
     engine = providers.get("translation", provider)
