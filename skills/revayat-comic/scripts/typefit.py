@@ -138,6 +138,8 @@ def _tokens(text: str) -> list[list[str]]:
     below the band the fitter measured and outside a tight balloon, and nothing
     upstream had asked for them to be there.
     """
+    if not text.strip():
+        return []
     lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     paragraphs = []
     for line in lines:
