@@ -38,3 +38,20 @@ jobs:
           path: ${{ runner.temp }}/revayat-source-evidence/
           if-no-files-found: error
           retention-days: 7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      # Small optional shapers and tooling, not model weights or font binaries.
+      # This is supplementary evidence, not a replacement for requirements.txt.
+      - name: Collect offline reviewer tools
+        run: |
+          python -m pip download --only-binary=:all: --dest "$RUNNER_TEMP/revayat-review-tools" arabic-reshaper python-bidi pytest-timeout ruff rarfile
+          cd "$RUNNER_TEMP/revayat-review-tools"
+          sha256sum *.whl > SHA256SUMS
+      - name: Retain offline reviewer tools
+        uses: actions/upload-artifact@v7
+        with:
+          name: review-tools-linux-py313
+          path: ${{ runner.temp }}/revayat-review-tools/
+          if-no-files-found: error
+          retention-days: 7
