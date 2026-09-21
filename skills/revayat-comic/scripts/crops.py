@@ -228,7 +228,7 @@ def _compose(entries, font, small):
 # --------------------------------------------------------------------------- #
 # Driver
 # --------------------------------------------------------------------------- #
-
+@ir.mutating
 def build_document(
     doc_path: str | Path, *, pages: Sequence[str] | None = None
 ) -> dict[str, Any]:
@@ -277,7 +277,7 @@ def build_document(
                 "then fill in the worksheet.",
     }
 
-
+@ir.cli
 def main(argv: list[str] | None = None) -> int:
     ir.use_utf8_stdio()
     parser = argparse.ArgumentParser(
@@ -285,11 +285,11 @@ def main(argv: list[str] | None = None) -> int:
         description="Render the page overview and the labelled crop sheets.",
     )
     parser.add_argument("--doc", required=True)
-    parser.add_argument("--pages", default="")
+    parser.add_argument("--pages", default=None)
     args = parser.parse_args(argv)
 
     report = build_document(
-        args.doc, pages=[p for p in args.pages.split(",") if p] or None
+        args.doc, pages=ir.parse_pages(args.pages)
     )
     ir.emit(report)
     return 0

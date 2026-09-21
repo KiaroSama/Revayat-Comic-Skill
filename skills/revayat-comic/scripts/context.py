@@ -37,6 +37,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import languages
 import pageir as ir
 import worksheet
 
@@ -413,6 +414,7 @@ def build(doc: dict[str, Any], page_id: str, *,
     speakers = _fit_speakers(_speakers(doc, page_id),
                              _speaking_on(doc, page_id),
                              SECTION_LIMITS["speakers"], over)
+    language_guidance = languages.guidance(meta.get("source_language"))
     spent = sum(len(row["fa"]) + len(row["src"]) for row in previous)
 
     sizes = {
@@ -422,6 +424,7 @@ def build(doc: dict[str, Any], page_id: str, *,
         "style_notes": len(ir.dumps(style_notes)),
         "series_notes": len(ir.dumps(series_notes)),
         "glossary": len(ir.dumps(glossary)),
+        "language_guidance": len(ir.dumps(language_guidance)),
     }
     constraints_size = sizes["glossary"]
 
@@ -447,7 +450,7 @@ def build(doc: dict[str, Any], page_id: str, *,
                 # `direction` is never set, so this always said "rtl" and
                 # a left-to-right book was described backwards.
                 "direction": meta.get("reading_direction", "rtl"),
-                "source_language": meta.get("source_language", "ja"),
+                "source_language": meta.get("source_language") or "auto",
             },
             "rules": [
                 "one source region becomes exactly one translated region",
@@ -474,6 +477,7 @@ def build(doc: dict[str, Any], page_id: str, *,
             ],
         },
         "context": {
+            "language_guidance": language_guidance,
             "speakers": speakers,
             # The chapter's own recent dialogue *is* the translation memory —
             # source beside target, nearest first. Not a summary of it.
@@ -515,7 +519,7 @@ def build(doc: dict[str, Any], page_id: str, *,
     package["budget"]["package_characters"] = len(ir.dumps(package))
     return package
 
-
+@ir.cli
 def main(argv: list[str] | None = None) -> int:
     ir.use_utf8_stdio()
     parser = argparse.ArgumentParser(

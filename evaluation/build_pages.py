@@ -9,6 +9,9 @@ no screentone, no noise floor, no letterer's hand. What they can carry is the
 effect drawn across a panel — and that is what the taxonomy in `README.md`
 mostly turns on.
 
+The drawings contain no source lettering. An answer-free `.input.json` beside
+each image carries its transcription, context and continuation relationships.
+
     python evaluation/build_pages.py --out evaluation/pages
 
 Real pages, when somebody has the right to share them, go in the same folder
@@ -19,9 +22,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent / "skills" / "revayat-comic" / "scripts"))
+import pageir as ir  # noqa: E402
 
 WIDTH, HEIGHT = 1000, 1500
 INK = (20, 20, 20)
@@ -81,7 +87,9 @@ def draw_case(case: dict):
     return image
 
 
+@ir.cli
 def main(argv: list[str] | None = None) -> int:
+    ir.use_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--out", default=str(HERE / "pages"))
     parser.add_argument("--cases", default=str(HERE / "cases.json"))
@@ -92,6 +100,10 @@ def main(argv: list[str] | None = None) -> int:
     cases = json.loads(Path(args.cases).read_text(encoding="utf-8"))["cases"]
     for case in cases:
         draw_case(case).save(out / f"{case['id']}.png")
+        task = {key: case[key] for key in
+                ("id", "language", "source", "context", "continues_into", "continues_from")
+                if key in case}
+        ir.write_text(out / f"{case['id']}.input.json", ir.dumps(task) + "\n")
     print(f"{len(cases)} page(s) in {out}")
     return 0
 

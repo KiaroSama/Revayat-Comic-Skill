@@ -34,7 +34,7 @@ import pageir as ir
 import stages
 import providers
 
-
+@ir.mutating
 def translate_document(
     doc_path: str | Path,
     *,
@@ -166,7 +166,7 @@ def translate_document(
         ),
     }
 
-
+@ir.cli
 def main(argv: list[str] | None = None) -> int:
     ir.use_utf8_stdio()
     parser = argparse.ArgumentParser(
@@ -174,7 +174,7 @@ def main(argv: list[str] | None = None) -> int:
                     "translator.")
     parser.add_argument("--doc", required=True)
     parser.add_argument("--provider", required=True)
-    parser.add_argument("--pages", default="")
+    parser.add_argument("--pages", default=None)
     parser.add_argument("--budget", type=int,
                         default=chapter_context.CONTEXT_BUDGET)
     parser.add_argument("--timeout", type=float,
@@ -189,7 +189,7 @@ def main(argv: list[str] | None = None) -> int:
     report = translate_document(
         args.doc,
         provider=args.provider,
-        pages=[p for p in args.pages.split(",") if p] or None,
+        pages=ir.parse_pages(args.pages),
         budget=args.budget,
         timeout=args.timeout,
         worksheets=args.worksheets,

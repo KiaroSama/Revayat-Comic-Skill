@@ -12,7 +12,7 @@ required terms, an ellipsis, semantic-unit count and whether the line fits the
 balloon are all decidable. Adequacy in full, fluency and voice consistency are
 not, and a model's opinion of its own work is not evidence — so those axes come
 back `null` with the question a person has to answer. A case marked
-`human_only` is not machine-scored at all.
+`human_only` has no machine adequacy checks; fit and unit-count signals remain.
 
     python evaluation/score.py --answers my-answers.json
     python evaluation/score.py --answers my-answers.json --json
@@ -30,6 +30,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 CASES = HERE / "cases.json"
+sys.path.insert(0, str(HERE.parent / "skills" / "revayat-comic" / "scripts"))
+import pageir as ir  # noqa: E402
 
 #: Negation this file is willing to DECIDE: the imperfective negative prefix,
 #: and the free negative words. Each of these negates and nothing else is
@@ -155,7 +157,6 @@ def fits(case: dict, answer: str, *, page=(1000, 1500)) -> object:
         # Unmeasured, which is not the same as "does not fit" — the difference
         # the report keeps under `fit_not_measured`.
         return None
-    sys.path.insert(0, str(HERE.parent / "skills" / "revayat-comic" / "scripts"))
     try:
         import numpy as np
         import typeset
@@ -192,6 +193,11 @@ def score_one(case: dict, answer: str) -> dict[str, object]:
     units = _units(answer)
     return {
         "case": case["id"],
+        "language": case.get("language"),
+        "source": case.get("source", ""),
+        "context": case.get("context", ""),
+        "human_note": case.get("human_note", ""),
+        "answer": answer,
         "difficulty": case.get("difficulty", []),
         "answered": bool(answer),
         # Two halves, kept apart. A tick here means nothing was lost that a
@@ -257,7 +263,9 @@ def score(answers: dict[str, str], cases: list[dict] | None = None) -> dict:
     }
 
 
+@ir.cli
 def main(argv: list[str] | None = None) -> int:
+    ir.use_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--answers", required=True,
                         help='JSON: {"case-id": "the Persian"}')

@@ -208,7 +208,7 @@ def typeset_page(
     fresh_notes: list[dict[str, Any]] = []
     skipped = 0
     for region in page.get("regions", []):
-        text = (region.get("target_text") or "").strip()
+        text = region.get("target_text") or ""
         if region.get("dropped") or not text:
             skipped += 1
             continue
@@ -471,7 +471,7 @@ def typeset_page(
             "unreliable": unreliable, "refused_clean": refused,
             "unplaced_gloss": glossed}
 
-
+@ir.mutating
 def typeset_document(
     doc_path: str | Path,
     *,
@@ -582,7 +582,7 @@ def typeset_document(
         ) if overflow else "Run `qa check`.",
     }
 
-
+@ir.cli
 def main(argv: list[str] | None = None) -> int:
     ir.use_utf8_stdio()
     parser = argparse.ArgumentParser(
@@ -590,7 +590,7 @@ def main(argv: list[str] | None = None) -> int:
         description="Set the Persian translations into the cleaned pages.",
     )
     parser.add_argument("--doc", required=True)
-    parser.add_argument("--pages", default="")
+    parser.add_argument("--pages", default=None)
     parser.add_argument("--font", default=None,
                         help="a Persian font file or family name")
     parser.add_argument("--max-size", type=int, default=DEFAULT_MAX_SIZE)
@@ -609,7 +609,7 @@ def main(argv: list[str] | None = None) -> int:
         max_size=args.max_size,
         min_size=args.min_size,
         force_fallback=args.no_raqm,
-        pages=[p for p in args.pages.split(",") if p] or None,
+        pages=ir.parse_pages(args.pages),
         stylise=not args.flat_sfx,
     )
     ir.emit(report)

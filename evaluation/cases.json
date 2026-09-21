@@ -473,6 +473,210 @@
     0.12
    ],
    "human_note": "`آن آدم` is whoever cont-01a named. A rendering that substitutes a different character reads perfectly and is wrong; only a reader who has both pages can say."
+  },
+  {
+   "id": "ctx-fr-01",
+   "language": "fr",
+   "source": "Vous n'êtes pas obligée de rester cette nuit.",
+   "gloss": "You are not required to stay tonight; staying is still permitted.",
+   "context": "A nurse addresses one adult visitor respectfully. The visitor asked whether hospital rules require her to stay overnight. There is no emergency and she may choose to stay or leave.",
+   "difficulty": ["modality", "plot-critical-negation", "tu-vous"],
+   "units": 1,
+   "must_preserve": {},
+   "accept": [
+    "لازم نیست امشب بمانید.",
+    "مجبور نیستید امشب اینجا بمانید."
+   ],
+   "balloon": [0.38, 0.14],
+   "human_only": true,
+   "human_note": "Check absence of obligation, not prohibition, and respectful singular address. Feminine agreement does not require adding a gender label in Persian. References await bilingual review."
+  },
+  {
+   "id": "ctx-fr-02",
+   "language": "fr",
+   "source": "On peut se tutoyer maintenant ?",
+   "gloss": "Can we use informal address with each other now?",
+   "context": "Two adult colleagues have consistently used vous with each other on earlier pages. After becoming friends, one cautiously proposes a change in how they address each other; the other has not yet agreed.",
+   "difficulty": ["tu-vous", "relationship-change", "cross-page-reference"],
+   "units": 1,
+   "must_preserve": {},
+   "accept": [
+    "حالا می‌تونیم همدیگه رو «تو» صدا کنیم؟",
+    "حالا می‌تونیم با هم خودمونی حرف بزنیم؟"
+   ],
+   "balloon": [0.42, 0.15],
+   "human_only": true,
+   "human_note": "Preserve the request for a mutual register change, including now and its unanswered status. Do not convert it into an established relationship or literal touching. References await bilingual review."
+  },
+  {
+   "id": "ctx-fr-03",
+   "language": "fr",
+   "source": "Ferme le portail avant que le chien ne sorte.",
+   "gloss": "Close the gate before the dog goes out.",
+   "context": "The dog is still inside the yard. An older sibling asks a younger sibling to shut the open gate as a precaution. No escape has happened yet.",
+   "difficulty": ["expletive-negation", "temporal-order", "plot-critical-negation"],
+   "units": 2,
+   "must_preserve": {},
+   "accept": [
+    "قبل از اینکه سگ بره بیرون، درِ حیاط رو ببند.",
+    "در حیاط را پیش از بیرون رفتن سگ ببند."
+   ],
+   "balloon": [0.44, 0.16],
+   "human_only": true,
+   "human_note": "Ne is expletive here. Check precaution and before-order; reject a claim that the dog will not leave or has already escaped. References await bilingual review."
+  },
+  {
+   "id": "ctx-es-01",
+   "language": "es",
+   "source": "Con la entrada digital, no tienes que imprimir nada.",
+   "gloss": "With the digital ticket, you do not need to print anything.",
+   "context": "A friend explains the venue's admission rules while showing a digital ticket. Printed tickets are accepted too; the speaker is explaining that printing is optional, not banned.",
+   "difficulty": ["modality", "plot-critical-negation", "negative-concord"],
+   "units": 1,
+   "must_preserve": {},
+   "accept": [
+    "با بلیت دیجیتال لازم نیست چیزی چاپ کنی.",
+    "وقتی بلیت دیجیتال داری، نیازی نیست چیزی پرینت بگیری."
+   ],
+   "balloon": [0.45, 0.16],
+   "human_only": true,
+   "human_note": "Check no necessity, not must not or cannot. Keep digital-ticket context and the scope of anything. References await bilingual review."
+  },
+  {
+   "id": "ctx-es-02",
+   "language": "es",
+   "source": "¿Ustedes ya guardaron las mochilas?",
+   "gloss": "Have you all put the backpacks away already?",
+   "context": "In Mexico, a teenager talks casually to several close friends after a trip. The group uses an ordinary friendly Persian voice; this is not a formal reception or a question about absent people.",
+   "difficulty": ["honorifics", "plural-address", "regional-register"],
+   "units": 1,
+   "must_preserve": {},
+   "accept": [
+    "کوله‌هاتون رو جمع کردید؟",
+    "شماها کوله‌پشتی‌هاتون رو گذاشتید سر جاش؟"
+   ],
+   "balloon": [0.42, 0.15],
+   "human_only": true,
+   "human_note": "Check second-person plural and completion in a familiar register. Ustedes does not mandate ceremonial Persian here. References await bilingual review."
+  },
+  {
+   "id": "ctx-es-03",
+   "language": "es",
+   "source": "No debes tocar ese cable, ni siquiera con guantes.",
+   "gloss": "You must not touch that cable, not even with gloves.",
+   "context": "A workshop instructor points to a live cable and stops a student reaching for it. The gloves offer no permission or exception to the warning.",
+   "difficulty": ["modality", "plot-critical-negation", "exception-scope"],
+   "units": 2,
+   "must_preserve": {},
+   "accept": [
+    "نباید به اون سیم دست بزنی، حتی با دستکش.",
+    "حتی اگه دستکش داری، به اون سیم دست نزن."
+   ],
+   "balloon": [0.44, 0.16],
+   "human_only": true,
+   "human_note": "Check prohibition and inclusion of the gloves scenario. Not needing to touch the cable is a different claim. References await bilingual review."
+  },
+  {
+   "id": "ctx-ja-01",
+   "language": "ja",
+   "source": "まだ返していません。",
+   "gloss": "I have not returned it yet.",
+   "context": "Mika's supervisor asked Mika whether she had returned the borrowed library book. Mika is the current speaker, replying politely. The scene contains another person who did not borrow the book.",
+   "difficulty": ["omitted-subject", "plot-critical-negation", "temporal-aspect"],
+   "units": 1,
+   "must_preserve": {},
+   "accept": [
+    "هنوز پس نداده‌ام.",
+    "هنوز برنگردانده‌ام."
+   ],
+   "balloon": [0.34, 0.12],
+   "human_only": true,
+   "human_note": "Recover first-person responsibility from the prior question, retain not yet, and do not assign the action to the other visible person. References await bilingual review."
+  },
+  {
+   "id": "ctx-ja-02",
+   "language": "ja",
+   "source": "考えておきます。",
+   "gloss": "I will think about it.",
+   "context": "A colleague has just invited the speaker to join a weekend activity. The speaker replies politely but has not accepted or rejected the invitation. The next page has not supplied a decision.",
+   "difficulty": ["modality", "indirect-reply", "voice-consistency"],
+   "units": 1,
+   "must_preserve": {},
+   "accept": [
+    "بهش فکر می‌کنم.",
+    "در موردش فکر می‌کنم."
+   ],
+   "balloon": [0.30, 0.12],
+   "human_only": true,
+   "human_note": "Preserve a commitment to consider, not a commitment to attend and not an invented definite rejection. References await bilingual review."
+  },
+  {
+   "id": "ctx-zh-01",
+   "language": "zh",
+   "source": "我不是不相信你，只是还没决定。",
+   "gloss": "It is not that I distrust you; I just have not decided yet.",
+   "context": "Two friends are choosing a route. One has taken hesitation as distrust. The other clarifies the reason for waiting without announcing a final route.",
+   "difficulty": ["negation-scope", "relationship-stance", "modality"],
+   "units": 2,
+   "must_preserve": {},
+   "accept": [
+    "این‌طور نیست که بهت اعتماد نداشته باشم؛ فقط هنوز تصمیم نگرفتم.",
+    "بهت بی‌اعتماد نیستم، فقط هنوز تصمیمی نگرفته‌ام."
+   ],
+   "balloon": [0.48, 0.18],
+   "human_only": true,
+   "human_note": "The first clause rejects an accusation of distrust; the second retains indecision. Counting negative words cannot score this scope. References await bilingual review."
+  },
+  {
+   "id": "ctx-zh-02",
+   "language": "zh",
+   "source": "听说她明天才回来。",
+   "gloss": "I hear she will not be back until tomorrow.",
+   "context": "Earlier dialogue named Ning as the absent colleague. The current speaker learned her return date from someone else and has not confirmed it directly. A different woman is already present.",
+   "difficulty": ["hearsay", "temporal-aspect", "cross-page-reference"],
+   "units": 1,
+   "must_preserve": {},
+   "accept": [
+    "شنیدم تازه فردا برمی‌گرده.",
+    "می‌گن تا فردا برنمی‌گرده."
+   ],
+   "balloon": [0.36, 0.13],
+   "human_only": true,
+   "human_note": "Keep hearsay and the delayed return. The referent is the absent Ning, not the nearby woman; do not turn the report into certainty. References await bilingual review."
+  },
+  {
+   "id": "ctx-ko-01",
+   "language": "ko",
+   "source": "누나도 같이 가요?",
+   "gloss": "Older sister, are you coming along too?",
+   "context": "A boy directly addresses his older sister. He and their mother are about to leave. The siblings' established Persian voice is affectionate and familiar with تو, despite the polite Korean ending.",
+   "difficulty": ["kinship-address", "honorifics", "voice-consistency"],
+   "units": 1,
+   "must_preserve": {},
+   "accept": [
+    "آبجی، تو هم با ما می‌آی؟",
+    "آبجی، تو هم همراهمون می‌آی؟"
+   ],
+   "balloon": [0.36, 0.13],
+   "human_only": true,
+   "human_note": "Keep direct address to the older sister, also/together, and the established family register. Do not turn it into a report about a sister elsewhere. References await bilingual review."
+  },
+  {
+   "id": "ctx-ko-02",
+   "language": "ko",
+   "source": "아직 정해진 건 아니에요.",
+   "gloss": "It has not been decided yet.",
+   "context": "A tentative departure date was mentioned in the previous panel. The organizer now answers someone treating that date as final. No cancellation has been announced.",
+   "difficulty": ["modality", "plot-critical-negation", "cross-page-reference"],
+   "units": 1,
+   "must_preserve": {},
+   "accept": [
+    "هنوز قطعی نشده.",
+    "هنوز تصمیم نهایی گرفته نشده."
+   ],
+   "balloon": [0.34, 0.12],
+   "human_only": true,
+   "human_note": "Preserve the tentative status and not yet; neither confirmation nor cancellation is warranted. References await bilingual review."
   }
  ]
 }

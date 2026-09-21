@@ -143,8 +143,7 @@ def _tokens(text: str) -> list[list[str]]:
     for line in lines:
         tokens = [token for token
                   in re.sub(r"[ \t]+", " ", line).strip().split(" ") if token]
-        if tokens:
-            paragraphs.append(tokens)
+        paragraphs.append(tokens)
     return paragraphs
 
 
@@ -225,6 +224,11 @@ def envelope_for(size: int, *, outline: bool = False,
     return stroke_for(size) if outline else 0
 
 
+def _anchored_box(draw, text: str, font, shaper: Shaper, stroke_width: int = 0):
+    return draw.textbbox((0, 0), shaper.prepare(text), font=font, anchor="mm",
+                        stroke_width=stroke_width, **shaper.draw_kwargs())
+
+
 def _measure(draw, text: str, font, shaper: Shaper,
              stroke_width: int = 0) -> tuple[int, int]:
     """The ink `text` puts down, INCLUDING the outline that will be drawn on it.
@@ -236,8 +240,7 @@ def _measure(draw, text: str, font, shaper: Shaper,
     52 pixels past the balloon and the preservation gate — once it stopped
     deriving its own authorisation from the drawing — said so.
     """
-    box = draw.textbbox((0, 0), shaper.prepare(text), font=font,
-                        stroke_width=stroke_width, **shaper.draw_kwargs())
+    box = _anchored_box(draw, text, font, shaper, stroke_width)
     return box[2] - box[0], box[3] - box[1]
 
 
@@ -284,6 +287,9 @@ def _wrap(draw, paragraphs: Sequence[Sequence[str]], font, shaper: Shaper,
     """
     lines: list[str] = []
     for tokens in paragraphs:
+        if not tokens:
+            lines.append("")
+            continue
         current = _wrap_one(draw, tokens, font, shaper, width_for_line,
                             stroke_width, lines)
         if current is None:
@@ -347,7 +353,7 @@ def fit_region(
     widths = _row_widths(region_mask, np)
     span = _band_span(region_mask, np)
     paragraphs = _tokens(text)
-    if not paragraphs:
+    if not any(paragraphs):
         return None
 
     body_top, body_height = _body(widths)
@@ -363,7 +369,9 @@ def fit_region(
         # style to consult.
         stroke_px = (int(envelope(size)) if envelope is not None
                      else envelope_for(size, outline=outline, styled=styled))
-        step = max(1, int(round(size * LINE_SPACING)))
+        probe = " ".join(token for paragraph in paragraphs for token in paragraph)
+        step = max(1, int(round(size * LINE_SPACING)),
+                   _measure(draw, probe, font, shaper, stroke_px)[1])
 
         placement: list[int] | None = None
         lines: list[str] | None = None
@@ -402,28 +410,19 @@ def fit_region(
             if available <= 0:
                 overflow = True
                 break
-            text_width, text_height = _measure(draw, line, font, shaper,
-                                               stroke_px)
-            if text_width > available:
+            box = _anchored_box(draw, line, font, shaper, stroke_px)
+            text_width, text_height = box[2] - box[0], box[3] - box[1]
+            if text_width > available or text_height > step:
                 overflow = True
                 break
-            middle = start + step // 2
-            # And the HEIGHT, which was measured and then thrown away. The only
-            # vertical test was `count * step <= body_height`, and `step` is a
-            # nominal `size * 1.30` — not what the face actually inks. With the
-            # house font the difference stayed inside the balloon; with the
-            # fallback face the line's ink reached past it, and the preservation
-            # gate counted 52 pixels on the artwork. A line is drawn centred on
-            # `middle`, so its ink runs half its height either side of that.
-            half = text_height / 2.0
-            if middle - half < 0 or middle + half > (bottom - top):
-                overflow = True
-                break
-            centre_x = left + band_left + available / 2.0
+            # Center the INK, then derive Pillow's anchor. Its font-metric
+            # middle is not the midpoint of this particular string's marks.
+            anchor_x = left + band_left + (available - text_width) // 2 - box[0]
+            anchor_y = top + start + (step - text_height) // 2 - box[1]
             rendered.append({
                 "text": line,
-                "x": float(centre_x),
-                "y": float(top + middle),
+                "x": float(anchor_x),
+                "y": float(anchor_y),
             })
         if overflow or not rendered:
             continue

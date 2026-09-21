@@ -148,7 +148,7 @@ foreach ($name in $targets) {
 
     # Never ship caches or a local virtualenv into an agent's skill directory.
     Get-ChildItem -LiteralPath $destination -Recurse -Force -Directory `
-        -Include '__pycache__', '.pytest_cache', '.venv', 'venv' -ErrorAction SilentlyContinue |
+        -Include '__pycache__', '.pytest_cache', '.venv', 'venv', 'logs' -ErrorAction SilentlyContinue |
         Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 
     if ($name -in @('opencode', 'antigravity')) {

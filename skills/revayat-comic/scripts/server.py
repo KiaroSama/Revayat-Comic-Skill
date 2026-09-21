@@ -64,7 +64,7 @@ STAGES = (
     # Not a step in the chain: it marks one box for erasure on every page,
     # before `mask` and `clean`. Listed here because a host with no shell needs
     # it as much as one with a shell — and the drift test says so.
-    "watermark",
+    "watermark", "review-docx",
 )
 
 #: `doctor` lives in the CLI script rather than in a stage module, so it is
@@ -109,7 +109,7 @@ def _describe(stage: str) -> str:
 
 def stage_module(stage: str) -> str:
     """The module implementing a stage. `import` is a keyword; the rest match."""
-    return {"import": "readers", "mask": "masks"}.get(stage, stage)
+    return {"import": "readers", "mask": "masks", "review-docx": "reviewdocx"}.get(stage, stage)
 
 
 def tools() -> list[dict[str, Any]]:
@@ -567,7 +567,7 @@ def serve_http(port: int = 8765, token: str | None = None,
     thread.start()
     return httpd, token
 
-
+@ir.cli
 def main(argv: list[str] | None = None) -> int:
     ir.use_utf8_stdio()
     parser = argparse.ArgumentParser(

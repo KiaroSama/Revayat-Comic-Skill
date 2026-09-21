@@ -291,7 +291,7 @@ def _retire_assets(root: Path, page: dict[str, Any],
     page["mask_assets"] = sorted(written)
     return retired
 
-
+@ir.mutating
 def build_document(
     doc_path: str | Path,
     *,
@@ -405,7 +405,8 @@ def build_document(
     # The document-wide flag stays for a page that has never been masked and
     # for every older document; the per-page value above is what `clean` reads
     # when it is there.
-    doc["meta"]["free_lettering_mask"] = "solid" if solid_free else "glyphs"
+    if per_page:
+        doc["meta"]["free_lettering_mask"] = "solid" if solid_free else "glyphs"
     stages.stamp_stage(doc, "masks",
                        {"written": written, "balloons_derived": derived,
                         "retired": len(retired)},
@@ -451,7 +452,7 @@ def load_mask(path: str | Path):
     with Image.open(path) as image:
         return np.asarray(image.convert("L"))
 
-
+@ir.cli
 def main(argv: list[str] | None = None) -> int:
     ir.use_utf8_stdio()
     parser = argparse.ArgumentParser(
@@ -459,7 +460,7 @@ def main(argv: list[str] | None = None) -> int:
         description="Build the pixel mask for every detected text region.",
     )
     parser.add_argument("--doc", required=True)
-    parser.add_argument("--pages", default="")
+    parser.add_argument("--pages", default=None)
     parser.add_argument("--grow", type=float, default=DEFAULT_GROW,
                         help="how far to grow the glyph shapes, as a share of "
                              f"the page's smaller side (default {DEFAULT_GROW})")
@@ -478,7 +479,7 @@ def main(argv: list[str] | None = None) -> int:
         args.doc,
         grow=args.grow,
         pad=args.pad,
-        pages=[p for p in args.pages.split(",") if p] or None,
+        pages=ir.parse_pages(args.pages),
         solid_free=args.free_lettering == "solid",
     )
     ir.emit(report)

@@ -353,7 +353,7 @@ def fix_text(text: str, options: Options | None = None) -> str:
     if not text:
         return text
     options = options or Options()
-    return "\n".join(fix_line(line, options) for line in text.split("\n")).strip()
+    return "\n".join(fix_line(line, options) for line in text.split("\n")).strip(" \t\r")
 
 
 # --------------------------------------------------------------------------- #
@@ -377,6 +377,16 @@ def ambiguous_spans(text: str) -> list[str]:
             for match in _AMBIGUOUS_JOIN.finditer(unprotected(text))]
 
 
+def _compression_identity(region: dict[str, Any], target: str | None = None) -> dict[str, Any]:
+    return {"type": "compressed-variant", "region": region.get("id"),
+            "source": region.get("source_text") or "",
+            "source_revision": region.get("source_revision"),
+            "full": region.get("target_full") or "",
+            "shown": region.get("target_text") or "" if target is None else target,
+            "box": list(region.get("bbox") or []),
+            "kind": region.get("kind"), "orientation": region.get("orientation")}
+
+
 def record_acknowledgement(region: dict[str, Any], codes: Sequence[str],
                            target: str) -> None:
     """Store what a reader settled, and the exact text it was settled about.
@@ -386,14 +396,24 @@ def record_acknowledgement(region: dict[str, Any], codes: Sequence[str],
     a later edit introduces words nobody has looked at, and a decision taken
     about a different pair must not cover them.
     """
-    region["review_ack"] = list(codes)
     spans = ambiguous_spans(target)
-    if "compressed-variant" in codes:
-        # What that one is about is the shortened line itself. Recorded the
-        # same way, so the same rule applies to it: change the line and the
-        # pair has to be read again.
-        spans.append((target or "").strip())
+    compression = _compression_identity(region, target) if "compressed-variant" in codes else None
+    prior = {"codes": list(region.get("review_ack") or []),
+             "spans": list(region.get("review_ack_spans") or []),
+             "compression": region.get("review_ack_compression")}
+    current = {"codes": list(codes), "spans": spans, "compression": compression}
+    if prior["codes"] and prior != current:
+        region.setdefault("review_ack_history", []).append(prior)
+    region["review_ack"] = list(codes)
     region["review_ack_spans"] = spans
+    if compression is not None:
+        region["review_ack_compression"] = compression
+    else:
+        region.pop("review_ack_compression", None)
+
+
+def compression_fingerprint(region: dict[str, Any], target: str | None = None) -> str:
+    return ir.sha256_bytes(ir.dumps(_compression_identity(region, target)).encode("utf-8"))
 
 
 def settled(region: dict[str, Any], code: str, span: str | None = None) -> bool:
@@ -405,6 +425,8 @@ def settled(region: dict[str, Any], code: str, span: str | None = None) -> bool:
     """
     if code not in (region.get("review_ack") or ()):
         return False
+    if code == "compressed-variant":
+        return region.get("review_ack_compression") == _compression_identity(region)
     spans = region.get("review_ack_spans")
     return spans is None or span is None or span in set(spans)
 
@@ -510,6 +532,7 @@ def lint_text(text: str, *, acknowledged: Sequence[str] = (),
 # Document driver
 # --------------------------------------------------------------------------- #
 
+@ir.mutating
 def fix_document(doc_path: str | Path, options: Options | None = None) -> dict[str, Any]:
     doc_path = Path(doc_path)
     doc = ir.load_doc(doc_path)
@@ -539,7 +562,7 @@ def lint_document(doc_path: str | Path) -> dict[str, Any]:
         by_code[finding["code"]] = by_code.get(finding["code"], 0) + 1
     return {"findings": findings[:40], "count": len(findings), "by_code": by_code}
 
-
+@ir.cli
 def main(argv: list[str] | None = None) -> int:
     ir.use_utf8_stdio()
     parser = argparse.ArgumentParser(

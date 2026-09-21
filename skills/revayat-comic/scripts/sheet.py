@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 import pageir as ir
+import falint
 from replies import field_lines
 
 #: Written into every sheet this build produces, so a reply that comes back
@@ -206,7 +207,12 @@ def page_worksheet(doc: dict[str, Any], page: dict[str, Any], fingerprint: str) 
         if region.get("target_full"):
             lines += field_lines("fa_full", region["target_full"])
         if region.get("review_ack"):
-            lines.append(f"reviewed: {', '.join(region['review_ack'])}")
+            valid = [code for code in region["review_ack"]
+                     if code != "compressed-variant" or falint.settled(region, code)]
+            if valid:
+                carried = [code + "@" + falint.compression_fingerprint(region)
+                           if code == "compressed-variant" else code for code in valid]
+                lines.append(f"reviewed: {', '.join(carried)}")
         # Decisions already taken are written back out. An ABSENT field resets
         # them at the next merge, so a rebuilt worksheet silently undid every
         # `drop`, `keep` and `erase` a reader had reviewed — and the notes with
@@ -224,4 +230,13 @@ def page_worksheet(doc: dict[str, Any], page: dict[str, Any], fingerprint: str) 
         # the reader gave.
         for note in region.get("audit", []):
             lines.append(f"# {note}")
-    return "\n".join(lines) + "\n"
+    # Every physical line of generated commentary stays a comment, including
+    # multiline audit notes and glossary values that resemble reply fields.
+    safe = []
+    for line in lines:
+        if line.startswith("#"):
+            first, *rest = line.split("\n")
+            safe.extend([first, *("# " + part for part in rest)])
+        else:
+            safe.append(line)
+    return "\n".join(safe) + "\n"

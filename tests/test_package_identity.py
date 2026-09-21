@@ -244,7 +244,9 @@ def test_a_package_without_a_manifest_is_unverified_not_wrong(finished,
     doc["stages"]["export"].pop("editions", None)
     ir.save_doc(doc, finished)
 
-    assert qa.check_package(out, finished)["ok"]
+    report = qa.check_package(out, finished)
+    assert not report["ok"]
+    assert any(item["code"] == "archive-unverified" for item in report["findings"])
 
 
 # --------------------------------------------------------------------------- #
@@ -337,12 +339,9 @@ def test_the_plainly_placed_page_still_passes(finished, tmp_path):
     assert report["ok"], report["findings"]
 
 
-def test_a_sheet_that_is_not_a_plain_image_is_judged_on_how_it_looks(finished,
+def test_even_a_small_added_mark_changes_the_delivered_page(finished,
                                                                     tmp_path):
-    """A PDF re-wrapped by another tool can carry marks of its own without
-    changing what a reader sees. The bytes then prove nothing about the
-    appearance, so the sheet is rendered and compared with what was exported —
-    and this one legitimately matches."""
+    """Added visible ink is a change even when its whole-page average is tiny."""
     pytest.importorskip("pymupdf")
     out = tmp_path / "book.pdf"
     export.export_document(finished, out)
@@ -355,7 +354,7 @@ def test_a_sheet_that_is_not_a_plain_image_is_judged_on_how_it_looks(finished,
 
     report = qa.check_package(out, finished)
 
-    assert report["ok"], report["findings"]
+    assert not report["ok"], report["findings"]
 
 
 def test_a_sheet_with_no_appearance_reference_is_unverified_not_approved(
@@ -368,6 +367,7 @@ def test_a_sheet_with_no_appearance_reference_is_unverified_not_approved(
     for edition in doc["stages"]["export"]["editions"].values():
         for row in edition["manifest"]:
             row.pop("appearance", None)
+            row.pop("visible", None)
     ir.save_doc(doc, finished)
 
     def marked(sheet, rect, payload):

@@ -1,5 +1,9 @@
 # Revayat Comic — روایت کمیک
 
+[![CI](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/ci.yml)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue)](skills/revayat-comic/requirements.txt)
+[![License GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue)](LICENSE)
+
 **Translate manga, manhwa, manhua and Western comics into Persian, and get a CBZ or PDF with the artwork provably untouched.**
 
 An agent skill for Claude Code, Claude Desktop, Codex, Antigravity, Hermes,
@@ -263,10 +267,50 @@ only its masked pixels are ever used.
 
 ## Documentation
 
+At translation startup, the skill asks whether to use optional parallel
+translation and editing. After explicit opt-in, native subagents draft disjoint
+assignments and cross-review; one coordinator reconciles voices/glossary and
+commits the results. Sequential remains the default, and dependent scenes stay
+ordered. [Parallel workflow](skills/revayat-comic/references/parallel-workflow.md).
+
+The skill now carries source-specific reading and voice guidance for Japanese,
+Korean, Chinese, French, Spanish and English, with a direct-to-Persian fallback
+for other languages. The optional translator receives the same guidance in its
+chapter context. [Research notes](docs/research/README.md) distinguish inspected
+Persian support from untested translation-quality claims; no upstream code,
+prompts, models or comic pages were copied.
+
+Every agent using the skill must write a UTF-8 activity log **directly beside
+the translated output file**, covering translation, corrections, quality
+decisions, QA and delivery. For folder output, the log goes inside that folder.
+See [translation logging](skills/revayat-comic/references/translation-log.md).
+The scripts' diagnostic logs do not replace this record.
+
+Native raster dimensions and known PDF visible paper dimensions are preserved
+separately. Poor scans are assessed for useful enhancement on separate reading
+copies; a whole-page enhanced derivative cannot claim unchanged artwork against
+the original. See [preservation and quality](skills/revayat-comic/references/artwork-preservation.md).
+
+The optional `review-docx` stage exports an editable Word companion with page and
+region IDs, source/Persian/full text and review states. It uses only the existing
+Python runtime. [Native document workflows](skills/revayat-comic/references/native-documents.md)
+ship inside every installed skill copy and cover both that companion and comic
+PDF processing. They need no separately installed Docx/PDF Processing Pro plugin.
+
+```bash
+python skills/revayat-comic/scripts/revayat-comic.py review-docx \
+  --doc work/comic.json --out out/chapter-review.docx
+```
+
+Word edits are review material; apply corrections through the identified
+worksheets before rebuilding the primary comic. Existing destinations are refused.
+
 - [`SKILL.md`](skills/revayat-comic/SKILL.md) — the eleven steps, and the QA
   code table
 - [`references/translation-policy.md`](skills/revayat-comic/references/translation-policy.md)
   — what to give the translating sub-agent
+- [`references/source-languages.md`](skills/revayat-comic/references/source-languages.md)
+  — language-specific reading, Persian voices and register
 - [`references/persian-typesetting.md`](skills/revayat-comic/references/persian-typesetting.md)
   — RTL, shaping, fonts, fitting a balloon
 - [`references/detection.md`](skills/revayat-comic/references/detection.md) —
@@ -287,8 +331,13 @@ only its masked pixels are ever used.
 
 ## Development
 
+Interrupted exports and worksheet merges have explicit recovery routes that
+preserve reader edits, original inputs and previous editions. See
+[recovery and integrity](skills/revayat-comic/references/recovery.md) for the
+commands, package-verification limits and sanitized UTF-8 run logs.
+
 ```bash
-pip install -r skills/revayat-comic/requirements.txt
+pip install -r skills/revayat-comic/requirements.txt -r tests/requirements.txt
 python -m pytest tests -q
 python tests/e2e_pipeline.py
 python -m ruff check skills/revayat-comic/scripts tests
@@ -299,6 +348,9 @@ Python 3.10 or newer. The linter runs a small rule set — undefined names,
 unused imports, shadowed names, dead variables — not style; `ruff.toml` says
 what is off and why. Dependencies are audited weekly against the advisory
 database by `.github/workflows/dependency-audit.yml`.
+
+The regression suite also needs an explicit DejaVu test face. See
+[test prerequisites and coverage](tests/README.md); CI installs and checks it.
 
 Fixtures are generated, not committed. There are no comic pages in this
 repository: they bloat it and the content is usually someone else's. A CI check

@@ -27,7 +27,8 @@ import sys
 import shutil
 import tempfile
 from pathlib import Path
-
+from workspace import Document, mutating, parse_pages, workspace_lock  # noqa: F401
+from runlog import cli  # noqa: F401
 # What a region's DECISIONS mean lives in `regions.py`: a different subject
 # with a different audience. Re-exported here because every caller reaches
 # for them as `ir.translatable`, `ir.may_be_edited` and `ir.region_state`,
@@ -108,6 +109,8 @@ def write_text(path: str | os.PathLike[str], text: str) -> Path:
     try:
         with handle as stream:
             stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
         os.replace(handle.name, target)
     except BaseException:
         Path(handle.name).unlink(missing_ok=True)
@@ -279,55 +282,30 @@ def region_id_for(page: dict[str, Any], ordinal: int) -> str:
 # --------------------------------------------------------------------------- #
 
 def load_doc(path: str | os.PathLike[str]) -> dict[str, Any]:
-    doc = json.loads(read_text(path))
+    raw = Path(path).read_bytes()
+    doc = Document(json.loads(raw.decode("utf-8")))
     version = doc.get("version")
     if version != SCHEMA_VERSION:
         raise ValueError(
             f"{path}: document schema {version!r}, this build reads "
             f"{SCHEMA_VERSION}. Re-run `import` to rebuild it."
         )
+    doc.path = Path(path).resolve()
+    doc.generation = sha256_bytes(raw)
     return doc
 
 
 def save_doc(doc: dict[str, Any], path: str | os.PathLike[str]) -> Path:
-    return write_text(path, dumps(doc) + "\n")
-
-
-class workspace_lock:
-    """Exclusive use of one working folder, for the length of a `with`.
-
-    Two imports into the same folder interleaved: each wrote its own pages and
-    then its own document, and whichever saved last published ITS document over
-    the other's pages — a chapter whose `comic.json` described a different book
-    from the images beside it, with every hash correct because each half was
-    internally consistent.
-
-    A file created with `O_EXCL` is the lock: it either exists or it does not,
-    on every filesystem this runs on, with no daemon and no cleanup thread. A
-    stale one is reported rather than removed — a lock nobody can explain is
-    not a lock this code should break on its own.
-    """
-
-    def __init__(self, folder: str | os.PathLike[str], *, what: str = "write"):
-        self.path = Path(folder) / ".revayat-lock"
-        self.what = what
-
-    def __enter__(self) -> "workspace_lock":
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            handle = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError:
-            raise RuntimeError(
-                f"another run is already writing {self.path.parent}.\n"
-                f"Wait for it to finish. If nothing is running, the previous "
-                f"one was killed: delete {self.path} and try again."
-            ) from None
-        with os.fdopen(handle, "w", encoding="utf-8") as out:
-            out.write(f"{self.what} pid={os.getpid()}\n")
-        return self
-
-    def __exit__(self, *_exc: object) -> None:
-        self.path.unlink(missing_ok=True)
+    target = Path(path).resolve()
+    with workspace_lock(target.parent, what="save", reentrant=True):
+        if isinstance(doc, Document) and doc.path == target and doc.generation:
+            if not target.is_file() or sha256_file(target) != doc.generation:
+                raise RuntimeError("the document changed after it was loaded; reload before saving")
+        payload = dumps(doc) + "\n"
+        saved = write_text(path, payload)
+        if isinstance(doc, Document):
+            doc.path, doc.generation = target, sha256_bytes(payload.encode("utf-8"))
+        return saved
 
 
 def doc_dir(path: str | os.PathLike[str]) -> Path:

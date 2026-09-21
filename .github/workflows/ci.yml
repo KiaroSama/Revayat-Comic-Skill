@@ -35,10 +35,8 @@ jobs:
           cache: pip
           cache-dependency-path: skills/revayat-comic/requirements.txt
 
-      # A runner has no Persian font by default, and the one font every Linux
-      # box does have — DejaVu Sans — contains no Arabic script at all. Without
-      # this the typesetter correctly refuses to draw tofu and every rendering
-      # test fails for a reason that has nothing to do with the code.
+      # Install a Persian text face and CJK fixture face explicitly. DejaVu is
+      # installed separately for reproducible anchored-ink regression cases.
       # macOS ships Geeza Pro and Windows ships Tahoma, so only Linux needs it.
       - name: Install a Persian-capable font and a CJK face
         if: runner.os == 'Linux'
@@ -67,6 +65,29 @@ jobs:
           python -m pip install -r skills/revayat-comic/requirements.txt
           # Optional for users, required here: it is what the CBR reader tests need.
           python -m pip install rarfile
+          python -m pip install -r tests/requirements.txt
+
+      - name: Install the pinned DejaVu test face
+        shell: python {0}
+        run: |
+          import hashlib, io, os, pathlib, urllib.request, zipfile
+          url = 'https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_2_37/dejavu-sans-ttf-2.37.zip'
+          with urllib.request.urlopen(url, timeout=30) as response:
+              data = response.read(2_000_001)
+          assert len(data) <= 2_000_000, 'font archive exceeds the download limit'
+          with zipfile.ZipFile(io.BytesIO(data)) as archive:
+              info = archive.getinfo('dejavu-sans-ttf-2.37/ttf/DejaVuSans.ttf')
+              assert info.file_size <= 2_000_000, 'font exceeds the extraction limit'
+              with archive.open(info) as member:
+                  payload = member.read(2_000_001)
+              assert len(payload) <= 2_000_000, 'font exceeds the read limit'
+          assert hashlib.sha256(payload).hexdigest() == '7da195a74c55bef988d0d48f9508bd5d849425c1770dba5d7bfc6ce9ed848954'
+          target = pathlib.Path(os.environ['RUNNER_TEMP']) / 'revayat-test-font' / 'DejaVuSans.ttf'
+          target.parent.mkdir(parents=True, exist_ok=True)
+          target.write_bytes(payload)
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as env:
+              env.write(f'REVAYAT_TEST_FONT={target}\n')
+          print('DejaVu Sans 2.37: checksum verified')
 
       - name: Record the resolved versions
         run: |
@@ -154,11 +175,34 @@ jobs:
             "pillow==10.0.0" "numpy==1.24.0" "opencv-python-headless==4.8.1.78" \
             "pymupdf==1.24.3" "arabic-reshaper==3.0.0" "python-bidi==0.4.0" \
             pytest pytest-timeout rarfile
+          python -m pip install -r tests/requirements.txt
           python -m pip list --format=freeze > floor-versions.txt
           cat floor-versions.txt
           # Here rather than at the end: an unsatisfiable declared minimum is a
           # fact about the requirements file, and it has to fail the job.
           python -m pip check
+
+      - name: Install the pinned DejaVu test face
+        shell: python {0}
+        run: |
+          import hashlib, io, os, pathlib, urllib.request, zipfile
+          url = 'https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_2_37/dejavu-sans-ttf-2.37.zip'
+          with urllib.request.urlopen(url, timeout=30) as response:
+              data = response.read(2_000_001)
+          assert len(data) <= 2_000_000, 'font archive exceeds the download limit'
+          with zipfile.ZipFile(io.BytesIO(data)) as archive:
+              info = archive.getinfo('dejavu-sans-ttf-2.37/ttf/DejaVuSans.ttf')
+              assert info.file_size <= 2_000_000, 'font exceeds the extraction limit'
+              with archive.open(info) as member:
+                  payload = member.read(2_000_001)
+              assert len(payload) <= 2_000_000, 'font exceeds the read limit'
+          assert hashlib.sha256(payload).hexdigest() == '7da195a74c55bef988d0d48f9508bd5d849425c1770dba5d7bfc6ce9ed848954'
+          target = pathlib.Path(os.environ['RUNNER_TEMP']) / 'revayat-test-font' / 'DejaVuSans.ttf'
+          target.parent.mkdir(parents=True, exist_ok=True)
+          target.write_bytes(payload)
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as env:
+              env.write(f'REVAYAT_TEST_FONT={target}\n')
+          print('DejaVu Sans 2.37: checksum verified')
 
       - name: Run tests on the floors
         env:

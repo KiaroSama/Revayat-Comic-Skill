@@ -59,7 +59,7 @@ CODES = {
     "page-not-cleaned": "error",
     "delivery-mismatch": "error",
     "delivery-unverified": "warning",
-    "archive-unverified": "warning",
+    "archive-unverified": "error",
     "stage-unverified": "warning",
     "policy-conflict": "warning",
     "annotation-unplaced": "warning",
@@ -696,7 +696,7 @@ def check_package(package: str | Path, doc_path: str | Path) -> dict[str, Any]:
 
     return _check(package, doc_path)
 
-
+@ir.cli
 def main(argv: list[str] | None = None) -> int:
     ir.use_utf8_stdio()
     parser = argparse.ArgumentParser(

@@ -44,7 +44,7 @@ def test_every_case_is_complete(cases):
         assert case["source"] and case["gloss"]
         assert case["difficulty"], case["id"]
         assert len(case["accept"]) >= 2, f"{case['id']} has one reference"
-        assert case["language"] in {"ja", "ko", "zh", "en"}
+        assert case["language"] in {"ja", "ko", "zh", "en", "fr", "es"}
         assert 0 < case["balloon"][0] < 1 and 0 < case["balloon"][1] < 1
 
 
@@ -57,8 +57,8 @@ def test_the_taxonomy_is_covered(cases):
         assert wanted in tags, f"nothing exercises {wanted}"
 
 
-def test_all_four_source_languages_appear(cases):
-    assert {case["language"] for case in cases} == {"ja", "ko", "zh", "en"}
+def test_all_six_source_languages_appear(cases):
+    assert {case["language"] for case in cases} == {"ja", "ko", "zh", "en", "fr", "es"}
 
 
 def test_every_reference_rendering_passes_its_own_checks(score, cases):
@@ -114,6 +114,7 @@ def test_the_human_axes_are_never_invented(score, cases):
         assert row["fluency"]["human"] is None
         assert row["voice"]["human"] is None
         assert row["adequacy"]["human"] is None
+        assert row["omissions_additions"]["human"] is None
         assert row["fluency"]["ask"] and row["voice"]["ask"]
 
 
@@ -158,6 +159,16 @@ def test_a_page_is_drawn_for_every_case(tmp_path, cases):
     assert build.main(["--out", str(tmp_path)]) == 0
     assert sorted(p.stem for p in tmp_path.glob("*.png")) == sorted(
         case["id"] for case in cases)
+    for case in cases:
+        task = json.loads((tmp_path / f"{case['id']}.input.json").read_text(encoding="utf-8"))
+        assert task["id"] == case["id"]
+        assert task["source"] == case["source"]
+        assert task["language"] == case["language"]
+        assert task.get("context", "") == case.get("context", "")
+        for relationship in ("continues_into", "continues_from"):
+            assert task.get(relationship) == case.get(relationship)
+        for answer_key in ("accept", "gloss", "human_note", "must_preserve"):
+            assert answer_key not in task, "reference material leaked into translator input"
 
 
 def test_the_set_says_where_its_lines_came_from():
@@ -267,15 +278,35 @@ def test_the_case_set_was_extended_not_rebuilt(score):
     cases = score.load_cases()
     ids = [case["id"] for case in cases]
 
-    # The original fifteen are all still here.
+    # The original fifteen and all five adversarial controls remain intact.
     for original in ("neg-01", "neg-02", "num-01", "num-02", "sarc-01",
                      "sub-01", "pron-01", "form-01", "form-02", "cont-01a",
-                     "cont-01b", "ell-01", "name-01", "mod-01", "fit-01"):
+                     "cont-01b", "ell-01", "name-01", "mod-01", "fit-01",
+                     "neg-03", "neg-04", "num-03", "num-04", "cont-02"):
         assert original in ids, original
-    assert len(cases) == 20
+    assert len(cases) == 32
     # And every new one carries more than one acceptable Persian form.
     for case in cases:
         assert len(case.get("accept") or []) >= 2, case["id"]
+
+
+def test_context_reaches_review_without_automated_semantic_scores(score, cases, monkeypatch):
+    contextual = [case for case in cases if case["id"].startswith("ctx-")]
+    assert len(contextual) == 12
+    for language in ("fr", "es", "ja", "zh", "ko"):
+        assert sum(case["language"] == language for case in contextual) >= 2
+    monkeypatch.setattr(score, "fits", lambda *_args, **_kwargs: None)
+    for case in contextual:
+        assert case.get("context") and case.get("human_note")
+        assert case.get("human_only") is True
+        answer = case["accept"][0]
+        row = score.score_one(case, answer)
+        assert row["source"] == case["source"] and row["answer"] == answer
+        assert row["context"] == case["context"]
+        assert row["human_note"] == case["human_note"]
+        assert row["adequacy"]["machine_checks"] == {}
+        for axis in ("adequacy", "fluency", "voice", "omissions_additions"):
+            assert row[axis]["human"] is None
 
 
 def test_every_adversarial_control_passes_on_its_own_references(score):

@@ -53,6 +53,7 @@ STAGES = {
     "typeset": "typeset",
     "qa": "qa",
     "export": "export",
+    "review-docx": "reviewdocx",
     # One box marked for erasure on every page, for a mark that sits in the
     # same place throughout. A mark that moves belongs in the worksheet as
     # `erase: yes`. See references/watermarks.md.
@@ -175,7 +176,7 @@ def doctor() -> dict[str, object]:
         ),
     }
 
-
+@ir.cli
 def main(argv: list[str] | None = None) -> int:
     ir.use_utf8_stdio()
     argv = list(sys.argv[1:] if argv is None else argv)

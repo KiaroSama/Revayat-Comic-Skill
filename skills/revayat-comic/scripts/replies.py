@@ -66,7 +66,7 @@ def _unescape(line: str) -> str:
 
 def escape(line: str) -> str:
     """The inverse, applied by whoever writes a value line into a sheet."""
-    if (line.startswith("\\")
+    if (not line or line.startswith("\\")
             or (line.startswith("#") and (len(line) == 1 or line[1] in " \t"))
             or HEADER.match(line) or FIELD.match(line)):
         return "\\" + line
@@ -74,15 +74,10 @@ def escape(line: str) -> str:
 
 
 def field_lines(name: str, value: str) -> list[str]:
-    """`name: value`, with every continuation line escaped.
-
-    The first line needs nothing — it is already behind `name: ` — and every
-    line after it is at the start of a line, where the protocol is looking.
-    """
-    first, _, rest = str(value).partition("\n")
-    out = [f"{name}: {first}"]
-    out += [escape(line) for line in rest.split("\n")] if rest else []
-    return out
+    """Escape every value line symmetrically; a bare backslash preserves a blank."""
+    parts = str(value).split("\n")
+    first = escape(parts[0]) if value else ""
+    return [f"{name}: {first}", *(escape(line) for line in parts[1:])]
 
 
 #: Fields a block may legitimately carry more than once. `note:` is the only
@@ -101,6 +96,8 @@ def parse_worksheet(text: str) -> dict[str, dict[str, Any]]:
     blocks: dict[str, dict[str, Any]] = {}
     current: dict[str, Any] | None = None
     field: str | None = None
+    blanks = 0
+    started = False
 
     for raw in text.splitlines():
         header = HEADER.match(raw)
@@ -117,6 +114,7 @@ def parse_worksheet(text: str) -> dict[str, dict[str, Any]]:
             if len(words) > 1 and words[1] in ir.ORIENTATIONS:
                 current["_orientation"] = words[1]
             field = None
+            blanks = 0
             continue
         if current is None:
             continue
@@ -126,6 +124,8 @@ def parse_worksheet(text: str) -> dict[str, dict[str, Any]]:
         if match:
             field = match.group("name")
             value = _unescape(match.group("value").strip())
+            started = bool(value) or match.group("value").startswith("\\")
+            blanks = 0
             if field in REPEATABLE:
                 current.setdefault(field, []).append(value)
             else:
@@ -140,11 +140,17 @@ def parse_worksheet(text: str) -> dict[str, dict[str, Any]]:
         if field is not None:
             # A continuation line. Keep the newline: a balloon that breaks its
             # own line does so for a reason, and the typesetter honours it.
+            if not raw.strip():
+                blanks += 1
+                continue
             tail = _unescape(raw.strip())
+            separator = "\n" * (blanks + 1) if started else ""
             if field in REPEATABLE:
-                current[field][-1] = (current[field][-1] + "\n" + tail).strip()
+                current[field][-1] += separator + tail
             else:
-                current[field] = (current[field] + "\n" + tail).strip()
+                current[field] += separator + tail
+            blanks = 0
+            started = True
     return blocks
 
 
@@ -166,7 +172,7 @@ def _set_or_clear(region: dict[str, Any], block: dict[str, str],
     """
     if field not in block:
         return
-    value = block[field].strip()
+    value = block[field].strip(" \t\r") if field == "fa_full" else block[field].strip()
     if value:
         region[key] = value
     else:
@@ -295,8 +301,8 @@ def _apply(region: dict[str, Any], block: dict[str, str],
     else:
         region.pop("erase", None)
 
-    source = block.get("src", "").strip()
-    target = block.get("fa", "").strip()
+    source = block.get("src", "").strip(" \t\r")
+    target = block.get("fa", "").strip(" \t\r")
     kind = block.get("kind", "").strip().lower()
     # A repeatable field's value is a list. Normalised here because a caller
     # that builds a block by hand — the API, a test — naturally writes one
@@ -304,7 +310,7 @@ def _apply(region: dict[str, Any], block: dict[str, str],
     raw_notes = block.get("note") or []
     if isinstance(raw_notes, str):
         raw_notes = [raw_notes]
-    notes_asked = [line.strip() for line in raw_notes if line.strip()]
+    notes_asked = [line.strip(" \t\r") for line in raw_notes if line.strip()]
 
     if kind:
         if kind not in ir.REGION_KINDS:
@@ -315,6 +321,12 @@ def _apply(region: dict[str, Any], block: dict[str, str],
     if page is not None:
         _correct_geometry(region, block, page, report)
     _set_or_clear(region, block, "speaker", "speaker")
+    # Approval is about the newly supplied pair, never the region's old full
+    # text or source. Both texts remain available to the reviewer.
+    region["source_text"] = source
+    region["target_text"] = "" if kept or erased else target
+    if not kept and not erased:
+        _set_or_clear(region, block, "fa_full", "target_full")
     if "reviewed" in block:
         # Lint codes the reader has looked at and settled, so the gate stops
         # asking. `reviewed: zwnj-review` on a line where `می` really is wine.
@@ -327,8 +339,17 @@ def _apply(region: dict[str, Any], block: dict[str, str],
             # code silenced the line for ever, so an ambiguity introduced by a
             # later edit was waved through by a decision taken about a
             # different pair of words.
-            falint.record_acknowledgement(region, codes, target)
+            # A rebuilt worksheet carries an existing decision, not fresh
+            # permission to approve any subsequent edit of its meaning.
+            bound = "compressed-variant@" + falint.compression_fingerprint(region, target)
+            current = ["compressed-variant" if code == bound else code for code in codes
+                       if not code.startswith("compressed-variant@") or code == bound]
+            if current:
+                falint.record_acknowledgement(region, current, target)
         else:
+            import falint
+
+            falint.record_acknowledgement(region, [], target)
             region.pop("review_ack", None)
             region.pop("review_ack_spans", None)
     if "propose" in block:
@@ -350,16 +371,12 @@ def _apply(region: dict[str, Any], block: dict[str, str],
     #
     # Safe only because what a STAGE recorded lives in `audit` now. While the
     # two shared this list, replacing it erased `clean`'s refusal record.
-    kept_notes: list[str] = []
-    for line in notes_asked:
-        if line not in kept_notes:
-            kept_notes.append(line)
+    kept_notes = notes_asked
     if kept_notes:
         region["review"] = kept_notes
     else:
         region.pop("review", None)
 
-    region["source_text"] = source
     region["dropped"] = False
 
     if kept:
@@ -387,13 +404,11 @@ def _apply(region: dict[str, Any], block: dict[str, str],
         report["erased"].append(region["id"])
         return True
 
-    region["target_text"] = target
     # The meaning the line in `fa:` was shortened FROM. Naturalisation and
     # compression are different jobs: a balloon that would not fit is a layout
     # problem first, and when it does become a wording problem the full version
     # has to survive somewhere a reviewer can see it. A compression nobody can
     # compare is a compression nobody can check.
-    _set_or_clear(region, block, "fa_full", "target_full")
     # Locking stops a later `detect` run from renumbering a region a human or a
     # reading model has already committed a translation to.
     region["locked"] = bool(source or target)

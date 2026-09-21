@@ -97,7 +97,7 @@ def set_target(entry: dict[str, Any], target: str, *,
     entry["target"] = target
     return entry
 
-
+@ir.mutating
 def scan(doc_path: str | Path) -> dict[str, Any]:
     doc_path = Path(doc_path)
     doc = ir.load_doc(doc_path)
@@ -438,7 +438,7 @@ def set_entry(doc: dict[str, Any], source: str, record: dict[str, Any]
                          if previous and previous != (entry.get("target") or "")
                          else [])}
 
-
+@ir.mutating
 def apply_file(doc_path: str | Path, table: str | Path) -> dict[str, Any]:
     """Merge a hand-written ``{"source": {"target": ...}}`` table into the doc.
 
@@ -490,7 +490,7 @@ def apply_file(doc_path: str | Path, table: str | Path) -> dict[str, Any]:
                  "need it") if review else None,
     }
 
-
+@ir.cli
 def main(argv: list[str] | None = None) -> int:
     ir.use_utf8_stdio()
     parser = argparse.ArgumentParser(

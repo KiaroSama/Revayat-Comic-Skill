@@ -2,6 +2,10 @@
 
 What to hand the sub-agent translating one page, and what it must do. Read this
 before step 5 of `SKILL.md`; the sub-agent should read it too.
+Read the common pass and the actual source-language section in
+`source-languages.md`. Translate from that language directly to Persian;
+English is not a compulsory intermediate. Keep the output-side activity log
+current using `translation-log.md`, including revisions and their evidence.
 
 ## The one thing that makes this different
 
