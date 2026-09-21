@@ -20,12 +20,16 @@ def test_native_pdf_delivered_bytes_are_binding(finished, tmp_path, change, qual
     assert qa.check_package(out, finished)["ok"]
     with pymupdf.open(out) as pdf:
         page = pdf[0]
+        before = page.get_pixmap().samples
         if change == "rotation":
             page.set_rotation(180)
         elif change == "dialogue":
             region = next(r for r in ir.load_doc(finished)["pages"][0]["regions"]
-                          if r.get("target_text") and not r.get("dropped"))
-            page.draw_rect(pymupdf.Rect(region["bbox"]), fill=(1, 1, 1), color=None)
+                          if r.get("target_text") and r["kind"] == "speech"
+                          and not r.get("dropped") and not r.get("keep"))
+            x, y, width, height = region["bbox"]
+            page.draw_rect(pymupdf.Rect(x, y, x + width, y + height),
+                           fill=(1, 1, 1), color=None)
         elif change == "crop":
             rect = page.rect
             page.set_cropbox(pymupdf.Rect(0, 0, rect.width - 1, rect.height - 1))
@@ -33,6 +37,7 @@ def test_native_pdf_delivered_bytes_are_binding(finished, tmp_path, change, qual
             page.draw_rect(page.rect, fill=(1, 1, 1), fill_opacity=0.2, color=None)
         else:
             page.draw_rect(page.rect, fill=(0, 0, 0), color=None)
+        assert page.get_pixmap().samples != before, "the corruption fixture must visibly change the page"
         pdf.saveIncr()
     report = qa.check_package(out, finished)
     assert not report["ok"], report

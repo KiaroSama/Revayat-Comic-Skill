@@ -138,7 +138,8 @@ def test_a_pdf_replaced_by_an_unrelated_image_is_caught(finished, tmp_path):
     report = qa.check_package(out, finished)
 
     assert not report["ok"]
-    assert any("does not show the page this export wrote" in item["detail"]
+    assert any(item["code"] == "archive-invalid"
+               and "does not show the committed pixels" in item["detail"]
                for item in report["findings"]), report["findings"]
 
 
@@ -166,7 +167,8 @@ def test_an_off_page_image_does_not_count_as_the_page(finished, tmp_path):
     assert not report["ok"]
     # The sheet is blank to a reader, so the question is not which XObject the
     # resource dictionary lists — it is that nothing on it looks like the page.
-    assert any("does not look like the page this export wrote" in item["detail"]
+    assert any(item["code"] == "archive-invalid"
+               and "does not show the committed pixels" in item["detail"]
                for item in report["findings"]), report["findings"]
 
 
@@ -530,7 +532,8 @@ def test_two_members_under_one_name_are_refused(finished, tmp_path):
     report = package_check.check_package(doubled, finished)
 
     assert not report["ok"]
-    assert any("more than one member" in item["detail"]
+    assert any(item["code"] == "archive-invalid"
+               and item["detail"].startswith("duplicate member names:")
                for item in report["findings"]), report["findings"]
 
 
