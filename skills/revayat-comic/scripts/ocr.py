@@ -77,7 +77,7 @@ def _crop_path(root: Path, page: dict[str, Any], region: dict[str, Any],
         ir.write_bytes(target, mask_tools._encode_png(crop))
     return target
 
-
+@ir.mutating
 def read_document(
     doc_path: str | Path,
     *,
@@ -205,7 +205,7 @@ def read_document(
                                     "orientation_aware": orientation_aware},
                        options={"provider": provider, "vision": vision,
                                 "min_confidence": min_confidence},
-                       pages=pages)
+                       pages=[entry["page"] for entry in per_page])
     ir.save_doc(doc, doc_path)
 
     return {
@@ -222,7 +222,7 @@ def read_document(
         ) if disagreements else None,
     }
 
-
+@ir.cli
 def main(argv: list[str] | None = None) -> int:
     ir.use_utf8_stdio()
     parser = argparse.ArgumentParser(
@@ -231,7 +231,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--doc", required=True)
     parser.add_argument("--provider", required=True,
                         help="registered OCR provider name")
-    parser.add_argument("--pages", default="")
+    parser.add_argument("--pages", default=None)
     parser.add_argument("--min-confidence", type=float, default=MIN_CONFIDENCE)
     parser.add_argument("--timeout", type=float, default=providers.DEFAULT_TIMEOUT)
     parser.add_argument("--vision", default=None,
@@ -242,7 +242,7 @@ def main(argv: list[str] | None = None) -> int:
     ir.emit(read_document(
         args.doc,
         provider=args.provider,
-        pages=[p for p in args.pages.split(",") if p] or None,
+        pages=ir.parse_pages(args.pages),
         min_confidence=args.min_confidence,
         timeout=args.timeout,
         vision=args.vision,

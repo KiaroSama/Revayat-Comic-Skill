@@ -14,8 +14,8 @@ is `0`.
 
 ## Why this and not something else
 
-Every automated comic translator asks whether the text was replaced. None of
-them ask what else changed while it was being replaced. That gap hides a whole
+Checking only whether text was replaced misses what else changed during the
+replacement. That gap hides a whole
 class of failure that no completeness check can see, because nothing is missing:
 
 - an inpainter that smeared past its region and softened a face
@@ -243,3 +243,50 @@ larger `--grow` for that page, then `clean` again.
   and changes pixels everywhere, by design. Verify with `qa check` *before*
   exporting, and note that JPEG is not even smaller for line art — flat whites
   and hard ink edges compress better as PNG.
+
+## Page dimensions, resolution and poor scans
+
+The primary translated edition keeps page count/order, spreads, strip height,
+aspect ratios and native raster dimensions. Never crop, pad, split, join or
+downsample pages merely to fit Persian or reduce file size. Export without
+`--jpeg-quality` by default. Keep original source files and their hashes.
+
+PDF paper size is separate from pixel resolution: a 400x600 image placed on a
+200x300-point sheet must retain both measurements. New PDF imports record the
+visible page dimensions (after its existing crop/rotation), and PDF export
+uses those point dimensions without resampling the embedded raster. The original
+media/crop boxes and rotation remain in `source_pdf_geometry`; the exported
+sheet is normalized to the same visible size. Legacy documents lack that data
+and keep the historical pixel-as-point behavior until re-imported. Images with
+no physical page metadata have no known paper size; do not invent a claim that
+their output PDF matches an unknown print edition.
+
+A complex PDF is rasterized at the selected import DPI or the densest embedded
+image's effective resolution, whichever is higher, unlike a plain scan whose
+native pixels can be extracted. Rotated/cropped scans retain that density too.
+Inspect effective resolution and record
+that conversion. Do not lower import DPI just to bypass a resource limit;
+process a smaller chapter or report the limit. Integrity comparison never uses
+a reduced thumbnail to certify a modified PDF.
+
+At import, inspect small lettering, screentone, line edges, blur and compression
+at native scale. Do not upscale an already legible high-quality page by default.
+For a poor scan, first prefer a better source, then try conservative enhancement
+on a **separate reading copy**. Record the tool/model version, settings, input
+and output dimensions, and the observed benefit in the translation activity log.
+Compare both versions: reject broken strokes, invented marks, haloing, moire,
+lost tone dots and tile seams. Upsampling adds pixels, not proof of recovered
+letters. If a word remains uncertain, keep it under review.
+
+The reading copy can help transcription while all masks and the final primary
+edition remain on the immutable native raster. Whole-page enhancement changes
+artwork outside text masks, so it cannot claim `artwork_pixels_changed: 0`
+against the original. If an enhanced delivery is wanted, keep it as an explicitly
+labeled additional derivative with the original edition retained, preserve its
+aspect ratio and known physical page size, never reduce its pixel dimensions,
+and report the transformation honestly. Do not overwrite the source, reset its
+hash, or silently substitute the enhanced copy for the certified edition.
+
+No upscaler is bundled or required by this skill. Use an available suitable
+tool when it improves the actual scan; if none is available, record the specific
+quality issue and limitation instead of claiming enhancement happened.

@@ -114,7 +114,7 @@ widen the gate.
 | `empty_translation` | `src:` filled, `fa:` empty | fill it, or `drop: yes` |
 | `bad_kind` | `kind:` is not one of the six | fix the value |
 | `bad_added_regions` | an `@@ +<name>` block has no usable `box: x y w h` | add one; there is no default for *where* |
-| `stale_worksheets` | regions changed after translation | re-do those pages |
+| `stale_worksheets` | the reply cannot prove the current region mapping | preserve its Persian and review/reconcile only the affected pages; see `recovery.md` |
 
 `added` in the report lists regions you created with `@@ +<name>`. They have no
 mask yet, so run `mask` again before `clean`. Merging the same sheet twice
@@ -122,8 +122,8 @@ updates those regions rather than making more, and re-drawing a `box:` moves the
 one that is already there.
 
 `refused: stale-worksheets` from `worksheet build` means the same thing earlier:
-finished worksheets no longer match the regions. `--force` overrides it and
-should only be used when you know the regions did not really move.
+finished worksheets no longer prove the current mapping. Use the explicit
+page reconciliation described in `recovery.md` after reviewing the current crops.
 
 **A field that swallowed the wrong text.** Fields continue onto the next line
 until the next field or the next `@@`. If a `speaker:` came out as
@@ -137,7 +137,7 @@ instead of after it.
 | letters not joined up (`ک ت ا ب`) | no shaping ran at all | check `doctor` |
 | digits at the wrong end of a line | no bidi ran | check `doctor` |
 | empty boxes instead of letters | the font has no Persian | `--font` with one that does |
-| `overflow` lists regions | Persian too long for the balloon | shorten the translation |
+| `overflow` lists regions | actual glyph ink does not fit | reflow first; preserve full meaning in `fa_full` if a reviewed shorter variant is needed |
 | text sits high or low in a balloon | the interior was measured on artwork | check the balloon was detected, not just the text |
 | text over the balloon border | should be impossible; report it | check `qa` for `artwork-modified` |
 | a sound effect set at an angle you did not want | its mask showed the original lettering on a slant, so the Persian matched it | `--flat-sfx` sets every effect horizontally; `typeset.style` in the region says which path ran |

@@ -57,7 +57,7 @@ def test_changing_the_prompt_changes_what_the_translator_is(endpoint,
     """The instructions are part of the question. An answer produced under
     wording nobody is giving any more is not a resume of this one."""
     before = _identity_of_translator()
-    monkeypatch.setattr(adapters, "PROMPT_VERSION", "2")
+    monkeypatch.setattr(adapters, "PROMPT_VERSION", adapters.PROMPT_VERSION + "-changed")
 
     assert _identity_of_translator() != before
 

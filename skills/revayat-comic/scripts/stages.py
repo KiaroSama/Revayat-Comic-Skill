@@ -292,6 +292,8 @@ def stamp_stage(doc: dict[str, Any], stage: str, detail: dict[str, Any], *,
     revision it already had, so `mask --pages p0003` no longer claims the other
     forty were freshly masked.
     """
+    if pages is not None and not pages:
+        return
     recorded = doc.setdefault("stages", {})
     previous = recorded.get(stage) or {}
     # `None` is "every page"; an empty list is "no pages". They were the same

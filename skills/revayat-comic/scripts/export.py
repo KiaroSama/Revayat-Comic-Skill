@@ -22,6 +22,7 @@ import journal
 import pageir as ir
 import stages
 import writers
+import workspace
 # Part of this module's surface: the destination claim is what serializes two
 # exports, and a caller needs to be able to name it.
 from writers import staging_path  # noqa: F401
@@ -57,9 +58,17 @@ def _dependencies(doc: dict[str, Any], root: Path, doc_path: Path) -> set[Path]:
         candidate = Path(origin)
         if candidate.exists():
             found.add(candidate.resolve())
+            if candidate.is_dir():
+                found.update(child.resolve() for child in candidate.rglob("*")
+                             if child.is_file())
+    worksheets = ir.worksheet_folder(doc_path, doc)
+    if worksheets.is_dir():
+        found.update(child.resolve() for child in worksheets.rglob("*")
+                     if child.is_file())
     for page in doc.get("pages", []):
         named = [page.get(key) for key in
-                 ("image", "clean", "final", "mask", "writable")]
+                 ("image", "clean", "final", "mask", "writable", "overview")]
+        named += page.get("sheets") or []
         # Region masks were missing, and they are the largest set of files
         # here: `masks/<page>/r0003.png` is what authorised every pixel the
         # cleaner changed, and an export onto one destroys evidence the
@@ -91,11 +100,15 @@ def _working_folders(doc: dict[str, Any], root: Path,
     `comic.json` sits at the top of it would forbid it.
     """
     root = root.resolve()
-    folders = {path.parent for path in _dependencies(doc, root, doc_path)}
+    folders = {path.parent for path in _dependencies(doc, root, doc_path)
+               if path.is_file() and root in path.parents}
     folders.add(root / "crops")
     folders.add(ir.worksheet_folder(doc_path, doc).resolve())
+    origin = (doc.get("source") or {}).get("path")
+    if origin and Path(origin).is_dir():
+        folders.add(Path(origin).resolve())
     return {folder for folder in folders
-            if folder != root and root in folder.parents and folder.is_dir()}
+            if folder != root and folder.is_dir()}
 
 
 def _refuse_collisions(doc: dict[str, Any], root: Path, doc_path: Path,
@@ -157,16 +170,49 @@ def _editions(doc: dict[str, Any], out: Path,
     """
     previous = ((doc.get("stages") or {}).get("export") or {})
     editions = dict(previous.get("editions") or {})
+    if not editions and previous.get("path") and previous.get("manifest"):
+        editions[str(Path(previous["path"]).resolve())] = {
+            key: previous.get(key) for key in ("format", "manifest", "package_sha256")}
     key = str(out.resolve())
     editions.pop(key, None)
     editions[key] = {"format": result["format"],
-                     "manifest": result["manifest"]}
+                     "manifest": result["manifest"],
+                     "package_sha256": result.get("package_sha256")}
     while len(editions) > MAX_REMEMBERED_EDITIONS:
         editions.pop(next(iter(editions)))
     return editions
 
 
-def reconcile_pending(doc_path: str | Path) -> dict[str, Any] | None:
+def reconcile_pending(doc_path: str | Path, *, recover_orphans: bool = False,
+                      destination: str | Path | None = None
+                      ) -> dict[str, Any] | None:
+    """Recover one known interrupted publication, optionally reclaiming dead locks."""
+    doc_path = Path(doc_path).resolve()
+    if recover_orphans:
+        workspace.recover_claim(doc_path.parent / ".revayat-lock")
+    with ir.workspace_lock(doc_path.parent, what="recovery"):
+        if recover_orphans and not journal.path_for(doc_path).exists() and destination is not None:
+            out = Path(destination).expanduser().resolve()
+            claim = workspace.destination_claim(out, doc_path)
+            owner = workspace.recover_claim(claim.path, document=doc_path)
+            with claim:
+                stage = writers.staging_path(out)
+                if not stage.exists():
+                    return {"orphaned_staging": None, "claim_released": owner is not None}
+                scratch = (owner or {}).get("scratch") or {}
+                if (scratch.get("path") != str(stage.resolve())
+                        or scratch.get("identity") != list(workspace.identity(stage))):
+                    raise ValueError("staging ownership is unknown; preserve it for inspection")
+                kept = stage.with_name(stage.name + ".orphan-" + owner["token"])
+                if kept.exists():
+                    raise ValueError("orphan archive already exists; preserve both for inspection")
+                stage.replace(kept)
+                return {"orphaned_staging": str(kept), "claim_released": True}
+        return _reconcile_pending(doc_path, recover_orphans=recover_orphans)
+
+
+def _reconcile_pending(doc_path: Path, *, recover_orphans: bool = False
+                       ) -> dict[str, Any] | None:
     """Apply the stamp of an export that published but could not record it.
 
     Returns the record it applied, or `None` — which means either that there
@@ -182,16 +228,41 @@ def reconcile_pending(doc_path: str | Path) -> dict[str, Any] | None:
     record = journal.read(doc_path)
     if record is None:
         return None
-    refused = journal.verifies(doc_path, record)
+    refused = journal.validate(record)
     if refused:
         journal.reject(doc_path, refused)
         return None
 
-    doc = ir.load_doc(doc_path)
-    stages.stamp_stage(doc, "export", record["result"],
-                       options=record["options"])
-    ir.save_doc(doc, doc_path)
-    journal.clear(doc_path)
+    out = Path(record["destination"])
+    claim = workspace.destination_claim(out, doc_path)
+    if recover_orphans:
+        workspace.recover_claim(claim.path, document=doc_path)
+    with claim:
+        try:
+            doc = ir.load_doc(doc_path)
+            _refuse_collisions(doc, doc_path.parent, doc_path, out, record["result"]["format"])
+            if record.get("schema") == 2:
+                if journal.resume(doc_path, record) == "rolled-back":
+                    return None
+                doc["stages"]["export"] = record["export_stamp"]
+                doc.get("meta", {}).pop("stage_seq", None)
+                if ir.sha256_bytes((ir.dumps(doc) + "\n").encode("utf-8")) != record["document_after"]:
+                    raise ValueError("recovered metadata differs from the recorded generation")
+            else:
+                refused = journal.verifies(doc_path, record)
+                if refused:
+                    raise ValueError(refused)
+                result = dict(record["result"])
+                result["editions"] = _editions(doc, out, result)
+                stages.stamp_stage(doc, "export", result, options=record["options"])
+        except ValueError as error:
+            journal.reject(doc_path, str(error))
+            return None
+        ir.save_doc(doc, doc_path)
+        if record.get("schema") == 2:
+            journal.finish(doc_path, record)
+        else:
+            journal.clear(doc_path)
     return record
 
 
@@ -208,9 +279,12 @@ def export_document(
     two exports of two chapters into one folder cannot hold half of each
     other's.
     """
-    doc_path = Path(doc_path)
+    doc_path = Path(doc_path).resolve()
+    out = Path(out).expanduser().resolve()
     with ir.workspace_lock(ir.doc_dir(doc_path), what="export"):
-        return _publish(doc_path, Path(out).expanduser(), fmt, quality, draft)
+        _reconcile_pending(doc_path)
+        with workspace.destination_claim(out, doc_path):
+            return _publish(doc_path, out, fmt, quality, draft)
 
 
 def _publish(doc_path: Path, out: Path, fmt: str | None, quality: int,
@@ -226,8 +300,6 @@ def _publish(doc_path: Path, out: Path, fmt: str | None, quality: int,
     # An export that could not commit its own stamp last time. Reconciled
     # before this one starts, so the document never describes an edition older
     # than the files beside it.
-    if reconcile_pending(doc_path) is not None:
-        doc = ir.load_doc(doc_path)
     _refuse_collisions(doc, root, doc_path, out, fmt)
 
     # Resolved before a byte is written, because the fallback is silent: a
@@ -264,6 +336,8 @@ def _publish(doc_path: Path, out: Path, fmt: str | None, quality: int,
         )
 
     options = {"format": fmt, "quality": quality, "draft": draft}
+    inputs = {str(path): ir.sha256_file(path) for path in _dependencies(doc, root, doc_path)
+              if path != doc_path.resolve() and path.is_file()}
     committed: dict[str, Any] = {}
 
     def commit(manifest: list[dict[str, Any]],
@@ -274,12 +348,29 @@ def _publish(doc_path: Path, out: Path, fmt: str | None, quality: int,
                                # the package against it rather than against a
                                # sort of its own file names.
                                "manifest": manifest}
+        if fmt != "dir":
+            committed["result"]["package_sha256"] = published[out.name]
+        result = committed["result"]
+        result["editions"] = _editions(doc, out, result)
+        stages.stamp_stage(doc, "export", result, options=options)
         journal.write(doc_path, destination=out, published=published,
-                      result=committed["result"], options=options)
+                      result=result, options=options, document=doc, inputs=inputs)
+        record = journal.read(doc_path)
+        try:
+            journal.promote(doc_path, record)
+        except BaseException:
+            if journal.rollback(record):
+                journal.finish(doc_path, record, committed=False)
+            raise
+        reason = journal.input_problem(record)
+        if reason:
+            raise RuntimeError(reason)
+        ir.save_doc(doc, doc_path)
+        journal.finish(doc_path, record)
 
     write = {"cbz": writers.export_cbz, "pdf": writers.export_pdf,
              "dir": writers.export_dir}[fmt]
-    report = write(doc, root, out, quality, draft, commit)
+    report = write(doc, root, out, quality, draft, commit, pending=journal.path_for(doc_path))
 
     # Counted from what was actually written, not from what the document says
     # exists. A recorded `final` whose file has been deleted is not a
@@ -311,26 +402,21 @@ def _publish(doc_path: Path, out: Path, fmt: str | None, quality: int,
             f"{report['original_pages']} page(s) had no translated text and "
             "were exported exactly as they arrived."
         )
-    # Exactly what the journal recorded, so the stamp and the record can never
-    # describe two different editions.
-    result = dict(committed["result"])
-    result["editions"] = _editions(doc, out, result)
-    stages.stamp_stage(doc, "export", result, options=options)
-    ir.save_doc(doc, doc_path)
-    journal.clear(doc_path)
     return report
 
-
+@ir.cli
 def main(argv: list[str] | None = None) -> int:
     ir.use_utf8_stdio()
     parser = argparse.ArgumentParser(
         prog="revayat-comic export", description="Write the finished chapter out."
     )
     parser.add_argument("--doc", required=True)
-    parser.add_argument("--out", required=True,
+    parser.add_argument("--out",
                         help="chapter-fa.cbz, chapter-fa.pdf, or a folder")
     parser.add_argument("--format", choices=list(FORMATS), default=None,
                         help="inferred from --out when omitted")
+    parser.add_argument("--recover", action="store_true",
+                        help="finish a recorded interrupted export after verifying dead claim owners")
     parser.add_argument("--draft", action="store_true",
                         help="ship pages whose Persian was never rendered, "
                              "using their cleaned or original image; the "
@@ -342,6 +428,16 @@ def main(argv: list[str] | None = None) -> int:
                              "with flat whites compresses better as PNG, and "
                              "JPEG adds ringing along every ink edge")
     args = parser.parse_args(argv)
+
+    if args.recover:
+        pending = journal.path_for(Path(args.doc)).exists()
+        record = reconcile_pending(args.doc, recover_orphans=True, destination=args.out)
+        ir.emit({"recovered": record is not None,
+                 "status": "recovered" if record else "not-applied" if pending else "idle",
+                 "pending": journal.path_for(Path(args.doc)).exists()})
+        return 1 if pending and record is None else 0
+    if not args.out:
+        parser.error("--out is required unless --recover is used")
 
     report = export_document(
         args.doc, args.out, fmt=args.format, quality=args.jpeg_quality,

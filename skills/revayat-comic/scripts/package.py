@@ -9,6 +9,7 @@ right order, and carries the bytes that were exported.
 from __future__ import annotations
 
 import zipfile
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -202,11 +203,17 @@ def _zip_members(findings: Findings, where: str,
                      f"open. Nothing was read")
         return None
 
+    repeated = [name for name, count in Counter(
+        info.filename for info in infos).items() if count > 1]
+    if repeated:
+        findings.add("archive-invalid", where,
+                     f"duplicate member names: {', '.join(repeated[:3])}. "
+                     "Nothing was read")
+        return None
+
     total = 0
     names: list[str] = []
     for info in infos:
-        if info.is_dir():
-            continue
         total += info.file_size
         if info.file_size > MAX_MEMBER_BYTES:
             findings.add("archive-invalid", where,
@@ -214,8 +221,7 @@ def _zip_members(findings: Findings, where: str,
                          f"bytes, over the {MAX_MEMBER_BYTES:,} limit. "
                          f"Nothing was read")
             return None
-        if info.compress_size and (info.file_size / info.compress_size
-                                   > MAX_COMPRESSION_RATIO):
+        if info.file_size / max(info.compress_size, 1) > MAX_COMPRESSION_RATIO:
             findings.add("archive-invalid", where,
                          f"{info.filename} expands "
                          f"{info.file_size // max(info.compress_size, 1)}x, "
@@ -225,7 +231,7 @@ def _zip_members(findings: Findings, where: str,
         # `info.is_dir()`, not the name: a member called `p0002.png/` is a
         # directory, and `Path("p0002.png/").suffix` is `.png`, so counting by
         # name alone let one stand in for a page.
-        if Path(info.filename).suffix.lower() in IMAGE_SUFFIXES:
+        if not info.is_dir() and Path(info.filename).suffix.lower() in IMAGE_SUFFIXES:
             names.append(info.filename)
     if total > MAX_TOTAL_BYTES:
         findings.add("archive-invalid", where,
@@ -233,16 +239,6 @@ def _zip_members(findings: Findings, where: str,
                      f"{MAX_TOTAL_BYTES:,} limit. Nothing was read")
         return None
 
-    # A ZIP may hold two members under one name, and every tool picks a
-    # different one — including the reader, which will not pick the one that
-    # was checked. There is no safe reading of it.
-    repeated = sorted({name for name in names if names.count(name) > 1})
-    if repeated:
-        findings.add("archive-invalid", where,
-                     f"{len(repeated)} name(s) appear on more than one member "
-                     f"({', '.join(repeated[:3])}), so which page a reader "
-                     f"opens is undefined")
-        return None
     return sorted(names)
 
 
@@ -257,17 +253,31 @@ def _looks_like_pdf(package: Path) -> bool:
 
 def _check_cbz(findings: Findings, package: Path, doc: dict[str, Any],
                manifest: list[dict[str, Any]]) -> int:
-    with zipfile.ZipFile(package) as archive:
-        bad = archive.testzip()
-        if bad:
-            findings.add("archive-invalid", package.name,
-                         f"corrupt member: {bad}")
-        names = _zip_members(findings, package.name, archive)
-        if names is None:
-            return 0
-        _verify_members(findings, package.name, names,
-                        lambda name: archive.read(name), doc, manifest)
-        return len(names)
+    try:
+        with zipfile.ZipFile(package) as archive:
+            names = _zip_members(findings, package.name, archive)
+            if names is None:
+                return 0
+            # testzip streams CRC checks, including metadata. Its declarations
+            # must be admitted first: it decompresses every member it opens.
+            bad = archive.testzip()
+            if bad:
+                findings.add("archive-invalid", package.name,
+                             f"corrupt member: {bad}")
+                return len(names)
+
+            def payload(name: str) -> bytes:
+                with archive.open(name) as member:
+                    data = member.read(MAX_MEMBER_BYTES + 1)
+                if len(data) > MAX_MEMBER_BYTES:
+                    raise ValueError(f"{name} exceeds the member read limit")
+                return data
+
+            _verify_members(findings, package.name, names, payload, doc, manifest)
+            return len(names)
+    except (OSError, ValueError, RuntimeError, zipfile.BadZipFile, EOFError) as error:
+        findings.add("archive-invalid", package.name, f"cannot read archive: {error}")
+        return 0
 
 
 def _check_dir(findings: Findings, package: Path, doc: dict[str, Any],
@@ -301,6 +311,15 @@ def _check_pdf(findings: Findings, package: Path, doc: dict[str, Any],
 
     pymupdf = ir.require("pymupdf", "pymupdf", "verifying a PDF")
     try:
+        stamp = ((doc.get("stages") or {}).get("export") or {})
+        editions = stamp.get("editions") or {}
+        edition = editions.get(str(package.resolve()))
+        if edition is None:
+            matching = [value for value in editions.values()
+                        if value.get("format") == "pdf"]
+            edition = matching[0] if len(matching) == 1 else stamp
+        digest = edition.get("package_sha256") if edition else None
+        unchanged = bool(digest and ir.sha256_file(package) == digest)
         with pymupdf.open(str(package)) as document:
             found = document.page_count
             if found > MAX_MEMBERS:
@@ -316,8 +335,9 @@ def _check_pdf(findings: Findings, package: Path, doc: dict[str, Any],
                 if index >= len(doc["pages"]):
                     break
                 want = doc["pages"][index]
-                ratio = (want["width"] / want["height"]
-                         if want["height"] else 0)
+                from pagegeometry import pdf_points
+                expected_points = pdf_points(want)
+                ratio = expected_points[0] / expected_points[1]
                 shown = (page.rect.width / page.rect.height
                          if page.rect.height else 0)
                 if ratio and abs(shown - ratio) > 0.02:
@@ -326,9 +346,17 @@ def _check_pdf(findings: Findings, package: Path, doc: dict[str, Any],
                         f"page {index + 1} is {page.rect.width:.0f}x"
                         f"{page.rect.height:.0f}, a different shape from "
                         f"{want['width']}x{want['height']}")
+                row = manifest[index] if index < len(manifest) else {}
+                if "pdf_points" in row and any(
+                    abs(a - b) > 0.01 for a, b in zip(
+                        (page.rect.width, page.rect.height), pdf_points(row))
+                ):
+                    findings.add("archive-page-size", package.name,
+                                 f"page {index + 1} changed its physical PDF dimensions")
                 if not manifest:
                     continue
-                row = manifest[index] if index < len(manifest) else {}
+                if unchanged:
+                    continue
                 code, message = pdfpage.verify(document, page, row, index)
                 if code:
                     findings.add(code, package.name, message)

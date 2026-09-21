@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 import pageir as ir
+import workspace
 from pageir import IMAGE_SUFFIXES
 
 def _resolve(root: Path, page: dict[str, Any]) -> tuple[Path, str]:
@@ -45,25 +46,16 @@ def _page_source(root: Path, page: dict[str, Any]) -> Path:
 def staging_path(out: Path) -> Path:
     """Where an export assembles the bytes it is about to publish.
 
-    Deterministic, because this path is also the lock. A random suffix made
-    ownership a fact and serialization impossible: two exports of one chapter
-    to one destination each wrote their own staging file and both promoted,
-    the last writer winning, with neither knowing the other existed.
-
-    The name is ours — `.revayat-part`, not `.part` — so claiming it cannot
-    collide with an operator's own working file, which is what the random
-    suffix was introduced to avoid.
+    Exclusive scratch space. A separate destination claim survives promotion
+    until the package and its metadata commit; this pathname is not the lock.
     """
     return out.with_name(out.name + ".revayat-part")
 
 
-def _kept_path(out: Path) -> Path:
-    """Where a folder export holds the previous edition while it promotes."""
-    return out.with_name(out.name + ".revayat-kept")
 
 
 @contextlib.contextmanager
-def _claim(path: Path, *, directory: bool) -> Iterator[Path]:
+def _claim(path: Path, *, directory: bool, pending: Path | None = None) -> Iterator[Path]:
     """Take exclusive ownership of a scratch path, or refuse.
 
     Created with `O_EXCL` — or `mkdir` without `exist_ok`, which is the same
@@ -80,15 +72,20 @@ def _claim(path: Path, *, directory: bool) -> Iterator[Path]:
         raise RuntimeError(
             f"{path} already exists, so another export is writing "
             f"{path.parent} or a previous one was killed there. Wait for it "
-            f"to finish, or delete {path} and try again."
+            "to finish, or use `export --recover --doc <document> --out <destination>` "
+            "to inspect a known interrupted run. Preserve unrecognized claims."
         ) from None
+    owned = workspace.identity(path)
     try:
+        workspace.remember_staging(path)
         yield path
     finally:
-        if directory:
-            shutil.rmtree(path, ignore_errors=True)
-        else:
-            path.unlink(missing_ok=True)
+        if (path.exists() and workspace.identity(path) == owned
+                and (pending is None or not pending.exists())):
+            if directory:
+                shutil.rmtree(path)
+            else:
+                path.unlink()
 def _pixel_digest(payload: bytes) -> str:
     """A hash of what the page LOOKS like, not of how it was packed.
 
@@ -151,7 +148,7 @@ def _shipped(page: dict[str, Any], name: str, payload: bytes,
 
 
 def export_cbz(doc: dict[str, Any], root: Path, out: Path, quality: int,
-                draft: bool, commit: Any) -> dict[str, Any]:
+                draft: bool, commit: Any, *, pending: Path | None = None) -> dict[str, Any]:
     written = 0
     manifest: list[dict[str, Any]] = []
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -159,7 +156,7 @@ def export_cbz(doc: dict[str, Any], root: Path, out: Path, quality: int,
     # cannot leave a half-written archive that opens and is missing chapters.
     # The claim releases it on every path, so an encoding failure half way
     # through leaves the previous package untouched and no debris beside it.
-    with _claim(staging_path(out), directory=False) as staging:
+    with _claim(staging_path(out), directory=False, pending=pending) as staging:
         with zipfile.ZipFile(staging, "w", zipfile.ZIP_DEFLATED) as archive:
             for page in doc["pages"]:
                 source = _page_source(root, page)
@@ -175,7 +172,6 @@ def export_cbz(doc: dict[str, Any], root: Path, out: Path, quality: int,
         # moment at which the recovery record can be written before the bytes
         # it describes exist at the destination.
         commit(manifest, {out.name: ir.sha256_file(staging)})
-        staging.replace(out)
     return {"format": "cbz", "path": str(out), "pages": written,
             "manifest": manifest}
 
@@ -230,8 +226,9 @@ def _comic_info(doc: dict[str, Any], draft: bool = False) -> str:
 
 
 def export_pdf(doc: dict[str, Any], root: Path, out: Path, quality: int,
-                draft: bool, commit: Any) -> dict[str, Any]:
+                draft: bool, commit: Any, *, pending: Path | None = None) -> dict[str, Any]:
     import pdfpage
+    from pagegeometry import pdf_points
 
     pymupdf = ir.require("pymupdf", "pymupdf", "writing a PDF")
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -241,20 +238,30 @@ def export_pdf(doc: dict[str, Any], root: Path, out: Path, quality: int,
         for index, page in enumerate(doc["pages"]):
             source = _page_source(root, page)
             payload, _ = _encode(source, source.name, quality)
-            rect = pymupdf.Rect(0, 0, page["width"], page["height"])
-            new_page = document.new_page(width=page["width"], height=page["height"])
-            new_page.insert_image(rect, stream=payload)
+            width_pt, height_pt = pdf_points(page)
+            new_page = document.new_page(width=width_pt, height=height_pt)
+            new_page.insert_image(new_page.rect, stream=payload, keep_proportion=False)
+            try:
+                visible = pdfpage.visible_proof(new_page, scale=(
+                    page["width"] / width_pt, page["height"] / height_pt))
+            except ValueError:
+                # Large native PDFs are verified by the committed package hash;
+                # changed containers cannot use a downsampled image as proof.
+                visible = None
             manifest.append({"page": page["id"], "name": f"{index + 1:04d}",
                              "width": page["width"], "height": page["height"],
+                             "pdf_points": [width_pt, height_pt],
                              # What the page looks like. The encoded bytes are
                              # the PDF's to choose; the pixels are not.
                              "pixels": _pixel_digest(payload),
+                             "visible": visible,
                              # And what it looks like at a glance, for a sheet
                              # whose structure cannot prove the embedded image
                              # is what a reader sees. Without it such a sheet
                              # can only be reported as unverifiable.
                              "appearance": pdfpage.appearance(payload),
-                             "lossy": True})
+                             "lossy": source.suffix.lower() in {".jpg", ".jpeg"}
+                             or quality > 0})
         title = doc["meta"].get("title", "")
         document.set_metadata({
             # DRAFT in the package itself, not only in the report. A PDF
@@ -271,55 +278,17 @@ def export_pdf(doc: dict[str, Any], root: Path, out: Path, quality: int,
         # fails part way cannot replace a good package with a truncated one.
         # The claim is taken and released inside this `try`, so a save that
         # raises removes its own scratch and touches nothing else.
-        with _claim(staging_path(out), directory=False) as staging:
+        with _claim(staging_path(out), directory=False, pending=pending) as staging:
             document.save(str(staging), garbage=3, deflate=True)
             commit(manifest, {out.name: ir.sha256_file(staging)})
-            staging.replace(out)
     finally:
         document.close()
     return {"format": "pdf", "path": str(out), "pages": len(doc["pages"]),
             "draft": draft, "manifest": manifest}
-def _restore(out: Path, replaced: Path, promoted: list[str],
-             backed_up: list[str]) -> bool:
-    """Put the previous edition back. Returns whether it is safe to discard it.
-
-    Every file this run promoted is removed and every file it moved aside is
-    put back — the two lists differ, because a file can be backed up and then
-    fail to be replaced.
-
-    A restore that itself fails leaves the backup where it is: it is then the
-    only copy of the operator's previous edition, and deleting it to tidy up
-    after a failed rollback would turn a recoverable failure into a loss. A
-    recovery note beside it says what the files are.
-    """
-    intact = True
-    for name in reversed(promoted):
-        try:
-            (out / name).unlink(missing_ok=True)
-        except OSError:
-            intact = False
-    for name in reversed(backed_up):
-        kept = replaced / name
-        if not kept.exists():
-            continue
-        try:
-            kept.replace(out / name)
-        except OSError:
-            intact = False
-    if not intact:
-        try:
-            ir.write_text(replaced / "RECOVERY.txt",
-                          "This folder holds the previous edition of files an "
-                          "export moved aside. The export failed AND putting "
-                          "them back failed, so they were kept here rather "
-                          "than deleted. Move them back by hand.\n")
-        except OSError:
-            pass
-    return intact
 
 
 def export_dir(doc: dict[str, Any], root: Path, out: Path, quality: int,
-                draft: bool, commit: Any) -> dict[str, Any]:
+                draft: bool, commit: Any, *, pending: Path | None = None) -> dict[str, Any]:
     out.mkdir(parents=True, exist_ok=True)
     manifest: list[dict[str, Any]] = []
 
@@ -328,6 +297,11 @@ def export_dir(doc: dict[str, Any], root: Path, out: Path, quality: int,
         source = _page_source(root, page)
         name = f"{page['index'] + 1:04d}{source.suffix.lower()}"
         planned.add(_encode(source, name, quality)[1])
+    planned.add("ComicInfo.xml")
+    for name in planned:
+        target = out / name
+        if target.is_symlink() or (target.exists() and not target.is_file()):
+            raise ValueError(f"{target} is not an owned output file; choose another destination")
 
     # Exporting into a folder that already holds other images would mix them
     # into the chapter — pointing --out at the working folder's own `pages/`
@@ -349,14 +323,13 @@ def export_dir(doc: dict[str, Any], root: Path, out: Path, quality: int,
     # way — an unreadable page, a full disk — leaves the previous export whole
     # instead of a mixture of two. Moved file by file rather than swapping the
     # folder, because anything else the operator keeps in there is not ours.
-    with _claim(staging_path(out), directory=True) as staging:
+    with _claim(staging_path(out), directory=True, pending=pending) as staging:
         _assemble(doc, root, staging, quality, draft, manifest)
         # Every file is assembled and none of it is published. This is the one
         # moment at which the recovery record can be written before the bytes
         # it describes exist at the destination.
         commit(manifest, {child.name: ir.sha256_file(child)
                           for child in sorted(staging.iterdir())})
-        _promote(out, staging)
     return {"format": "dir", "path": str(out), "pages": len(doc["pages"]),
             "manifest": manifest}
 
@@ -371,39 +344,3 @@ def _assemble(doc: dict[str, Any], root: Path, staging: Path, quality: int,
         ir.write_bytes(staging / name, payload)
         manifest.append(_shipped(page, name, payload, quality))
     ir.write_text(staging / "ComicInfo.xml", _comic_info(doc, draft))
-
-
-def _promote(out: Path, staging: Path) -> None:
-    """Move the assembled edition in, with the previous one held aside.
-
-    Promoting file by file and hoping was enough for the first failure: a
-    `replace` that raised half way through left some pages from this chapter
-    and the rest from the last one, in a folder that looked finished.
-    """
-    replaced = _kept_path(out)
-    # Set before the try, because the cleanup below reads it on every path —
-    # including a failure that happens before a single file has been promoted.
-    rolled_back = True
-    replaced.mkdir(parents=True, exist_ok=False)
-    promoted: list[str] = []
-    backed_up: list[str] = []
-    try:
-        for child in sorted(staging.iterdir()):
-            target = out / child.name
-            if target.exists():
-                target.replace(replaced / child.name)
-                # Journalled HERE, before the promotion that may fail.
-                # Recording it afterwards meant the one file whose promotion
-                # raised had its previous edition moved aside, left out of the
-                # rollback list, and then deleted by the `finally` below — the
-                # operator's current file destroyed by a failure that changed
-                # nothing else.
-                backed_up.append(child.name)
-            child.replace(target)
-            promoted.append(child.name)
-    except BaseException:
-        rolled_back = _restore(out, replaced, promoted, backed_up)
-        raise
-    finally:
-        if rolled_back:
-            shutil.rmtree(replaced, ignore_errors=True)

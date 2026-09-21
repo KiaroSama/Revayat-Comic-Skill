@@ -84,13 +84,8 @@ def _addresses_the_same_regions(blocks: dict[str, Any],
                                 page: dict[str, Any]) -> bool:
     """Does this reply still name exactly the regions that are on the page?
 
-    What makes an unrecognised stamp safe to migrate. An old build hashed the
-    whole document, so a genuinely old reply matches nothing — but so does a
-    reply written before somebody split a balloon in two. The stamp cannot tell
-    them apart; the ids can. A reply whose `@@` blocks are precisely this page's
-    regions is addressing the same balloons whatever algorithm stamped it; one
-    that is missing a region, or names a region that is gone, is not, and it is
-    held for the reader to reconcile rather than migrated on trust.
+    This is a structural prerequisite for explicit page reconciliation. It is
+    not geometry evidence and never makes an unrecognized fingerprint fresh.
 
     An added `+slug` block is allowed: it is asking for a region the page does
     not have yet, which is the one legitimate way the two sets differ.
@@ -104,18 +99,14 @@ def _stamp_state(reply: Path, pages: dict[str, dict[str, Any]],
                  blocks: dict[str, Any] | None = None) -> str:
     """``fresh`` | ``stale`` | ``legacy`` | ``unstamped``.
 
-    Three answers, because two were not enough. A stamp from an older build is
-    not the same claim as a stamp that disagrees: the old algorithm hashed the
-    whole document, so after the move to per-page hashes every genuinely old
-    reply matched nothing and the reader was told to translate the chapter
-    again. `legacy` is taken on trust exactly once — and only when its ids still
-    describe this page — and re-stamped on the way out, and it is reported
-    rather than passed over in silence.
+    Known page or document fingerprints can prove freshness. An unknown older
+    scheme cannot prove geometry; explicit page reconciliation preserves its
+    Persian without trusting IDs alone.
     """
     text = ir.read_text(reply)
     stamped = FINGERPRINT.search(text)
     if not stamped:
-        return "unstamped"
+        return "stale"
     value = stamped.group("value")
     page = pages.get(reply.name.split(".", 1)[0])
     if page is not None and value == ir.page_fingerprint(page):
@@ -123,15 +114,14 @@ def _stamp_state(reply: Path, pages: dict[str, dict[str, Any]],
     if value == document_stamp:
         return "fresh"          # the document-wide stamp this build still writes
     if not SCHEME_LINE.search(text):
-        # Unrecognised, from a build that stamped differently. Migrated only if
-        # its ids still point at this page's regions; otherwise it is a reply
-        # about a page that has since moved, and trusting it merged one
-        # balloon's Persian into another.
+        # Unrecognized, from an older build or with the scheme line removed.
         if page is None:
             return "stale"
         if blocks is None:
             blocks = parse_worksheet(text)
-        return "legacy" if _addresses_the_same_regions(blocks, page) else "stale"
+        # Stable IDs do not identify geometry. An unrecognized old fingerprint
+        # needs explicit page reconciliation, even if all IDs still exist.
+        return "stale"
     return "stale"
 
 
@@ -140,7 +130,7 @@ def _is_stale(reply: Path, pages: dict[str, dict[str, Any]],
     return _stamp_state(reply, pages, document_stamp) == "stale"
 
 
-def _restamp(path: Path, page: dict[str, Any]) -> None:
+def _restamp(path: Path, page: dict[str, Any], *, expected: str | None = None) -> None:
     """Point a consumed reply at the page as it is now.
 
     Any accepted correction that moves a box, reclassifies a region or adds one
@@ -150,6 +140,8 @@ def _restamp(path: Path, page: dict[str, Any]) -> None:
     does not change what the reply is recorded as saying.
     """
     text = ir.read_text(path)
+    if expected is not None and ir.sha256_bytes(text.encode("utf-8")) != expected:
+        raise RuntimeError(f"{path} changed while its merge was being committed; preserve and review it")
     stamp = f"# fingerprint: {ir.page_fingerprint(page)}"
     text = (FINGERPRINT.sub(stamp, text, count=1) if FINGERPRINT.search(text)
             else stamp + "\n" + text)
@@ -160,6 +152,49 @@ def _restamp(path: Path, page: dict[str, Any]) -> None:
     ir.write_text(path, text)
 
 
+def _finish_receipt(path: Path, page: dict[str, Any], text: str) -> str:
+    """Finish a header write whose accepted text committed with this receipt."""
+    receipt = page.get("worksheet_receipt") or {}
+    if (isinstance(receipt, dict)
+            and receipt.get("path") == str(path.resolve())
+            and receipt.get("raw") == ir.sha256_bytes(text.encode("utf-8"))
+            and receipt.get("after") == ir.page_fingerprint(page)
+            and receipt.get("digest") == page.get("worksheet_digest")
+            and receipt.get("digest") == reply_digest(text)):
+        stamped = FINGERPRINT.search(text)
+        if stamped and stamped.group("value") == receipt.get("accepted", receipt.get("before")):
+            _restamp(path, page, expected=receipt["raw"])
+            return ir.read_text(path)
+    return text
+
+
+@ir.mutating
+def reconcile_document(doc_path: str | Path, *, pages: Sequence[str],
+                       worksheets: str | Path | None = None) -> dict[str, Any]:
+    """Record the operator's explicit review of named pages without rewriting Persian."""
+    doc_path = Path(doc_path)
+    doc = ir.load_doc(doc_path)
+    if not pages:
+        raise ValueError("reconciliation requires explicit page IDs after reviewing their geometry")
+    chosen = {page["id"]: page for page in doc["pages"] if page["id"] in pages}
+    if set(pages) != set(chosen):
+        raise ValueError("unknown page in reconciliation")
+    folder = ir.worksheet_folder(doc_path, doc, worksheets)
+    pending = []
+    for page_id, page in chosen.items():
+        path = folder / f"{page_id}.done.txt"
+        text = ir.read_text(path)
+        blocks = parse_worksheet(text)
+        if (not _addresses_the_same_regions(blocks, page)
+                or any(block.get("_seen", 1) != 1 or block.get("_duplicate_fields")
+                       for block in blocks.values())):
+            raise ValueError(f"{page_id}: reconcile the named regions and duplicate fields first")
+        pending.append((path, page, ir.sha256_bytes(text.encode("utf-8"))))
+    for path, page, digest in pending:
+        _restamp(path, page, expected=digest)
+    return {"ok": True, "reconciled": list(chosen)}
+
+@ir.mutating
 def build_document(
     doc_path: str | Path,
     out: str | Path | None = None,
@@ -178,7 +213,7 @@ def build_document(
     # stale is a fact about page 7, and it stopped `worksheet build --pages
     # p0002` — a page the reader had never touched — from being written at all.
     existing = sorted(folder.glob("*.done.txt")) if folder.exists() else []
-    if pages:
+    if pages is not None:
         wanted = set(pages)
         existing = [path for path in existing
                     if path.name.split(".", 1)[0] in wanted]
@@ -191,15 +226,16 @@ def build_document(
             "detail": (
                 "These completed worksheets were written against a different "
                 "set of regions, so their ids no longer point at the same "
-                "balloons. Re-translate them, or pass --force if you are "
-                "certain the regions did not move."
+                "balloons. Review each affected page's current crops and map "
+                "the existing Persian to its regions, then use `worksheet "
+                "reconcile --pages <reviewed-page-ids>` before merging."
             ),
         }
 
     # Where the replies live, so every later guard looks in the right place.
     # A reader who keeps them elsewhere got an empty answer from all of them:
     # the folder was not there, so nothing was unmerged, so nothing refused.
-    if out:
+    if out and pages != []:
         doc.setdefault("meta", {})["worksheets"] = str(folder)
         ir.save_doc(doc, doc_path)
 
@@ -234,7 +270,7 @@ def build_document(
 # --------------------------------------------------------------------------- #
 # Reading
 # --------------------------------------------------------------------------- #
-
+@ir.mutating
 def merge_document(
     doc_path: str | Path,
     worksheets: str | Path | None = None,
@@ -246,7 +282,7 @@ def merge_document(
     doc = ir.load_doc(doc_path)
     root = ir.doc_dir(doc_path)
     folder = ir.worksheet_folder(doc_path, doc, worksheets)
-    if worksheets:
+    if worksheets and pages != []:
         doc["meta"]["worksheets"] = str(folder)
     # Kept only so a worksheet stamped by an older build is still recognised;
     # staleness itself is decided per page. See `_is_stale`.
@@ -254,7 +290,7 @@ def merge_document(
     policy = doc["meta"].get("sfx_policy", "keep")
     direction = doc["meta"].get("reading_direction", "rtl")
 
-    if not folder.exists():
+    if not folder.exists() and pages != []:
         return {"ok": False, "error": f"no worksheets at {folder}"}
 
     report: dict[str, Any] = {
@@ -279,8 +315,9 @@ def merge_document(
     }
 
     by_page = {page["id"]: page for page in doc["pages"]
-               if not pages or page["id"] in set(pages)}
+               if pages is None or page["id"] in pages}
     consumed: list[Path] = []
+    reply_versions: dict[Path, str] = {}
     #: Which report lists mean "this page's reply did not fully land".
     trouble = ("missing_regions", "unknown_regions", "duplicate_regions",
                "empty_translation", "bad_added_regions",
@@ -292,7 +329,8 @@ def merge_document(
             report["missing_outputs"].append(page_id)
             continue
 
-        text = ir.read_text(path)
+        text = _finish_receipt(path, page, ir.read_text(path))
+        reply_versions[path] = ir.sha256_bytes(text.encode("utf-8"))
         blocks = parse_worksheet(text)
 
         # Structure FIRST, and before the shortcut. The shortcut compares a
@@ -381,6 +419,12 @@ def merge_document(
         candidate["worksheet_digest"] = digest
         candidate["worksheet_clean"] = not any(
             page_report[key] for key in trouble)
+        candidate["worksheet_receipt"] = {
+            "path": str(path.resolve()), "raw": reply_versions[path], "digest": digest,
+            "before": ir.page_fingerprint(page), "after": ir.page_fingerprint(candidate),
+            "accepted": (FINGERPRINT.search(text).group("value")
+                         if FINGERPRINT.search(text) else None),
+        }
         page.clear()
         page.update(candidate)
         report["merged"] += merged
@@ -391,8 +435,9 @@ def merge_document(
     # yet: a failure there left the merged Persian unwritten and the replies on
     # disk pointing at it, so the next run read them as fresh and merged
     # nothing. No write may claim another write already succeeded.
-    stages.stamp_stage(doc, "worksheet", {"merged": report["merged"]},
-                       pages=list(by_page))
+    if consumed:
+        stages.stamp_stage(doc, "worksheet", {"merged": report["merged"]},
+                           pages=[path.name.split(".", 1)[0] for path in consumed])
     ir.save_doc(doc, doc_path)
 
     # Every consumed reply, not only the ones that added a region. A `kind:`
@@ -401,7 +446,7 @@ def merge_document(
     for path in consumed:
         page = by_page.get(path.name.split(".", 1)[0])
         if page is not None:
-            _restamp(path, page)
+            _restamp(path, page, expected=reply_versions[path])
 
     blocking = (
         report["missing_outputs"] or report["missing_regions"]
@@ -464,25 +509,32 @@ def status(doc_path: str | Path, worksheets: str | Path | None = None) -> dict[s
                       if page_id not in set(present)],
     }
 
-
+@ir.cli
 def main(argv: list[str] | None = None) -> int:
     ir.use_utf8_stdio()
     parser = argparse.ArgumentParser(
         prog="revayat-comic worksheet",
         description="Build translation worksheets, or merge the answers back.",
     )
-    parser.add_argument("action", choices=["build", "merge", "status"])
+    parser.add_argument("action", choices=["build", "merge", "status", "reconcile"])
     parser.add_argument("--doc", required=True)
     parser.add_argument("--worksheets", default=None)
-    parser.add_argument("--pages", default="")
+    parser.add_argument("--pages", default=None)
     parser.add_argument("--force", action="store_true",
                         help="proceed even though the regions changed")
     args = parser.parse_args(argv)
 
+    if args.action == "reconcile":
+        if not args.pages:
+            parser.error("reconcile requires --pages naming the pages whose geometry you reviewed")
+        ir.emit(reconcile_document(args.doc, pages=[p for p in args.pages.split(",") if p],
+                                   worksheets=args.worksheets))
+        return 0
+
     if args.action == "build":
         report = build_document(
             args.doc, args.worksheets,
-            pages=[p for p in args.pages.split(",") if p] or None,
+            pages=ir.parse_pages(args.pages),
             force=args.force,
         )
         ir.emit(report)
@@ -494,7 +546,7 @@ def main(argv: list[str] | None = None) -> int:
 
     report = merge_document(
         args.doc, args.worksheets,
-        pages=[p for p in args.pages.split(",") if p] or None,
+        pages=ir.parse_pages(args.pages),
         force=args.force)
     ir.emit(report)
     return 0 if report["ok"] else 1

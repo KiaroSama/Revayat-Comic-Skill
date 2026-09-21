@@ -455,11 +455,11 @@ def strip_envelope(style: dict[str, Any], size: int, outlined: bool) -> int:
     numbers below are the ones `_strip` computes a few lines further down; they
     are here so the fitter can ask the same question before choosing a size.
 
-    Reserved on every side although the shadow falls down and to the right
-    only: the fit is measured as a box, and the cheap answer is the one that
-    cannot be wrong in the direction that clips.
+    Include the nib's dilation as well as the outline and shadow.
     """
     reserve = max(1, int(round(size * SHADOW_OFFSET)))
+    contrast = abs(float(style.get("contrast") or 0.0))
+    reserve += int(round(size * MAX_CONTRAST_GROWTH * min(1.0, contrast))) if contrast >= MIN_CONTRAST else 0
     if not outlined:
         return reserve
     measured = float(style.get("stroke") or 0.0)

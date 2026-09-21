@@ -1,0 +1,2 @@
+# Font subsets are generated only while testing; no font is committed or shipped.
+fonttools>=4.60

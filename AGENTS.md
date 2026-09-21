@@ -143,6 +143,23 @@ runner does not have.
 Do not commit comic pages. They bloat the repository and the content is usually
 someone else's.
 
+Merge task feature branches into the repository's default branch after their
+required checks pass, and verify the pushed result. Do not leave completed work
+only on a side branch. Resolve conflicts and preserve unrelated changes; use a
+pull request when branch protection requires one. Never merge failing changes.
+
+When maintaining or using the skill, preserve page/book count, order, native
+pixel resolution, aspect ratio and known PDF paper dimensions. Assess poor
+source quality and use separately identified reading/enhancement copies when
+helpful; never silently replace the immutable preservation baseline.
+
+Every agent using the translation skill must write its translation, correction,
+processing, QA and delivery activity log directly beside the translated output
+file (inside the delivered page folder for folder output). This is a runtime
+skill rule, not merely a coding-agent logging rule. Keep
+`skills/revayat-comic/references/translation-log.md` and the skill's startup and
+delivery gates aligned. CLI diagnostic logs alone do not fulfill this rule.
+
 Keep the three plugin manifests at the same `version` — CI enforces it.
 
 Every tracked text file must be UTF-8; CI enforces that too.

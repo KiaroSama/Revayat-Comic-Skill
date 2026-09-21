@@ -13,21 +13,17 @@ So there are two answers here and no third:
   covering the whole sheet, placed with an axis-aligned unmirrored transform,
   with no other drawing, text or annotation anywhere on it. Then the image's
   decoded pixels ARE the visible page and hashing them is exact.
-* **anything else** — the structure is not provably equivalent, so the bytes
-  are not evidence about the appearance. The sheet is rasterized within a
-  bounded budget and compared against the appearance the export recorded. A
-  package that carries no such reference is reported as unverifiable, never
-  passed on its dimensions.
-
-The appearance reference is a 8x8 grayscale reduction of the page as it was
-exported: small enough to sit in every manifest row, coarse enough to survive
-rasterization at a different scale, and specific enough that a swapped page, a
-rotation, a crop or an opaque overlay moves it far outside the tolerance.
+* **anything else** — compare every visible RGB pixel at native resolution
+  with the committed render. An absent reference or incompatible renderer is
+  unverifiable. The old 8x8 average remains diagnostic only: losing a whole
+  balloon can disappear in that average.
 """
 
 from __future__ import annotations
 
 import io
+import math
+import re
 from typing import Any
 
 import pageir as ir
@@ -36,9 +32,8 @@ import pageir as ir
 #: page — cheap enough to record for every page of every edition.
 GRID = 8
 
-#: A rasterization budget, in pixels of the rendered sheet. The comparison only
-#: needs GRID x GRID, so this is generous by a wide margin and still refuses to
-#: render a sheet that would cost real memory.
+#: Exact comparison's rasterization budget. Larger native packages rely on the
+#: committed byte hash; a modified container cannot fall back to thumbnail proof.
 MAX_RASTER_PIXELS = 4_000_000
 
 #: Mean absolute difference, per cell, between two appearance grids. Measured
@@ -85,9 +80,23 @@ def _is_plain_full_page(page: Any, placements: list[dict[str, Any]]) -> bool:
     """
     if len(placements) != 1:
         return False
+    if page.rotation or page.cropbox != page.mediabox:
+        return False
     if page.get_drawings() or page.get_text("text").strip():
         return False
-    if list(page.annots()):
+    if list(page.annots()) or list(page.widgets()):
+        return False
+    # Admit only the native single-image drawing program. Unknown PDF graphics
+    # state (clipping, opacity, forms, extra transforms) cannot prove visibility.
+    number = rb"[-+]?(?:\d+(?:\.\d*)?|\.\d+)"
+    program = (rb"\s*q\s+" + (number + rb"\s+") * 6
+               + rb"cm\s+/[A-Za-z0-9_]+\s+Do\s+Q\s*")
+    if not re.fullmatch(program, page.read_contents()):
+        return False
+    for key in ("SMask", "Mask"):
+        if page.parent.xref_get_key(placements[0]["xref"], key)[0] != "null":
+            return False
+    if page.parent.xref_get_key(page.xref, "Group")[0] != "null":
         return False
 
     rect = page.rect
@@ -100,16 +109,36 @@ def _is_plain_full_page(page: Any, placements: list[dict[str, Any]]) -> bool:
     drawn = box & rect
     covered = abs(drawn.width * drawn.height)
     # Both directions: the image has to fill the sheet AND not hang off it.
-    if covered / area < 0.995 or covered / max(abs(box.width * box.height),
-                                               1e-9) < 0.995:
+    if any(abs(a - b) > 1e-5 for a, b in zip(box, rect)) or covered != area:
         return False
 
     a, b, c, d = placements[0]["transform"][:4]
-    scale = max(abs(a), abs(b), abs(c), abs(d), 1e-9)
     # Axis-aligned and unmirrored. A rotation puts the magnitude into `b`/`c`;
     # a reflection makes `a` or `d` negative.
-    return (abs(b) / scale < 1e-3 and abs(c) / scale < 1e-3
-            and a > 0 and d > 0)
+    return b == 0 and c == 0 and a > 0 and d > 0
+
+
+def visible_proof(page: Any, *, scale=None) -> dict[str, Any]:
+    """Exact native-resolution appearance; never downsample integrity evidence."""
+    import pymupdf
+
+    rect = page.rect
+    zoom = (1.0, 1.0) if scale is None else scale
+    if (not isinstance(zoom, (list, tuple)) or len(zoom) != 2
+            or any(isinstance(v, bool) or not isinstance(v, (int, float))
+                   or not math.isfinite(v) or v <= 0 for v in zoom)):
+        raise ValueError("invalid PDF verification scale")
+    if (not all(math.isfinite(value) and value > 0 for value in (rect.width, rect.height))
+            or math.ceil(rect.width * zoom[0]) * math.ceil(rect.height * zoom[1])
+            > MAX_RASTER_PIXELS):
+        raise ValueError("native-resolution PDF exceeds the verification budget")
+    pixmap = page.get_pixmap(matrix=pymupdf.Matrix(*zoom),
+                             colorspace=pymupdf.csRGB, alpha=False, annots=True)
+    return {"engine": pymupdf.VersionBind, "size": [pixmap.width, pixmap.height],
+            "rotation": page.rotation, "cropbox": list(page.cropbox),
+            "mediabox": list(page.mediabox),
+            **({"scale": list(zoom)} if scale is not None else {}),
+            "sha256": ir.sha256_bytes(pixmap.samples)}
 
 
 def rasterized(page: Any) -> str:
@@ -136,6 +165,34 @@ def verify(document: Any, page: Any, row: dict[str, Any],
 
     `row` is the manifest row THIS package's export wrote for this page.
     """
+    reference = row.get("visible")
+    if reference:
+        try:
+            from pagegeometry import pdf_points
+
+            width_pt, height_pt = pdf_points(row)
+            if any(type(row.get(key)) is not int or row[key] <= 0 for key in ("width", "height")):
+                raise ValueError("missing native pixel dimensions")
+            native = [row["width"] / width_pt, row["height"] / height_pt]
+            if not isinstance(reference, dict):
+                raise ValueError("invalid native render reference")
+            scale = reference.get("scale")
+            if scale is not None and (
+                not isinstance(scale, list) or len(scale) != 2
+                or any(isinstance(value, bool) or not isinstance(value, (int, float))
+                       or not math.isfinite(value) or value <= 0 for value in scale)
+            ):
+                raise ValueError("invalid native render scale")
+            if (scale is None and native != [1.0, 1.0]) or (scale is not None and scale != native):
+                raise ValueError("render reference does not use the native pixel grid")
+            shown = visible_proof(page, scale=None if scale is None else native)
+        except Exception as error:
+            return "archive-unverified", f"page {index + 1}: {error}"
+        if not isinstance(reference, dict) or reference.get("engine") != shown["engine"]:
+            return "archive-unverified", f"page {index + 1}: incompatible render reference"
+        if reference != shown:
+            return "archive-invalid", f"page {index + 1} does not show the committed pixels"
+        return "", ""
     placements = [info for info in page.get_image_info(xrefs=True)
                   if info.get("bbox") and info.get("xref")]
     if not placements:
@@ -159,7 +216,22 @@ def verify(document: Any, page: Any, row: dict[str, Any],
             return ("archive-invalid",
                     f"page {index + 1} carries an image the reader cannot open")
         if shown == wanted:
-            return ("", "")
+            # Embedded pixel identity alone omits image Decode/colour state.
+            # Reconstruct the known image's ordinary sheet and compare what
+            # both sheets actually show at native resolution.
+            import pymupdf
+
+            try:
+                with pymupdf.open() as control:
+                    from pagegeometry import pdf_points
+                    width, height = pdf_points(row)
+                    expected = control.new_page(width=width, height=height)
+                    expected.insert_image(expected.rect, stream=payload, keep_proportion=False)
+                    zoom = (row["width"] / width, row["height"] / height)
+                    if visible_proof(page, scale=zoom) == visible_proof(expected, scale=zoom):
+                        return ("", "")
+            except (ValueError, KeyError) as error:
+                return "archive-unverified", f"page {index + 1}: {error}"
         return ("archive-invalid",
                 f"page {index + 1} does not show the page this export wrote")
 
@@ -186,4 +258,6 @@ def verify(document: Any, page: Any, row: dict[str, Any],
                 f"page {index + 1} does not look like the page this export "
                 f"wrote (difference {drift}, tolerance "
                 f"{APPEARANCE_TOLERANCE})")
-    return ("", "")
+    return ("archive-unverified",
+            f"page {index + 1} has only a coarse similarity reference; "
+            "that cannot prove the dialogue or artwork is intact")

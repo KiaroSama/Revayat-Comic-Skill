@@ -426,7 +426,7 @@ def clean_page(
     # clean contradicted masks that had since been rebuilt.
     return counts
 
-
+@ir.mutating
 def clean_document(
     doc_path: str | Path,
     *,
@@ -444,12 +444,12 @@ def clean_document(
 
     document_mode = doc["meta"].get("free_lettering_mask", "glyphs")
     scope = [page for page in doc["pages"]
-             if page.get("regions") and (not pages or page["id"] in pages)]
+             if pages is None or page["id"] in pages]
     # Per page, because the document's flag is whatever the *last* `mask` run
     # wrote. One page masked solid is enough to refuse, and naming it is what
     # lets a reader fix that page rather than re-mask the chapter.
     solid_pages = [page["id"] for page in scope
-                   if mask_mode(page, document_mode) == "solid"]
+                   if page.get("regions") and mask_mode(page, document_mode) == "solid"]
     if solid_pages and external_dir is None and edit_provider is None:
         where = ", ".join(solid_pages[:5])
         if len(solid_pages) > 5:
@@ -488,7 +488,8 @@ def clean_document(
         stamp["provider_calls"] = provider_report
     stages.stamp_stage(doc, "clean", stamp,
                        options={"external": bool(external_dir),
-                                "provider": provider}, pages=pages)
+                                "provider": provider},
+                       pages=[entry["page"] for entry in per_page if not entry["refused"]])
     ir.save_doc(doc, doc_path)
 
     heavy = [entry["page"] for entry in per_page if entry["inpaint"] > entry["flat"]]
@@ -509,7 +510,7 @@ def clean_document(
         ) if heavy else None,
     }
 
-
+@ir.cli
 def main(argv: list[str] | None = None) -> int:
     ir.use_utf8_stdio()
     parser = argparse.ArgumentParser(
@@ -517,7 +518,7 @@ def main(argv: list[str] | None = None) -> int:
         description="Remove source lettering through the authorised masks.",
     )
     parser.add_argument("--doc", required=True)
-    parser.add_argument("--pages", default="")
+    parser.add_argument("--pages", default=None)
     parser.add_argument("--provider", default=None,
                         help="name of an image-edit provider to redraw pages "
                              "with; its output is composited under the same "
@@ -531,7 +532,7 @@ def main(argv: list[str] | None = None) -> int:
     report = clean_document(
         args.doc,
         external=args.external,
-        pages=[p for p in args.pages.split(",") if p] or None,
+        pages=ir.parse_pages(args.pages),
         provider=args.provider,
     )
     ir.emit(report)

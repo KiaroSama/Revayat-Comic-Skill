@@ -656,7 +656,7 @@ def detect_page(
 
     return {"regions": regions, "panels": panels, "size": [width, height]}
 
-
+@ir.mutating
 def detect_document(
     doc_path: str | Path,
     *,
@@ -718,7 +718,7 @@ def detect_document(
 
     stages.stamp_stage(doc, "detect", {"totals": totals},
                        options={"thresholds": options or {},
-                                "find_sfx": find_sfx}, pages=pages)
+                                "find_sfx": find_sfx}, pages=[p["page"] for p in per_page if not p.get("skipped")])
     ir.save_doc(doc, doc_path)
 
     empty = [entry["page"] for entry in per_page if entry.get("regions") == 0]
@@ -734,7 +734,7 @@ def detect_document(
         ) if len(empty) > max(1, len(per_page) // 5) else None,
     }
 
-
+@ir.cli
 def main(argv: list[str] | None = None) -> int:
     ir.use_utf8_stdio()
     parser = argparse.ArgumentParser(
@@ -742,7 +742,7 @@ def main(argv: list[str] | None = None) -> int:
         description="Find panels, balloons and lettering.",
     )
     parser.add_argument("--doc", required=True)
-    parser.add_argument("--pages", default="", help="comma-separated page ids")
+    parser.add_argument("--pages", default=None, help="comma-separated page ids")
     parser.add_argument("--no-sfx", action="store_true",
                         help="skip free lettering; balloons only")
     for name, value in DEFAULTS.items():
@@ -759,7 +759,7 @@ def main(argv: list[str] | None = None) -> int:
         args.doc,
         options=options,
         find_sfx=not args.no_sfx,
-        pages=[p for p in args.pages.split(",") if p] or None,
+        pages=ir.parse_pages(args.pages),
     )
     ir.emit(report)
     return 0

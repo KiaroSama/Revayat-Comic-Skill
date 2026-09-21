@@ -109,10 +109,10 @@ def test_a_different_shortening_has_not_been_read(translated):
     assert "compressed-variant" in _codes(translated, region["id"])
 
 
-def test_a_waiver_from_before_span_records_still_stands(translated):
-    """An older document is not evidence of anything wrong."""
+def test_a_legacy_compression_waiver_without_the_pair_needs_review(translated):
+    """A bare code cannot prove which two meanings were compared."""
     region = _only_region(translated, target_text="برو.",
                           target_full="از این‌جا برو و برنگرد.",
                           review_ack=["compressed-variant"])
 
-    assert "compressed-variant" not in _codes(translated, region)
+    assert "compressed-variant" in _codes(translated, region)

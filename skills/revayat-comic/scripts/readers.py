@@ -317,19 +317,9 @@ def _from_pdf(path: Path, pages_dir: Path, dpi: int) -> list[Path]:
                 # was already at its native resolution and softens screentone.
                 ir.write_bytes(target, payload)
             else:
-                # A page rectangle is declared, not measured: 200 inches square
-                # is a legal PDF and renders to 3.6 gigapixels at 300 DPI, an
-                # allocation the process does not come back from. Checked here
-                # rather than up front because a page that is one embedded scan
-                # is never rendered at all.
-                area = (page.rect.width * dpi / 72) * (page.rect.height * dpi / 72)
-                if area > MAX_PAGE_PIXELS:
-                    raise ValueError(
-                        f"{path.name} page {index + 1} would render to "
-                        f"{int(area) // 1_000_000} megapixels at {dpi} DPI. "
-                        f"Re-export it at a real page size, or lower --dpi."
-                    )
-                pixmap = page.get_pixmap(dpi=dpi)
+                from pagegeometry import render_native
+
+                pixmap = render_native(page, dpi, MAX_PAGE_PIXELS)
                 payload = pixmap.tobytes("png")
                 ir.write_bytes(target, payload)
             total += len(payload)
@@ -391,9 +381,8 @@ def _single_embedded_image(document, page) -> bytes | None:
     # `get_images(full=True)` reports each image's declared size, and that is
     # the only chance to see how big one is before `extract_image` decompresses
     # it into memory. A page that embeds a gigapixel scan renders instead: the
-    # render is bounded by the page rectangle below, so the huge image is simply
-    # downsampled to the page it was drawn on, which is what it looked like
-    # anyway. No new failure, one fewer allocation nothing was guarding.
+    # renderer below retains native density and applies its allocation bound;
+    # an oversized source is refused rather than silently downsampled.
     if int(images[0][2]) * int(images[0][3]) > MAX_PAGE_PIXELS:
         return None
 
@@ -680,6 +669,9 @@ def import_source(
                         ir.sha256_file(file),
                     )
                 )
+            if kind == "pdf":
+                from pagegeometry import record_pdf
+                record_pdf(path, doc)
             moved = _commit_pages(staging, pages_dir, previous)
         except BaseException:
             shutil.rmtree(staging, ignore_errors=True)
@@ -724,7 +716,7 @@ def import_source(
             ) if tall else None,
         }
 
-
+@ir.cli
 def main(argv: list[str] | None = None) -> int:
     ir.use_utf8_stdio()
     parser = argparse.ArgumentParser(

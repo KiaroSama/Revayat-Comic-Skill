@@ -12,6 +12,13 @@ updates:
     open-pull-requests-limit: 0
 
   # Actions are pinned by major tag, so these updates are real and worth having:
+  - package-ecosystem: pip
+    directory: /tests
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+
+  # Keep the existing grouped Actions update policy.
   # a deprecated runner action breaks CI silently otherwise.
   - package-ecosystem: github-actions
     directory: /

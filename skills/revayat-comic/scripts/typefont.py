@@ -28,9 +28,8 @@ ZWNJ = "\u200c"
 #: Fonts that carry a full Persian glyph set, best first. Vazirmatn and Sahel
 #: are the modern open Persian faces; the Noto and system entries are the
 #: fallbacks that exist on a machine with nothing installed for Persian.
-#: Note what is *not* here: DejaVu Sans. It is the fallback every Linux box has
-#: and it contains no Arabic script at all, so it would be chosen and then draw
-#: nothing. `_supports_persian` catches that, but not listing it is cheaper.
+#: DejaVu Sans has Arabic coverage, but the faces below are preferred for
+#: Persian lettering. Every selected file is checked for individual glyphs.
 #: The house face. **Persian in this project is set in Vazir** \u2014 Vazirmatn is
 #: the current release of that family and the one to install; the older `Vazir-*`
 #: files are the same design under its first name. Everything after this tuple is
@@ -249,9 +248,8 @@ def find_font(preferred: str | None = None) -> Path:
     )
 
 
-#: Five codepoints in the Private Use Area. No text font assigns glyphs here,
-#: so whatever a face draws for these IS its "I do not have this character"
-#: mark — its `.notdef` box, or nothing at all.
+#: Missing-glyph probes. Noncharacters supplement private-use probes because
+#: a font is allowed to assign its own glyphs in the private-use area.
 _DEFINITELY_MISSING = "\ue000\ue001\ue002\ue003\ue004"
 
 
@@ -263,7 +261,7 @@ _COVERAGE = (
     "ابتثجحخدذرزسشصضطظعغفقلمنهوي",
     "پچژگک",
     "ی۰۱۲۳۴۵۶۷۸۹",
-    "کَکُکِکّ",
+    "کَکُکِکًّٔ",
 )
 
 
@@ -288,10 +286,10 @@ def _supports_persian(font_path: Path) -> bool:
         return False
 
     def drawn(text: str) -> bytes | None:
-        canvas = Image.new("L", (240, 60), 255)
+        canvas = Image.new("L", (240, 120), 255)
         draw = ImageDraw.Draw(canvas)
         try:
-            draw.text((4, 4), text, font=font, fill=0)
+            draw.text((120, 60), text, font=font, fill=0, anchor="mm")
         except Exception:
             return None
         return canvas.tobytes()
@@ -300,25 +298,22 @@ def _supports_persian(font_path: Path) -> bool:
 
 
 def covers(drawn: Any) -> bool:
-    """Whether every group this project needs is really in the face.
+    """Whether every required codepoint draws a distinct, nonblank glyph.
 
     `drawn(text)` renders one string and returns its pixels, or `None`.
 
-    Every group, not one sample word. A face can hold the Arabic letters and
-    lack the four that are Persian and not Arabic — پ چ ژ گ — and the old
-    sample `چگونه` happens to contain two of them, so one word passed a face
-    that could not write half the alphabet. Each group is drawn on its own and
-    compared with the tofu mark, because a face missing ONE group still draws
-    every other group perfectly.
+    A mixed group can contain both real letters and tofu and still differ from
+    a missing group. Compare characters individually, including diacritics.
     """
     blank = drawn("")
-    missing = drawn(_DEFINITELY_MISSING)
+    missing = {drawn(probe) for probe in (_DEFINITELY_MISSING,
+                                         _DEFINITELY_MISSING[0], "\uffff", "\U0010ffff")}
     if blank is None:
         return False
-    for group in _COVERAGE:
-        shown = drawn(group)
+    for character in sorted(set("".join(_COVERAGE))):
+        shown = drawn(character)
         if shown is None or shown == blank:
             return False
-        if missing is not None and shown == missing:
+        if shown in missing:
             return False
     return True

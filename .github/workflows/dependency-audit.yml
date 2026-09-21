@@ -39,4 +39,4 @@ jobs:
       # is whether a fresh install today resolves to anything vulnerable, which
       # is exactly what auditing the requirements file asks.
       - name: No installed dependency has a known advisory
-        run: python -m pip_audit -r skills/revayat-comic/requirements.txt
+        run: python -m pip_audit -r skills/revayat-comic/requirements.txt -r tests/requirements.txt

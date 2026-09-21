@@ -154,7 +154,7 @@ for name in $TARGETS; do
 
     # Never ship caches or a local virtualenv into an agent's skill directory.
     find "$destination" \( -name __pycache__ -o -name .pytest_cache \
-        -o -name .venv -o -name venv \) -type d -prune -exec rm -rf -- {} + 2>/dev/null || true
+        -o -name .venv -o -name venv -o -name logs \) -type d -prune -exec rm -rf -- {} + 2>/dev/null || true
 
     # OpenCode and Antigravity discover instructions through AGENTS.md rather
     # than by scanning a skills directory, so they need the pointer as well.

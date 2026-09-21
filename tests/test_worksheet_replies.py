@@ -226,7 +226,7 @@ def test_a_balloon_that_really_starts_with_a_hash_space_can_be_escaped():
     assert blocks["r1"]["fa"] == "خط اول\n# و بعد"
 
 
-def test_a_reply_from_an_older_build_is_migrated_rather_than_called_stale(
+def test_an_unverifiable_old_reply_is_preserved_for_explicit_reconciliation(
         detected):
     """The old stamp hashed the whole document; this one hashes the page. After
     the change every genuinely old reply matched nothing, and the reader was
@@ -242,9 +242,12 @@ def test_a_reply_from_an_older_build_is_migrated_rather_than_called_stale(
     ir.write_text(path, text)
 
     report = worksheet.merge_document(detected)
-    assert page_id in report["legacy_worksheets"], report
-    assert page_id not in report["stale_worksheets"]
-    # And it is re-stamped, so it is verified from here on.
+    assert page_id in report["stale_worksheets"], report
+    digest = worksheet.reply_digest(ir.read_text(path))
+    worksheet.reconcile_document(detected, pages=[page_id])
+    assert worksheet.reply_digest(ir.read_text(path)) == digest
+    assert worksheet.merge_document(detected, pages=[page_id])["ok"]
+    # An explicit page review supplies the missing mapping approval.
     assert worksheet.SCHEME_LINE.search(ir.read_text(path))
 
 

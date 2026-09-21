@@ -70,7 +70,7 @@ def parse_box(text: str) -> list[int]:
         )
     return box
 
-
+@ir.mutating
 def mark_document(
     doc_path: str | Path,
     box: list[int],
@@ -171,7 +171,7 @@ def mark_document(
                        options={"box": list(box), "label": label,
                                 "kind": kind,
                                 "from_overview": from_overview},
-                       pages=pages)
+                       pages=[entry["page"] for entry in marked])
     ir.save_doc(doc, doc_path)
 
     return {
@@ -195,7 +195,7 @@ def _next_region_id(page: dict[str, Any]) -> str:
             used = max(used, int(tail))
     return f"{page['id']}r{used + 1:03d}"
 
-
+@ir.cli
 def main(argv: list[str] | None = None) -> int:
     ir.use_utf8_stdio()
     parser = argparse.ArgumentParser(
@@ -216,7 +216,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="the box was read off crops/pNNNN/overview.png, "
                              "which is downscaled on a tall page; convert it "
                              "to the page's own pixels first")
-    parser.add_argument("--pages", default="",
+    parser.add_argument("--pages", default=None,
                         help="comma-separated page ids; default is every page")
     args = parser.parse_args(argv)
 
@@ -225,7 +225,7 @@ def main(argv: list[str] | None = None) -> int:
         parse_box(args.box),
         label=args.label,
         kind=args.kind,
-        pages=[p for p in args.pages.split(",") if p] or None,
+        pages=ir.parse_pages(args.pages),
         from_overview=args.from_overview,
     ))
     return 0
