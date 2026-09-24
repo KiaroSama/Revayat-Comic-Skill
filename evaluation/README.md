@@ -39,18 +39,18 @@ into each row so a reviewer can judge the actual scene. A CLI exit of zero,
 
 | Added cases | What needs a reader |
 | --- | --- |
-| `ctx-fr-01`–`ctx-fr-03` | Lack of obligation versus prohibition, a requested `vous`/`tu` transition, and expletive `ne` in a before-clause |
-| `ctx-es-01`–`ctx-es-03` | Optional printing, familiar Mexican plural `ustedes`, and a prohibition with no gloves exception |
+| `ctx-fr-01`–`ctx-fr-04` | Lack of obligation versus prohibition, a requested `vous`/`tu` transition, expletive `ne`, and ironic praise during a breakdown |
+| `ctx-es-01`–`ctx-es-04` | Optional printing, familiar Mexican plural `ustedes`, prohibition without a gloves exception, and an implied arriving courier |
 | `ctx-ja-01`–`ctx-ja-02` | First-person responsibility recovered from prior dialogue; a polite promise to consider without inventing acceptance |
 | `ctx-zh-01`–`ctx-zh-02` | Negation scope and relationship stance; a delayed return known only by hearsay |
 | `ctx-ko-01`–`ctx-ko-02` | Direct kinship address with established family voice; an unconfirmed date that is neither settled nor cancelled |
 
-All twelve have explicit context, a human review note, and `human_only: true`.
+All fourteen have explicit context, a human review note, and `human_only: true`.
 Their wording differs from the research/prompt examples. Their Persian
 candidates are authored proposals, not human-validated gold translations.
 Adequacy, fluency, voice and omissions/additions stay `null` until a person
 scores them. The total language distribution is 16 Japanese, 4 Korean,
-4 Chinese, 2 English, 3 French and 3 Spanish cases.
+4 Chinese, 2 English, 4 French and 4 Spanish cases.
 
 A check the scorer cannot decide is reported as `review` rather than scored: a
 Persian word beginning with `ن` may be a negated verb or may be a name, and
