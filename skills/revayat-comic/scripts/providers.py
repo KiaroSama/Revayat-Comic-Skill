@@ -287,10 +287,13 @@ def _not_a_confidence(value: Any) -> str:
     """
     if isinstance(value, bool) or not isinstance(value, numbers.Real):
         return "is not a number"
-    if not math.isfinite(value):
-        return "is not finite"
-    if not 0.0 <= value <= 1.0:
-        return "is outside [0, 1]"
+    try:
+        if not math.isfinite(value):
+            return "is not finite"
+        if not 0.0 <= value <= 1.0:
+            return "is outside [0, 1]"
+    except (OverflowError, TypeError, ValueError):
+        return "is not a finite probability"
     return ""
 
 
@@ -394,8 +397,9 @@ def call(provider, role: str, *args, timeout: float = DEFAULT_TIMEOUT,
         wrong = _not_a_confidence(confidence)
         if wrong:
             return Result(False, "error", label, role,
-                          detail=f"{label} returned a confidence of "
-                                 f"{confidence!r}, which {wrong}",
+                          # Even repr() can fail on a huge integer; no raw
+                          # provider value belongs in this diagnostic.
+                          detail=f"{label} returned invalid confidence: {wrong}",
                           elapsed=elapsed)
     if value is None:
         return Result(False, "refused", label, role,
