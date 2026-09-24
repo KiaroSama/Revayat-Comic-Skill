@@ -105,7 +105,11 @@ Names include the script, UTC date/time and a collision suffix when needed.
 Entries use `[timestamp UTC] [LEVEL] [COMPONENT] Message`; nested dispatch uses
 one file. Logs contain stage outcomes, durations and sanitized exception locations,
 never arguments, dialogue, credentials or exception values. There is no secret-bearing
-verbose mode. If log initialization fails, stderr reports that limitation and
+verbose mode. Set `REVAYAT_LOG_LEVEL` to `DEBUG`, `INFO`, `WARNING` or
+`ERROR` for the CLI diagnostic file; the default is `INFO` and an invalid
+value falls back to `INFO` with a generic warning. This never replaces the
+using agent's translation activity log beside the output.
+If log initialization fails, stderr reports that limitation and
 the stage still runs. Handlers close on completion. Logs are not packaged or
 copied by the installers; retain failure logs for diagnosis and remove old logs
 when no longer needed. Attach only the relevant run log when reporting an issue.
