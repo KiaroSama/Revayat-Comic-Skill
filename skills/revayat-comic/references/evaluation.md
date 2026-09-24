@@ -26,7 +26,7 @@ nobody can check, which defeats the point.
 Twenty to forty pages is enough to be useful. Two hundred sentence pairs with
 no images is not a substitute.
 
-**There is a starter set in this repository**, at `evaluation/`: thirty-two
+**There is a starter set in this repository**, at `evaluation/`: thirty-four
 cases across Japanese, Korean, Chinese, English, French and Spanish, with
 proposed Persian renderings, a generated layout page and an answer-free
 source/context companion for each case. The scorer keeps human semantic/voice
@@ -37,7 +37,7 @@ say yes when the answer is no.
 Its source lines were written for it rather than taken from a published
 comic, and its pages are drawn rather than scanned. That is what makes it
 shareable and it is also its limit: it supports structured review, not a claim
-of bilingual translation accuracy or detection on a real scan. The twelve new
+of bilingual translation accuracy or detection on a real scan. The fourteen
 contextual cases await independent bilingual review. Adding pages you have the right to share is one field in
 `evaluation/cases.json` — see `evaluation/README.md`.
 
