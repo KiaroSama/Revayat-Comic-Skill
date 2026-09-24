@@ -1,8 +1,36 @@
 # Revayat Comic — روایت کمیک
 
 [![CI](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/ci.yml)
+[![CodeQL on main](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/codeql.yml)
+[![Dependency audit](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/dependency-audit.yml/badge.svg?branch=main)](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/dependency-audit.yml)
+[![PR dependency review](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/dependency-review.yml/badge.svg?event=pull_request)](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/dependency-review.yml)
+[![Optional toolchain integration](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/integration.yml/badge.svg?branch=main)](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/integration.yml)
+[![PR source evidence](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/source-evidence.yml/badge.svg?event=pull_request)](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/source-evidence.yml)
+
+[![Version 1.0.0](https://img.shields.io/badge/Version-1.0.0-blue)](.claude-plugin/plugin.json)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue)](skills/revayat-comic/requirements.txt)
-[![License GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue)](LICENSE)
+[![Windows, Linux and macOS](https://img.shields.io/badge/Platforms-Windows%20%7C%20Linux%20%7C%20macOS-4c1)](.github/workflows/ci.yml)
+[![License GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue)](LICENSE)
+[![Agent Skills format](https://img.shields.io/badge/Format-Agent%20Skills-purple)](skills/revayat-comic/SKILL.md)
+[![Claude, Cursor and Codex plugins](https://img.shields.io/badge/Plugins-Claude%20%7C%20Cursor%20%7C%20Codex-purple)](#install)
+
+[![Source language guidance](https://img.shields.io/badge/Source-ja%20%7C%20ko%20%7C%20zh%20%7C%20fr%20%7C%20es%20%7C%20en%20%2B%20others-007b83)](skills/revayat-comic/references/source-languages.md)
+[![Target Persian](https://img.shields.io/badge/Target-Persian-007b83)](skills/revayat-comic/SKILL.md)
+[![CBZ, CBR, PDF and image input](https://img.shields.io/badge/Input-CBZ%20%7C%20CBR%20%7C%20PDF%20%7C%20images-007b83)](skills/revayat-comic/SKILL.md)
+[![CBZ, PDF and page-folder output](https://img.shields.io/badge/Output-CBZ%20%7C%20PDF%20%7C%20pages-007b83)](skills/revayat-comic/SKILL.md)
+[![Editable Word review companion](https://img.shields.io/badge/Review-DOCX-007b83)](skills/revayat-comic/references/native-documents.md)
+[![CLI and MCP](https://img.shields.io/badge/Interface-CLI%20%7C%20MCP-007b83)](skills/revayat-comic/references/serving.md)
+[![Pixel preservation QA](https://img.shields.io/badge/QA-pixel%20preservation-007b83)](skills/revayat-comic/references/artwork-preservation.md)
+[![34 evaluation cases](https://img.shields.io/badge/Evaluation-34%20cases-007b83)](evaluation/README.md)
+
+[![GitHub stars](https://img.shields.io/github/stars/KiaroSama/Revayat-Comic-Skill?style=flat)](https://github.com/KiaroSama/Revayat-Comic-Skill)
+[![GitHub forks](https://img.shields.io/github/forks/KiaroSama/Revayat-Comic-Skill?style=flat)](https://github.com/KiaroSama/Revayat-Comic-Skill/forks)
+[![Open issues](https://img.shields.io/github/issues/KiaroSama/Revayat-Comic-Skill?style=flat)](https://github.com/KiaroSama/Revayat-Comic-Skill/issues)
+[![Open pull requests](https://img.shields.io/github/issues-pr/KiaroSama/Revayat-Comic-Skill?style=flat)](https://github.com/KiaroSama/Revayat-Comic-Skill/pulls)
+[![Contributors](https://img.shields.io/github/contributors/KiaroSama/Revayat-Comic-Skill?style=flat)](https://github.com/KiaroSama/Revayat-Comic-Skill/graphs/contributors)
+[![Last commit on main](https://img.shields.io/github/last-commit/KiaroSama/Revayat-Comic-Skill/main?style=flat)](https://github.com/KiaroSama/Revayat-Comic-Skill/commits/main/)
+[![Documentation in English and Persian](https://img.shields.io/badge/Docs-English%20%7C%20Persian-8a2be2)](README.fa.md)
+[![Donate](https://img.shields.io/badge/Support-Donate-e75480)](#donate)
 
 **Translate manga, manhwa, manhua and Western comics into Persian, and get a CBZ or PDF with the artwork provably untouched.**
 
