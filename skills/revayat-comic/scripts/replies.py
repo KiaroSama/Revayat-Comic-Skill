@@ -88,6 +88,11 @@ def field_lines(name: str, value: str) -> list[str]:
 REPEATABLE = frozenset({"note"})
 
 
+def protocol_lines(text: str) -> list[str]:
+    """Split conventional file line endings without consuming Unicode content."""
+    return re.split(r"\r\n?|\n", text)
+
+
 def parse_worksheet(text: str) -> dict[str, dict[str, Any]]:
     """``{region id: {field: value}}``. Unknown lines continue the last field.
 
@@ -99,7 +104,9 @@ def parse_worksheet(text: str) -> dict[str, dict[str, Any]]:
     blanks = 0
     started = False
 
-    for raw in text.splitlines():
+    # Protocol frames use physical CR/LF lines. Unicode paragraph separators
+    # inside a value are content, not permission to parse a new field or block.
+    for raw in protocol_lines(text):
         header = HEADER.match(raw)
         if header:
             region_id = header.group("id")
@@ -156,6 +163,24 @@ def parse_worksheet(text: str) -> dict[str, dict[str, Any]]:
 
 #: The three answers that are not a translation. Exactly one may be given.
 ACTIONS = ("drop", "keep", "erase")
+
+
+def invalid_fields(block: dict[str, Any]) -> list[str]:
+    """Reject mistyped decisions instead of interpreting them as a negative.
+
+    Run before the already-merged shortcut: a legacy receipt cannot validate
+    an invalid scalar that an older parser silently accepted.
+    """
+    errors = []
+    for name in ACTIONS:
+        value = block.get(name, "")
+        if not isinstance(value, str) or value.strip().lower() not in {
+                "", "yes", "true", "1", "no", "false", "0"}:
+            errors.append(f"{name}: expected yes/no, true/false, 1/0 or empty")
+    value = block.get("polarity", "")
+    if not isinstance(value, str) or value.strip().lower() not in {"", "dark", "light"}:
+        errors.append("polarity: expected dark, light or empty")
+    return errors
 
 
 def _asked(block: dict[str, str], name: str) -> bool:

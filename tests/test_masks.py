@@ -239,8 +239,20 @@ def test_solid_masks_are_recorded_and_refused_by_the_built_in_cleaners(detected)
     """
     import clean
 
+    # The refusal is about an actual editable solid patch, not a mode flag
+    # on a page containing only balloons or policy-kept effects.
+    doc = ir.load_doc(detected)
+    page = doc["pages"][0]
+    patch = ir.new_region(f"{page['id']}r999", [16, 16, 32, 16],
+                          kind="sign", detector="reader", confidence=1.0)
+    page["regions"].append(patch)
+    ir.save_doc(doc, detected)
     masks.build_document(detected, solid_free=True)
-    assert ir.load_doc(detected)["meta"]["free_lettering_mask"] == "solid"
+    saved = ir.load_doc(detected)
+    assert saved["meta"]["free_lettering_mask"] == "solid"
+    patch = ir.find_region(saved, patch["id"])
+    assert not patch.get("balloon") and ir.may_be_edited(patch, "keep")
+    assert (masks.load_mask(detected.parent / patch["mask"]) == 255).all()
 
     with pytest.raises(ValueError, match="free-lettering solid"):
         clean.clean_document(detected)

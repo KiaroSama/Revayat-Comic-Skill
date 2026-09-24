@@ -445,11 +445,14 @@ def clean_document(
     document_mode = doc["meta"].get("free_lettering_mask", "glyphs")
     scope = [page for page in doc["pages"]
              if pages is None or page["id"] in pages]
-    # Per page, because the document's flag is whatever the *last* `mask` run
-    # wrote. One page masked solid is enough to refuse, and naming it is what
-    # lets a reader fix that page rather than re-mask the chapter.
+    # A solid mode only needs reconstruction for an editable free-lettering
+    # patch. Kept/dropped regions and ordinary balloons do not consume that
+    # capability. Requiring it after a reader chose keep caused a recovery loop.
     solid_pages = [page["id"] for page in scope
-                   if page.get("regions") and mask_mode(page, document_mode) == "solid"]
+                   if mask_mode(page, document_mode) == "solid"
+                   and any(ir.may_be_edited(region, policy)
+                           and not region.get("balloon")
+                           for region in page.get("regions", []))]
     if solid_pages and external_dir is None and edit_provider is None:
         where = ", ".join(solid_pages[:5])
         if len(solid_pages) > 5:
