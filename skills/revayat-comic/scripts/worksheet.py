@@ -56,6 +56,7 @@ from replies import (  # noqa: F401 - re-exported: the protocol and the
     _add_region,
     _apply,
     _apply_page,
+    invalid_fields,
     parse_worksheet,
     reply_digest,
 )
@@ -299,6 +300,7 @@ def merge_document(
         "kept": [],
         "reclassified": [],
         "bad_kind": [],
+        "invalid_fields": [],
         "missing_outputs": [],
         "missing_regions": [],
         "unknown_regions": [],
@@ -321,7 +323,7 @@ def merge_document(
     #: Which report lists mean "this page's reply did not fully land".
     trouble = ("missing_regions", "unknown_regions", "duplicate_regions",
                "empty_translation", "bad_added_regions",
-               "conflicting_actions", "duplicate_fields", "bad_kind")
+               "conflicting_actions", "duplicate_fields", "bad_kind", "invalid_fields")
     list_keys = [key for key, value in report.items() if isinstance(value, list)]
     for page_id, page in by_page.items():
         path = folder / f"{page_id}.done.txt"
@@ -341,13 +343,15 @@ def merge_document(
         # A reply is read whole and judged whole before any of it is trusted.
         page_report: dict[str, list[str]] = {key: [] for key in list_keys}
         for region_id, block in blocks.items():
+            page_report["invalid_fields"] += [
+                f"{region_id}: {problem}" for problem in invalid_fields(block)]
             if int(block.get("_seen", 1)) > 1:
                 page_report["duplicate_regions"].append(region_id)
             repeated = block.get("_duplicate_fields", "")
             for name in sorted({n for n in repeated.split(",") if n}):
                 page_report["duplicate_fields"].append(f"{region_id}: {name}")
         malformed = (page_report["duplicate_regions"]
-                     + page_report["duplicate_fields"])
+                     + page_report["duplicate_fields"] + page_report["invalid_fields"])
 
         state = _stamp_state(path, by_page, document_stamp, blocks)
         if state == "stale" and not force:
@@ -399,7 +403,7 @@ def merge_document(
                    + page_report["conflicting_actions"]
                    + page_report["duplicate_fields"]
                    + page_report["bad_kind"]
-                   + page_report["bad_added_regions"])
+                   + page_report["bad_added_regions"] + page_report["invalid_fields"])
         for key, values in page_report.items():
             report[key] += values
         if refused:
@@ -454,6 +458,7 @@ def merge_document(
         or report["stale_worksheets"] or report["empty_translation"]
         or report["bad_kind"] or report["bad_added_regions"]
         or report["conflicting_actions"] or report["duplicate_fields"]
+        or report["invalid_fields"]
     )
     report["ok"] = not blocking
     if report["added"]:
