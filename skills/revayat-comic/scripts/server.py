@@ -183,9 +183,7 @@ def run(name: str, args: list[str] | None = None) -> dict[str, Any]:
     """
     stage = name[len("revayat_"):] if name.startswith("revayat_") else name
 
-    if stage == DOCTOR:
-        return _doctor()
-    if stage not in STAGES:
+    if stage not in STAGES and stage != DOCTOR:
         return {"ok": False, "stage": stage,
                 "error": f"unknown stage {stage!r}",
                 "expected": [DOCTOR, *STAGES]}
@@ -209,22 +207,25 @@ def run(name: str, args: list[str] | None = None) -> dict[str, Any]:
     for index, value in enumerate(args):
         if isinstance(value, str):
             continue
-        if isinstance(value, (int, float)) and not isinstance(value, bool) \
-                and math.isfinite(value):
+        if (isinstance(value, int) and not isinstance(value, bool)) or (
+                isinstance(value, float) and math.isfinite(value)):
             continue
         return {"ok": False, "stage": stage,
                 "error": f"args[{index}] is a {type(value).__name__}; every "
                          f"argument has to be a string or a number — "
                          f'e.g. ["--doc", "work/comic.json"]'}
     args = [str(a) for a in args]
-
-    module = importlib.import_module(stage_module(stage))
     reason = ""
     with _STDOUT_LOCK:
         captured, complaint = io.StringIO(), io.StringIO()
         try:
             with contextlib.redirect_stdout(captured), \
                     contextlib.redirect_stderr(complaint):
+                if stage == DOCTOR:
+                    return _doctor()
+                # Import errors are request failures too, not permission to
+                # close a healthy MCP or HTTP session without a response.
+                module = importlib.import_module(stage_module(stage))
                 code, reason = _exit_status(module.main(args))
         except SystemExit as raised:
             # argparse exits on a bad flag rather than raising, and a stage may
@@ -398,29 +399,43 @@ def serve_mcp(stream_in=None, stream_out=None) -> int:
     stream_in = sys.stdin if stream_in is None else stream_in
     stream_out = sys.stdout if stream_out is None else stream_out
 
-    for line in stream_in:
+    while True:
+        # Read a bounded prefix BEFORE trimming whitespace or parsing JSON.
+        # Text streams count codepoints, so enforce the UTF-8 byte limit too.
+        line = stream_in.readline(MAX_BODY_BYTES + 1)
+        if not line:
+            return 0
+        size = len(line.encode("utf-8"))
+        if size > MAX_BODY_BYTES:
+            reply = _error(None, -32600,
+                           f"a message may be at most {MAX_BODY_BYTES} bytes")
+            stream_out.write(_wire(reply) + "\n")
+            stream_out.flush()
+            # Drain only a bounded amount to regain newline framing. A client
+            # that never ends an enormous frame must reconnect, not consume
+            # unbounded memory or an unlimited discard loop.
+            discarded = size
+            while not line.endswith("\n"):
+                if discarded >= 4 * MAX_BODY_BYTES:
+                    return 1
+                line = stream_in.readline(min(MAX_BODY_BYTES + 1,
+                                              4 * MAX_BODY_BYTES - discarded + 1))
+                if not line:
+                    return 0
+                discarded += len(line.encode("utf-8"))
+            continue
         line = line.strip()
         if not line:
             continue
-        # Bounded, like the HTTP body. A stage's arguments are a few hundred
-        # bytes; a client that sends a megabyte on one line is malfunctioning
-        # or hostile, and reading it to reject it afterwards is the cost it was
-        # hoping for.
-        if len(line) > MAX_BODY_BYTES:
-            reply = _error(None, -32600,
-                           f"a message may be at most {MAX_BODY_BYTES} bytes; "
-                           f"this one was {len(line)}")
+        try:
+            message = json.loads(line)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            reply = _error(None, -32700, "invalid JSON")
         else:
-            try:
-                message = json.loads(line)
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                reply = _error(None, -32700, "invalid JSON")
-            else:
-                reply = handle(message)
+            reply = handle(message)
         if reply is not None:
             stream_out.write(_wire(reply) + "\n")
             stream_out.flush()
-    return 0
 
 
 # --------------------------------------------------------------------------- #

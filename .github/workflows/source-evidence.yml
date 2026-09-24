@@ -1,0 +1,57 @@
+name: Source evidence
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: source-evidence-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Capture the exact source tree under review
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/revayat-source-evidence"
+          git archive --format=zip --output="$RUNNER_TEMP/revayat-source-evidence/source.zip" HEAD
+          git rev-parse HEAD > "$RUNNER_TEMP/revayat-source-evidence/commit.txt"
+          git rev-parse 'HEAD^{tree}' > "$RUNNER_TEMP/revayat-source-evidence/tree.txt"
+          git ls-tree -r -z HEAD > "$RUNNER_TEMP/revayat-source-evidence/git-tree.bin"
+          cd "$RUNNER_TEMP/revayat-source-evidence"
+          sha256sum source.zip > source.sha256
+      # Only tracked source: no checkout credentials, untracked pages, or fonts.
+      - name: Retain reproducible source evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: source-evidence
+          path: ${{ runner.temp }}/revayat-source-evidence/
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      # Small optional shapers and tooling, not model weights or font binaries.
+      # This is supplementary evidence, not a replacement for requirements.txt.
+      - name: Collect offline reviewer tools
+        run: |
+          python -m pip download --only-binary=:all: --dest "$RUNNER_TEMP/revayat-review-tools" arabic-reshaper python-bidi pytest-timeout ruff rarfile
+          cd "$RUNNER_TEMP/revayat-review-tools"
+          sha256sum *.whl > SHA256SUMS
+      - name: Retain offline reviewer tools
+        uses: actions/upload-artifact@v7
+        with:
+          name: review-tools-linux-py313
+          path: ${{ runner.temp }}/revayat-review-tools/
+          if-no-files-found: error
+          retention-days: 7

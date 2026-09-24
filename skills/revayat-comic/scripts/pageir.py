@@ -29,6 +29,7 @@ import tempfile
 from pathlib import Path
 from workspace import Document, mutating, parse_pages, workspace_lock  # noqa: F401
 from runlog import cli  # noqa: F401
+from worksheet_paths import worksheet_folder  # noqa: F401 - stable public path policy
 # What a region's DECISIONS mean lives in `regions.py`: a different subject
 # with a different audience. Re-exported here because every caller reaches
 # for them as `ir.translatable`, `ir.may_be_edited` and `ir.region_state`,
@@ -343,25 +344,6 @@ def find_region(doc: dict[str, Any], region_id: str) -> dict[str, Any] | None:
         if region["id"] == region_id:
             return region
     return None
-
-
-def worksheet_folder(doc_path: Path | str, doc: dict[str, Any],
-                     override: str | Path | None = None) -> Path:
-    """Where this document's worksheets live.
-
-    Three call sites answered this separately and two of them forgot the
-    document: `worksheet build --out elsewhere` records the folder in `meta`,
-    and then `worksheet build` and `worksheet status` with no `--out` looked
-    in `work/worksheets`, found nothing, and reported a chapter with a full
-    set of finished replies as having none.
-
-    Order: what this call was told, then what the document remembers, then the
-    default beside the document.
-    """
-    if override:
-        return Path(override)
-    recorded = (doc.get("meta") or {}).get("worksheets")
-    return Path(recorded) if recorded else Path(doc_path).parent / "worksheets"
 
 
 #: What a title decides once and then applies to every chapter. Free text,

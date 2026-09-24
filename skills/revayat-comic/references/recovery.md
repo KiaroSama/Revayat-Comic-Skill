@@ -83,6 +83,14 @@ one page at a time. Export destination checks include external worksheets and
 original source-directory members, while preserving separate output folders and
 operator-owned extras.
 
+Worksheet locations are resolved by the shared document policy. An explicit
+`--out` or `--worksheets` relative path is resolved when that command runs
+and is remembered as an absolute folder, so status/merge/context from another
+working directory find the same replies. A relative folder already stored in
+document metadata is interpreted beside `comic.json`. If an older record
+was created relative to an unknown process directory, pass the actual folder
+once with `--worksheets`; do not relocate or overwrite the reply files.
+
 ## Selection and diagnostics
 
 In library APIs, `pages=None` selects all pages and `pages=[]` selects none.

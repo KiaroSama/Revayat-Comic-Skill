@@ -6,6 +6,7 @@ from contextvars import ContextVar
 from datetime import datetime, timezone
 import functools
 import logging
+import os
 from pathlib import Path
 import sys
 import time
@@ -13,6 +14,19 @@ import traceback
 import uuid
 
 _active = ContextVar("revayat_run_log", default=None)
+
+
+def event(level: str, message: str, *, component: str) -> None:
+    """Write sanitized diagnostics to the active run, never protocol stdout.
+
+    Callers provide fixed messages or counts, not arguments, prompts or secrets.
+    Library-only calls may not have a CLI log and therefore produce no output.
+    """
+    severity = {"INFO": logging.INFO, "WARNING": logging.WARNING,
+                "ERROR": logging.ERROR, "DEBUG": logging.DEBUG}[level]
+    logger = _active.get()
+    if logger is not None:
+        logger.log(severity, message, extra={"component": component})
 
 
 def _folder(argv: list[str]) -> Path:
@@ -29,6 +43,7 @@ def _invoke(function, argv, logger, component):
     start = time.monotonic()
     if logger:
         logger.info("start", extra=extra)
+        logger.debug("invoking stage; arguments intentionally omitted", extra=extra)
     try:
         code = function(argv)
     except BaseException as error:
@@ -74,14 +89,21 @@ def cli(function):
                                           datefmt="%Y-%m-%d %H:%M:%S")
             formatter.converter = time.gmtime
             handler.setFormatter(formatter)
-            logger = logging.Logger("revayat-comic", logging.INFO)
+            level = os.environ.get("REVAYAT_LOG_LEVEL", "INFO").upper()
+            levels = {"DEBUG": logging.DEBUG, "INFO": logging.INFO,
+                      "WARNING": logging.WARNING, "ERROR": logging.ERROR}
+            logger = logging.Logger("revayat-comic", levels.get(level, logging.INFO))
             logger.addHandler(handler)
+            if level not in levels:
+                logger.warning("invalid log level; using INFO", extra={"component": "runlog"})
         except OSError as error:
             if handler:
                 handler.close()
             handler = None
             logger = None
-            print(f"file logging unavailable ({type(error).__name__})", file=sys.stderr)
+            stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+            print(f"[{stamp} UTC] [WARNING] [runlog] file logging unavailable "
+                  f"({type(error).__name__})", file=sys.stderr)
         token = _active.set(logger)
         try:
             return _invoke(function, argv, logger, component)

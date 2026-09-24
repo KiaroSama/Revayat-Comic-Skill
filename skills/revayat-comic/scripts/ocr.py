@@ -93,6 +93,8 @@ def read_document(
     already filled, is compared rather than re-read, so interrupting this stage
     and running it again costs the calls it did not finish and nothing else.
     """
+    timeout = providers.validate_timeout(timeout)
+    min_confidence = providers.validate_confidence(min_confidence)
     doc_path = Path(doc_path)
     doc = ir.load_doc(doc_path)
     root = ir.doc_dir(doc_path)
@@ -141,7 +143,7 @@ def read_document(
                 # looking like an answer from the new one.
                 engine=providers.engine_identity(engine),
                 eyes=providers.engine_identity(eyes) if eyes else None,
-                language=language, vision=vision,
+                language=language, vision=vision, min_confidence=min_confidence,
                 orientation=region.get("orientation") if orientation_aware
                 else None)
             if providers.completed(region, "ocr", "source_text",
@@ -239,15 +241,16 @@ def main(argv: list[str] | None = None) -> int:
                              "on a disagreement; it never writes")
     args = parser.parse_args(argv)
 
-    ir.emit(read_document(
+    report = read_document(
         args.doc,
         provider=args.provider,
         pages=ir.parse_pages(args.pages),
         min_confidence=args.min_confidence,
         timeout=args.timeout,
         vision=args.vision,
-    ))
-    return 0
+    )
+    ir.emit(report)
+    return 1 if report["totals"]["failed"] else 0
 
 
 if __name__ == "__main__":
