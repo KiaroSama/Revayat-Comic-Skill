@@ -9,6 +9,7 @@ followed by code, language-routing, license and primary grammar inspection.
 | Japanese, Korean, Chinese to Persian | [East Asian research](east-asian-persian.md) | Original language profiles, ruby/spacing/relationship checks, direct Persian translation and bounded context |
 | French and Spanish to Persian | [Romance-language research](romance-persian.md) | Address/locale/modality/negation checks, semantic review and additional contextual evaluation cases |
 | Comparable translation skills | Notes above; [translation-agent](https://github.com/andrewyng/translation-agent/tree/e0fc605acbb5d78cb7a58a98bc8bd8f0056df49c), [scientific Persian skill](https://github.com/isArman/scientific-fa-translation-skill/tree/eaded241eb109f3060a7ab7f73a1629cca3f3f07) | Targeted accuracy/fluency/voice/term review, not compulsory model calls or academic prose |
+| Round-six GitHub skill comparison | [Comic and image-translation skills](round6-github-skills.md) | Ground implied subjects and irony in the panel exchange; add two original human-review cases without external image uploads |
 | Page geometry and restoration | Primary references below | PDF point-size preservation independent of raster size, enhancement provenance and quality inspection |
 
 The active skill loads `references/source-languages.md`; the optional machine
