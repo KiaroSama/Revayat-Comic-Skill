@@ -23,6 +23,16 @@ So look at both images the worksheet names, in this order:
 
 Then write the worksheet. `src:` is what the balloon says. `fa:` is the Persian.
 
+When a short line could name more than one person or object, inspect the
+answering balloon and visible action before deciding its Persian subject.
+For example, “arrived” can refer to a courier while the parcel is still in
+their hands. If the panel does not settle it, leave a `note:` for review
+instead of inventing certainty. Likewise, praise beside a repeated mishap may
+be irony: keep the complaint and the speaker's voice without adding a new joke.
+Record the visual or neighboring-dialogue reason in the activity log before
+approving a compressed `fa:` variant. The [original contextual cases](../../../evaluation/README.md)
+exercise these distinctions; their automatic scores cannot certify them.
+
 ## Three passes, in this order
 
 One pass that reads, writes and fits at the same time is where meaning gets
