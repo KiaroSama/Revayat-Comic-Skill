@@ -46,6 +46,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import pageir as ir  # noqa: E402  (must follow the sys.path bootstrap)
+import wire_json  # noqa: E402
 
 #: Advertised to a client at `initialize`. This is the revision this server was
 #: written against; a client asking for another is answered anyway, because the
@@ -102,7 +103,14 @@ def _describe(stage: str) -> str:
     cannot drift from what the stage actually does — the failure this project
     has hit three times in documentation and now tests for.
     """
-    module = importlib.import_module(stage_module(stage))
+    try:
+        module = importlib.import_module(stage_module(stage))
+    except Exception:
+        # Discovery must still expose healthy tools when one stage is
+        # unavailable. Invocation reports the detailed stage failure.
+        from runlog import event
+        event("WARNING", "a stage is unavailable during discovery", component="server")
+        return f"The {stage} stage is unavailable in this installation."
     doc = (module.__doc__ or "").strip().splitlines()
     return doc[0].strip() if doc else f"the {stage} stage"
 
@@ -214,7 +222,10 @@ def run(name: str, args: list[str] | None = None) -> dict[str, Any]:
                 "error": f"args[{index}] is a {type(value).__name__}; every "
                          f"argument has to be a string or a number — "
                          f'e.g. ["--doc", "work/comic.json"]'}
-    args = [str(a) for a in args]
+    try:
+        args = [str(a) for a in args]
+    except (ValueError, OverflowError):
+        return {"ok": False, "stage": stage, "error": "argument exceeds the supported numeric range"}
     reason = ""
     with _STDOUT_LOCK:
         captured, complaint = io.StringIO(), io.StringIO()
@@ -428,8 +439,8 @@ def serve_mcp(stream_in=None, stream_out=None) -> int:
         if not line:
             continue
         try:
-            message = json.loads(line)
-        except (json.JSONDecodeError, UnicodeDecodeError):
+            message = wire_json.loads(line)
+        except (ValueError, RecursionError):
             reply = _error(None, -32700, "invalid JSON")
         else:
             reply = handle(message)
@@ -519,8 +530,8 @@ def _handler_class(token: str):
                 return self._send(400, {"ok": False,
                                         "error": "the body must be UTF-8"})
             try:
-                body = json.loads(raw) if raw else {}
-            except json.JSONDecodeError:
+                body = wire_json.loads(raw) if raw else {}
+            except (ValueError, RecursionError):
                 return self._send(400, {"ok": False, "error": "invalid JSON"})
             if not isinstance(body, dict):
                 # `body.get("args")` on a list raises inside the handler
