@@ -268,9 +268,9 @@ def wants(provider, role: str, keyword: str) -> bool:
         # A C callable or a wrapper with no introspectable signature. Offering
         # it an argument it may not take is the riskier guess, so decline.
         return False
-    if keyword in parameters and parameters[keyword].kind in (
-            inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY):
-        return True
+    if keyword in parameters:
+        return parameters[keyword].kind in (
+            inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
     return any(p.kind is inspect.Parameter.VAR_KEYWORD
                for p in parameters.values())
 

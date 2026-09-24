@@ -71,6 +71,14 @@ def test_positional_only_parameter_is_not_offered_as_keyword():
     assert not providers.wants(Positional(), "ocr", "orientation")
 
 
+def test_positional_only_parameter_stays_positional_with_var_keywords():
+    class PositionalAndExtras:
+        def read(self, crop, language, orientation, /, **kwargs):
+            return "Hello"
+
+    assert not providers.wants(PositionalAndExtras(), "ocr", "orientation")
+
+
 @pytest.mark.parametrize("payload", [17, {}, [], b"hello", "", "   "])
 def test_text_provider_payload_must_be_nonempty_text(payload):
     class Invalid:
