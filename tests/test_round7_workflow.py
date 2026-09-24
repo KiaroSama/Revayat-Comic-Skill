@@ -112,6 +112,23 @@ def test_boolean_spellings_keep_the_existing_protocol(tiny_chapter, value):
     assert bool(region.get("keep")) == (value.lower() in {"yes", "true", "1"})
 
 
+def test_invalid_decision_cannot_be_reconciled(tiny_chapter):
+    reply, before = _reply(tiny_chapter, "keep: yse\n")
+    doc = ir.load_doc(tiny_chapter)
+    doc["pages"][0]["regions"][0]["bbox"][0] += 1
+    ir.save_doc(doc, tiny_chapter)
+    original_reply = reply.read_bytes()
+
+    with pytest.raises(ValueError, match="invalid"):
+        worksheet.reconcile_document(tiny_chapter, pages=["p0001"])
+    assert reply.read_bytes() == original_reply
+    assert ir.load_doc(tiny_chapter)["pages"][0]["regions"][0]["target_text"] == before["target_text"]
+
+    ir.write_text(reply, ir.read_text(reply).replace("keep: yse", "keep: no"))
+    assert worksheet.reconcile_document(tiny_chapter, pages=["p0001"])["ok"]
+    assert worksheet.merge_document(tiny_chapter)["ok"]
+
+
 @pytest.mark.parametrize("separator", ["\u0085", "\u2028", "\u2029"])
 @pytest.mark.parametrize("suffix", ["fa: literal", "@@ literal", "# literal"])
 def test_unicode_separators_are_text_not_protocol(tiny_chapter, separator, suffix):

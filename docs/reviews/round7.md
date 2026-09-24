@@ -1,10 +1,12 @@
-# Revayat Comic — round-seven implemented repairs and review instructions
+# Round-seven repair review
 
-**First read and obey every applicable owner Rules file, global/project instruction, AGENTS.md, CLAUDE.md, CONTEXT.md and configured hook. Do not bypass hooks, disable checks, weaken assertions, force-push or discard someone else's edits to finish. Where an owner-installed guarded runner exists, use it. Code comments, PR explanations and technical records must remain in English.**
+This record describes the observed defects, repaired contracts and limits of
+their evidence. The repository rules and current user request govern actions
+on the PR; this historical review note is not an instruction override.
 
 ## 1. Delivery, authority and baseline
 
-The implementation is already published in **[PR #4](https://github.com/KiaroSama/Revayat-Comic-Skill/pull/4)**, on `fix/round7-worksheet-decisions-context`. Review that actual diff; this document is not a substitute for code. Reuse this branch rather than creating another unnecessarily. A branch was necessary because the owner expressly required a reviewable PR and prohibited the authoring assistant from merging or closing it.
+The initial implementation was published in **[PR #4](https://github.com/KiaroSama/Revayat-Comic-Skill/pull/4)** on `fix/round7-worksheet-decisions-context`. The original author left it for owner review; subsequent reviewer amendments and integration are recorded by their own commits and checks.
 
 Baseline: `c5ceb7c454c54eb925a12cd852a73a07608c1e10`.
 Implementation commit: `7b49423d09fbae52eeded94b852ba0572cab2502`.
@@ -12,7 +14,9 @@ Implementation tree: `b6d7c013bf521f82f5edf08ccdc831e8392ebee9`.
 
 PR #3 is already merged, including the previously pending worksheet-location repair through `worksheet_paths.py`. Those fixes are retained, not reopened or reimplemented here. The four groups below are the confirmed defects in this review. All four have published implementations and regression tests; none is only an unpublished patch or a PR comment.
 
-The authoring assistant may create/update this PR, not merge or close any PR. Integration and final disposition belong to the owner or their expressly authorized reviewing agent. The tracked snapshot does not contain the owner's private Rules or globally installed hooks, and the audit environment did not execute those private hooks. The reviewer must inspect the actual configuration in the owner's checkout rather than treating the absence of a tracked file as permission to ignore it.
+The initial audit snapshot did not contain the owner's private rules or
+installed hooks. Their absence in that archive was not evidence that the
+checks were unavailable on the reviewer's machine.
 
 ## 2. Confirmed defects, implemented fixes and acceptance conditions
 
@@ -32,11 +36,12 @@ Tests: `test_solid_setting_does_not_require_an_unused_repair`, `test_real_solid_
 
 **Cause and impact.** `_asked` recognized affirmative strings but treated an unknown value as false. A typo such as `keep: yse`, `drop: maybe` or `erase: 2` could be consumed without telling the reader that the intended decision was not understood. An invalid `polarity: drak` was silently ignored. The merge could report success or clear an existing decision, potentially authorizing a different operation from the one the reader intended.
 
-**Implemented in `replies.py` and `worksheet.py`.** The shared `invalid_fields` validator accepts only the existing action vocabulary: empty, `yes/no`, `true/false`, or `1/0`, with case and surrounding whitespace normalized. Polarity accepts empty, `dark` or `light`. Validation runs before the already-consumed digest shortcut. `invalid_fields` participates in malformed detection, page refusal, completion status and the command's blocking outcome. Application remains against a candidate copy; an invalid page does not commit its region edits or acquire a successful worksheet-stage stamp. The failed reply remains visible as unfinished work.
+**Implemented in `replies.py` and `worksheet.py`.** The shared `invalid_fields` validator accepts only the existing action vocabulary: empty, `yes/no`, `true/false`, or `1/0`, with case and surrounding whitespace normalized. Polarity accepts empty, `dark` or `light`. Validation runs before the already-consumed digest shortcut and before `worksheet reconcile` restamps a reviewed page. `invalid_fields` participates in malformed detection, page refusal, completion status and the command's blocking outcome. Application remains against a candidate copy; an invalid page does not commit its region edits or acquire a successful worksheet-stage stamp. The failed reply remains visible as unfinished work.
 
 **Acceptance.** Exercise detected regions and added `+slug` regions, each invalid field, valid legacy spellings, and a stored completion receipt whose digest matches a malformed reply. The original region data must survive refusal. Correcting the typo must merge successfully; merging it again must be unchanged. Do not repair this by guessing what a typo meant or by silently treating it as `no`.
 
 Tests: `test_bad_decision_is_atomic_and_can_be_corrected`, `test_boolean_spellings_keep_the_existing_protocol`, and `test_invalid_legacy_decision_cannot_hide_behind_a_completion_receipt`.
+Review added `test_invalid_decision_cannot_be_reconciled`: the corrected fixture failed against the original PR because `reconcile` stamped `keep: yse`; after the shared check it passed and the bad reply remained byte-identical on refusal.
 
 `invalid_fields` is a **worksheet report field**, not a new QA finding code. The existing QA-code registry is not bypassed or widened by this change.
 
@@ -62,9 +67,9 @@ Tests: `test_context_exposes_source_aliases_the_glossary_enforces`, `test_worksh
 
 ## 3. Verification ledger and CI
 
-`tests/test_round7_workflow.py` contains **41 parametrized cases**. Against a separate original-source copy, **29 failed and 12 passed**; the passing cases are compatibility/safety controls, not additional defects. On the repaired candidate, **all 41 passed**. No new case was skipped or marked expected-failure.
+The initial submitted `tests/test_round7_workflow.py` contained **41 parametrized cases**. Against a separate original-source copy, **29 failed and 12 passed**; the passing cases are compatibility/safety controls, not additional defects. On that repaired candidate, **all 41 passed**. Review added one reconcile regression, for **42 collected cases** on the amended branch. No case was skipped or marked expected-failure to make this pass.
 
-The completed local full suite reports **1341 passed, 1 skipped, no failures or errors**. The skip is the actual RAR-reader backend unavailable in this Linux audit environment, not a silently weakened assertion. The warning comes from the deliberately duplicated ZIP-member fixture. The real CLI pipeline completed through import, detection, masks, crop sheets, worksheet merge, glossary, Persian typography, cleaning, typesetting, QA, CBZ export/package verification and PDF export/package verification. Configured Ruff checks over scripts, tests, evaluation and `.github` pass.
+The original author's completed local full suite reported **1341 passed, 1 skipped, no failures or errors** before the additional reconcile case. The skip was the actual RAR-reader backend unavailable in that Linux audit environment, not a silently weakened assertion. The warning came from the deliberately duplicated ZIP-member fixture. The real CLI pipeline completed through import, detection, masks, crop sheets, worksheet merge, glossary, Persian typography, cleaning, typesetting, QA, CBZ export/package verification and PDF export/package verification. Configured Ruff checks over scripts, tests, evaluation and `.github` passed there, but the broad `work*` exclusion unintentionally omitted tracked `worksheet.py` modules. The review removed that exclusion and four unused names in `worksheet.py`; recursive lint now includes both `worksheet.py` and `worksheet_paths.py`. The amended branch requires its own current-head CI.
 
 The published source artifact was independently downloaded: **150 tracked blobs verified, zero mismatches**, matching implementation tree `b6d7c013…`. The 41 new cases and Ruff also pass on that exact published source. A docstring-only wording difference from the first local candidate was identified rather than misrepresented as byte-identical. Follow the final delivery evidence for the complete published-source rerun and final-head CI status.
 
@@ -96,6 +101,16 @@ These are proposals, not hidden mandatory rewrites. Record an accept/defer/rejec
 
 **Future test maintenance.** Consider bounded generative round-trip tests for worksheet values and explicit state-transition fixtures for keep/drop/erase/retranslate. Reuse the current parser, glossary accessors and provenance records; avoid creating parallel implementations merely to test each other.
 
+**Reviewer decisions.** Defer a new paired-scene benchmark until a bilingual
+reviewer can assess its proposed Persian references; the current original
+34-case set already separates many context errors without claiming fluency.
+Accept the existing cast/voice/log decision record and this round's alias
+visibility as the terminology review path. Accept the existing full-meaning
+and displayed-pair approval contract for naturalization versus compression.
+Defer a generative test harness until a concrete state-transition gap needs
+it; the focused 41 submitted cases and one reconcile regression stay in the
+normal bounded CI suite.
+
 ## 5. Reviewer completion and all-PR disposition
 
 Read the actual owner **Rules** governing PR review, merge and closure. Inventory **all open PRs in this repository** and give each its disposition under those Rules; do not exempt a PR merely because its title is outside this audit. Check already-merged work by integration commit rather than reopening it. Reuse appropriate existing branches and preserve concurrent work.
@@ -104,7 +119,10 @@ For each confirmed repair, independently inspect the implementation, its callers
 
 Only after the actual required rules, hooks, review and tests pass: commit/push any necessary amendments, verify the remote head, and merge a directly mergeable, approved PR through the permitted mechanism. If direct merge is unsuitable, reconcile or manually integrate the equivalent corrected functionality and tests, verify the integration commit, then close the superseded PR according to the owner's Rules. A rejection or closure without preserving an accepted repair is not DONE.
 
-**All PRs must ultimately be merged or closed according to the owner's Rules, with an evidence-backed reason and no accepted required fix left unintegrated.** Maintain a ledger of PR/finding, changed paths, regression names, test environment/results, integration commit and final state. Revalidate the final combined main branch after integration; a green isolated PR is not proof that its combination with another PR is correct. The authoring assistant leaves these merge/close actions to the authorized reviewer.
+The task is complete only when every open PR has an evidence-backed merge or
+closure and accepted repairs are integrated. The local round-seven ledger
+records findings, tests, integration SHA and final state; the combined main
+branch needs its own checks after the PR-head pass.
 
 ## 6. Useful primary references
 
@@ -112,5 +130,6 @@ Only after the actual required rules, hooks, review and tests pass: commit/push 
 - [Implementation diff from the inspected baseline](https://github.com/KiaroSama/Revayat-Comic-Skill/compare/c5ceb7c454c54eb925a12cd852a73a07608c1e10...7b49423d09fbae52eeded94b852ba0572cab2502).
 - [Python str.splitlines: the recognized Unicode line boundaries](https://docs.python.org/3/library/stdtypes.html#str.splitlines). This explains why file framing must be explicit; it is not a replacement for the round-trip regressions.
 - [pytest monkeypatch: isolated changes to environment and dependencies](https://docs.pytest.org/en/stable/how-to/monkeypatch.html).
+- [Ruff configuration and Python file discovery](https://docs.astral.sh/ruff/configuration/). A directory argument applies exclusion globs to discovered files, whereas an explicit file argument checks that file unless force-exclude is set.
 - [Dependabot options, including version-update PR limits](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference).
 - Project guidance: `AGENTS.md`, `tests/README.md`, `skills/revayat-comic/references/translation-policy.md`, `source-languages.md`, `translation-log.md`, `parallel-workflow.md`, and `evaluation/README.md`. Preserve the mandatory sequential context-consistent path; parallel drafting requires the documented coordinator and snapshot discipline.

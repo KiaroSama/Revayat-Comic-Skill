@@ -37,8 +37,6 @@ from __future__ import annotations
 
 import argparse
 import copy
-import hashlib
-import json
 import re
 import sys
 from pathlib import Path
@@ -188,8 +186,9 @@ def reconcile_document(doc_path: str | Path, *, pages: Sequence[str],
         blocks = parse_worksheet(text)
         if (not _addresses_the_same_regions(blocks, page)
                 or any(block.get("_seen", 1) != 1 or block.get("_duplicate_fields")
+                       or invalid_fields(block)
                        for block in blocks.values())):
-            raise ValueError(f"{page_id}: reconcile the named regions and duplicate fields first")
+            raise ValueError(f"{page_id}: reconcile named regions, duplicate fields and invalid decisions first")
         pending.append((path, page, ir.sha256_bytes(text.encode("utf-8"))))
     for path, page, digest in pending:
         _restamp(path, page, expected=digest)
@@ -281,7 +280,6 @@ def merge_document(
 ) -> dict[str, Any]:
     doc_path = Path(doc_path)
     doc = ir.load_doc(doc_path)
-    root = ir.doc_dir(doc_path)
     folder = ir.worksheet_folder(doc_path, doc, worksheets)
     if worksheets and pages != []:
         doc["meta"]["worksheets"] = str(folder)
@@ -472,7 +470,6 @@ def merge_document(
 def status(doc_path: str | Path, worksheets: str | Path | None = None) -> dict[str, Any]:
     doc_path = Path(doc_path)
     doc = ir.load_doc(doc_path)
-    root = ir.doc_dir(doc_path)
     folder = ir.worksheet_folder(doc_path, doc, worksheets)
 
     by_id = {page["id"]: page for page in doc["pages"]}
