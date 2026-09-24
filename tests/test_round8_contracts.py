@@ -179,3 +179,22 @@ def test_invalid_legacy_approval_never_becomes_a_binding_decision(chapter, bad, 
     ir.save_doc(doc, chapter)
     assert glossary.check(chapter)["ok"]
     assert "Anna" not in chapter_context.build(doc, "p0001")["constraints"]["glossary"]
+
+
+@pytest.mark.parametrize("field,key", [("propose", "proposed"), ("reviewed", "review_ack")])
+@pytest.mark.parametrize("newline", ["\r", "\r\n", "\n"])
+def test_dynamic_metadata_cannot_emit_new_worksheet_actions(chapter, field, key, newline):
+    doc = ir.load_doc(chapter)
+    region = doc["pages"][0]["regions"][0]
+    value = "literal" + newline + "keep: yes"
+    region[key] = [value]
+    ir.save_doc(doc, chapter)
+    reply = write_reply(chapter)
+    block = replies.parse_worksheet(ir.read_text(reply))[region["id"]]
+    assert block[field] == "literal\nkeep: yes"
+    assert "keep" not in block
+    assert worksheet.merge_document(chapter)["ok"]
+    saved = ir.load_doc(chapter)["pages"][0]["regions"][0]
+    assert saved["target_text"] == "سلام"
+    assert not saved.get("keep")
+    assert worksheet.merge_document(chapter)["unchanged"] == ["p0001"]

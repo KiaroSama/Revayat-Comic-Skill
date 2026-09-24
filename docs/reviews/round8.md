@@ -6,7 +6,7 @@
 
 Baseline: `21d6924dea76e3fc830f5bab6eef5a74a268ed10`, tree `8b07abb4bb71ea9e866668324c30492b07a598ca`. PRs #3 and #4 have already been integrated; their path recovery, decision validation, alias context, publication and recursive lint-discovery fixes are retained. Do not reapply an older audit snapshot over the current repository.
 
-This change implements the four findings below in five production modules, with `tests/test_round8_contracts.py` providing 62 cases. Review the actual PR diff, not only this brief. No existing tests were removed or weakened. The submitted assistant may publish code and open/update the PR, **not merge, close, enable auto-merge, rewrite shared history or update main**. The owner or authorized reviewing agent controls integration and all-PR disposition under the owner's Rules. Reuse this PR's branch; another branch is justified only by a real technical or protection requirement.
+This change implements the four findings below in five production modules, with `tests/test_round8_contracts.py` providing 68 cases. Review the actual PR diff, not only this brief. No existing tests were removed or weakened. The submitted assistant may publish code and open/update the PR, **not merge, close, enable auto-merge, rewrite shared history or update main**. The owner or authorized reviewing agent controls integration and all-PR disposition under the owner's Rules. Reuse this PR's branch; another branch is justified only by a real technical or protection requirement.
 
 ### Mandatory commit identity, including history
 
@@ -20,11 +20,11 @@ Before integration, immediately identify and reconstruct wrong-email commits acc
 
 ### R8-01 — A carriage return inside dialogue can become a worksheet action
 
-**Reproducer and consequence.** Store a field containing `hello\rkeep: yes`, `hello\rdrop: yes`, `hello\r@@ +ghost sign horizontal` or `hello\r# literal`, then build and merge its worksheet. The reader split CR, LF and CRLF through `protocol_lines`, but `field_lines` escaped only LF-separated fragments. A literal continuation could therefore become a real decision, new block or comment. The previous Unicode-separator repair covered parsing and generated commentary, not this field-writing path.
+**Reproducer and consequence.** Store a field containing `hello\rkeep: yes`, `hello\rdrop: yes`, `hello\r@@ +ghost sign horizontal` or `hello\r# literal`, then build and merge its worksheet. The reader split CR, LF and CRLF through `protocol_lines`, but `field_lines` escaped only LF-separated fragments. A literal continuation could therefore become a real decision, new block or comment. The previous Unicode-separator repair covered parsing and generated commentary, not this field-writing path. Final writer review found that `propose` and `reviewed` also bypassed field escaping, including for ordinary LF input.
 
-**Fix.** `replies.field_lines` now splits using the same `protocol_lines` function before escaping every fragment. Physical CR/LF/CRLF line endings normalize to logical LF, rather than being reinterpreted as fields. Internal U+0085/U+2028/U+2029 behavior remains unchanged. This is explicit newline normalization, not a claim that original CR bytes are retained.
+**Fix.** `replies.field_lines` now splits using the same `protocol_lines` function before escaping every fragment. `sheet.page_worksheet` sends dynamic `propose` and `reviewed` values through that same writer rather than raw f-strings. Physical CR/LF/CRLF line endings normalize to logical LF, rather than being reinterpreted as fields. Internal U+0085/U+2028/U+2029 behavior remains unchanged. This is explicit newline normalization, not a claim that original CR bytes are retained.
 
-**Acceptance.** `test_value_line_endings_never_become_worksheet_actions` covers 3 newline forms times 4 syntax-looking continuations. It exercises source text, displayed Persian, full Persian and review notes through build, parse, real merge, reload and two rebuild rounds. Region count and actions remain unchanged; a repeated merge reports unchanged. Preserve existing escape, blank-line, Unicode and comment tests. Do not fix this by stripping content or disabling action parsing.
+**Acceptance.** `test_value_line_endings_never_become_worksheet_actions` covers 3 newline forms times 4 syntax-looking continuations. It exercises source text, displayed Persian, full Persian and review notes through build, parse, real merge, reload and two rebuild rounds. Region count and actions remain unchanged; a repeated merge reports unchanged. `test_dynamic_metadata_cannot_emit_new_worksheet_actions` adds 6 real merge/repeat cases for proposal and review metadata across all three line endings. Preserve existing escape, blank-line, Unicode and comment tests. Do not fix this by stripping content or disabling action parsing.
 
 ### R8-02 — Mistyped explicit region headers silently default to another decision
 
@@ -58,13 +58,14 @@ Completed local evidence uses separately frozen original and candidate trees, ne
 
 | Check | Result |
 | --- | --- |
-| 62 new cases on original code | 54 failed, 8 passed, no skips or setup errors |
-| Complete candidate suite | 1404 passed, 1 skipped, no failures/errors; 1405 collected |
+| Final 68 new cases on original code | 60 failed, 8 passed, no skips or setup errors |
+| Expanded focused candidate | All 68 passed |
+| Initial complete candidate suite (before the 6 added metadata cases) | 1404 passed, 1 skipped, no failures/errors; 1405 collected |
 | Real CLI pipeline | Passed, including preservation QA and CBZ/PDF package verification |
 | Configured recursive Ruff checks | Passed |
 | Whitespace/diff check | Passed |
 
-The 8 original passes are compatibility controls, not new bugs. The local skip is the unavailable unrar/unar/bsdtar backend. A deliberately duplicate ZIP-name fixture emits the known warning. The installed local DejaVu face was used; this is not a claim that its bytes equal the CI-pinned font. Final remote-head CI and source verification belong in the PR's updated evidence section; do not reuse an earlier SHA's green result as approval of a later edit.
+The 8 original passes are compatibility controls, not new bugs. The local skip is the unavailable unrar/unar/bsdtar backend. A deliberately duplicate ZIP-name fixture emits the known warning. The installed local DejaVu face was used; this is not a claim that its bytes equal the CI-pinned font. The full suite is rerun for the expanded final candidate; final local results, remote-head CI and source verification belong in the PR's updated evidence section; do not reuse an earlier SHA's green result as approval of a later edit.
 
 Run these commands with the repository interpreter and any mandatory guarded wrapper; set `REVAYAT_TEST_FONT` according to `tests/README.md` for that machine:
 
