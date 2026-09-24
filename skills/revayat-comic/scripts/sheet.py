@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from glossary import is_locked
 import pageir as ir
 import falint
 from replies import field_lines, protocol_lines
@@ -69,8 +70,8 @@ def _glossary_table(doc: dict[str, Any], limit: int = 40) -> list[str]:
     entries = doc.get("glossary", {}).get("entries", {})
     with_target = [(source, entry) for source, entry in entries.items()
                    if entry.get("target")]
-    binding = [pair for pair in with_target if pair[1].get("locked")]
-    suggested = [pair for pair in with_target if not pair[1].get("locked")]
+    binding = [pair for pair in with_target if is_locked(pair[1])]
+    suggested = [pair for pair in with_target if not is_locked(pair[1])]
     if not with_target:
         return []
 

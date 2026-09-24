@@ -61,6 +61,19 @@ def _entry(source: str, *, role: str = "", first: str = "") -> dict[str, Any]:
     }
 
 
+def is_locked(entry: dict[str, Any]) -> bool:
+    """Read an explicit approval; malformed legacy state needs a decision.
+
+    A string such as "false" is not approval, and silently demoting a corrupt
+    approval to a suggestion would hide the need to review it. New writes are
+    validated too, but hand-edited and older documents use this read boundary.
+    """
+    locked = entry.get("locked", False)
+    if type(locked) is not bool:
+        raise ValueError("glossary `locked` must be a boolean; explicitly correct the entry")
+    return locked
+
+
 def _promote(entry: dict[str, Any], role: str) -> None:
     """Raise an entry's role, never lower it.
 
@@ -87,7 +100,7 @@ def set_target(entry: dict[str, Any], target: str, *,
     """
     target = (target or "").strip()
     previous = (entry.get("target") or "").strip()
-    locked = entry.get("locked") if was_locked is None else was_locked
+    locked = is_locked(entry) if was_locked is None else was_locked
     if locked and previous and previous != target:
         entry.setdefault("previous", []).append({
             "target": previous,
@@ -224,7 +237,9 @@ def _string_list(value: Any) -> list[str]:
     been written by hand or by an older build.
     """
     if isinstance(value, (list, tuple)):
-        return [str(item).strip() for item in value if str(item).strip()]
+        # Older handwritten documents may still contain malformed entries.
+        # Never turn an object, null or number into a newly approved spelling.
+        return [item.strip() for item in value if isinstance(item, str) and item.strip()]
     return []
 
 
@@ -299,7 +314,7 @@ def check(doc_path: str | Path, *, limit: int | None = 30) -> dict[str, Any]:
     locked = {
         source: entry
         for source, entry in entries.items()
-        if entry.get("locked") and entry.get("target")
+        if is_locked(entry) and entry.get("target")
     }
     if not locked:
         return {"ok": True, "locked": 0, "drift": [],
@@ -350,9 +365,7 @@ def _affected(doc: dict[str, Any], term: str, previous: str,
     touched = []
     # The Persian side: the spelling being replaced, plus the approved forms of
     # it, so a line that used an inflected approved form is found too.
-    spellings = [previous] + [str(form).strip()
-                              for form in ((entry or {}).get("target_forms") or [])
-                              if str(form).strip()]
+    spellings = [previous] + _string_list((entry or {}).get("target_forms"))
     for _page, region in ir.iter_regions(doc):
         if region.get("dropped"):
             continue
@@ -381,12 +394,16 @@ def validate(record: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("a glossary entry has to be an object, or a string "
                          "holding the Persian for it")
     checked = dict(record)
+    if "locked" in checked and type(checked["locked"]) is not bool:
+        raise ValueError("`locked` must be a JSON boolean, not a truthy value")
     for key in ("aliases", "target_forms"):
         if key in checked and not isinstance(checked[key], (list, tuple)):
             raise ValueError(
                 f"`{key}` has to be a list of written forms, and this is "
                 f"{type(checked[key]).__name__}. A bare string is read one "
                 f"character at a time, which approves every letter in it")
+        if key in checked and any(not isinstance(form, str) for form in checked[key]):
+            raise ValueError(f"`{key}` must contain only text forms")
     for key in ("target", "role", "note"):
         if key in checked and checked[key] is not None \
                 and not isinstance(checked[key], str):
@@ -395,6 +412,12 @@ def validate(record: dict[str, Any]) -> dict[str, Any]:
     if role and role not in ROLES:
         raise ValueError(f"`role` has to be one of {', '.join(ROLES)}")
     return checked
+
+
+def _validate_source(source: Any) -> None:
+    """Reject unusable table keys before any canonical decision changes."""
+    if not isinstance(source, str) or not source.strip():
+        raise ValueError("glossary source must be nonempty text")
 
 
 def set_entry(doc: dict[str, Any], source: str, record: dict[str, Any]
@@ -406,6 +429,7 @@ def set_entry(doc: dict[str, Any], source: str, record: dict[str, Any]
     assigned `entry["target"] = …` directly and preserved nothing, so the
     guarantee existed only for callers that already knew about it.
     """
+    _validate_source(source)
     record = validate(record)
     entries = doc.setdefault("glossary", {}).setdefault("entries", {})
     entry = entries.setdefault(source, _entry(source))
@@ -463,6 +487,7 @@ def apply_file(doc_path: str | Path, table: str | Path) -> dict[str, Any]:
                   else {"locked": True, **value} if isinstance(value, dict)
                   else value)
         try:
+            _validate_source(source)
             records[source] = validate(record)
         except ValueError as error:
             problems.append(f"{source}: {error}")
