@@ -213,7 +213,7 @@ def page_worksheet(doc: dict[str, Any], page: dict[str, Any], fingerprint: str) 
         if region.get("speaker"):
             lines += field_lines("speaker", region["speaker"])
         if region.get("proposed"):
-            lines.append(f"propose: {', '.join(region['proposed'])}")
+            lines += field_lines("propose", ", ".join(region["proposed"]))
         if region.get("target_full"):
             lines += field_lines("fa_full", region["target_full"])
         if region.get("review_ack"):
@@ -222,7 +222,7 @@ def page_worksheet(doc: dict[str, Any], page: dict[str, Any], fingerprint: str) 
             if valid:
                 carried = [code + "@" + falint.compression_fingerprint(region)
                            if code == "compressed-variant" else code for code in valid]
-                lines.append(f"reviewed: {', '.join(carried)}")
+                lines += field_lines("reviewed", ", ".join(carried))
         # Decisions already taken are written back out. An ABSENT field resets
         # them at the next merge, so a rebuilt worksheet silently undid every
         # `drop`, `keep` and `erase` a reader had reviewed — and the notes with
