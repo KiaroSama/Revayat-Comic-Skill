@@ -149,19 +149,24 @@ def test_a_solid_free_lettering_mask_accepts_a_native_provider(translated):
     thing."""
 
     doc = ir.load_doc(translated)
-    doc["meta"]["free_lettering_mask"] = "solid"
-    # `mask` writes this onto each page as it builds that page's masks, which
-    # is the only moment it is known — and the page is believed over the
-    # document. This fixture is declaring what its masks are.
-    for page in doc["pages"]:
-        page["free_lettering_mask"] = "solid"
+    page = doc["pages"][0]
+    patch = ir.new_region(f"{page['id']}r999", [16, 16, 32, 16],
+                          kind="sign", detector="reader", confidence=1.0)
+    page["regions"].append(patch)
     ir.save_doc(doc, translated)
+    # Build the claimed solid mask instead of merely changing its metadata.
+    masks.build_document(translated, solid_free=True)
+    patch = ir.find_region(ir.load_doc(translated), patch["id"])
+    assert not patch.get("balloon") and ir.may_be_edited(patch, "keep")
+    assert (masks.load_mask(translated.parent / patch["mask"]) == 255).all()
 
     with pytest.raises(ValueError, match="--provider"):
         clean.clean_document(translated)
 
     report = clean.clean_document(translated, provider="fake-image-edit")
     assert report["provider"] == "fake-image-edit"
+    assert report["totals"]["external"] >= 1
+    assert not report["refused_pages"]
 
 
 def test_what_the_provider_did_survives_in_the_document(translated, monkeypatch):

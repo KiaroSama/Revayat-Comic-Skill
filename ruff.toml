@@ -11,7 +11,9 @@
 # .github/workflows/ci.yml and the floor stated in requirements.txt.
 target-version = "py310"
 
-exclude = [".revayat-venv", "work*", "out", "graphify-out", "plans"]
+# Git already ignores root work directories. A bare `work*` also excludes
+# tracked worksheet.py modules from recursive lint discovery.
+exclude = [".revayat-venv", "out", "graphify-out", "plans"]
 
 [lint]
 # Ruff's own default selection, written out rather than inherited, so that a

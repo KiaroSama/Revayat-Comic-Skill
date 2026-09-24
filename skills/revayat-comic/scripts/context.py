@@ -184,6 +184,19 @@ def _approved_forms(entry: dict[str, Any]) -> list[str]:
             if form != (entry.get("target") or "").strip()]
 
 
+def _glossary_constraint(term: str, entry: dict[str, Any]) -> str | dict[str, Any]:
+    """Expose the same approved source and target forms that QA enforces."""
+    import glossary
+
+    target = entry.get("target", "")
+    forms = _approved_forms(entry)
+    aliases = glossary.forms(term, entry)[1:]
+    if not forms and not aliases:
+        return target
+    return {"target": target, **({"forms": forms} if forms else {}),
+            **({"source_aliases": aliases} if aliases else {})}
+
+
 def _speaking_on(doc: dict[str, Any], page_id: str) -> set[str]:
     """Who actually talks on the page being translated."""
     for page in doc["pages"]:
@@ -308,7 +321,7 @@ def preflight(doc_path: Path, doc: dict[str, Any], page_id: str, *,
     One function, because there were two answers. The CLI refused when an
     earlier page's reply was unmerged; `translate_document` built the package
     itself and asked nothing, so the automatic path did silently what the
-    manual path refused to do.
+    manual path was written to refuse.
     """
     folder = worksheet_folder(doc_path, doc, worksheets)
     behind, unverified = unmerged_before(doc_path, doc, page_id,
@@ -393,9 +406,7 @@ def build(doc: dict[str, Any], page_id: str, *,
     # both. The plain string stays the common case, so the package a chapter
     # without attached forms sends is unchanged.
     glossary = {
-        term: (entry.get("target", "") if not _approved_forms(entry)
-               else {"target": entry.get("target", ""),
-                     "forms": _approved_forms(entry)})
+        term: _glossary_constraint(term, entry)
         for term, entry in entries.items()
         if isinstance(entry, dict) and entry.get("locked")
         and (entry.get("target") or "").strip()

@@ -37,8 +37,6 @@ from __future__ import annotations
 
 import argparse
 import copy
-import hashlib
-import json
 import re
 import sys
 from pathlib import Path
@@ -56,6 +54,7 @@ from replies import (  # noqa: F401 - re-exported: the protocol and the
     _add_region,
     _apply,
     _apply_page,
+    invalid_fields,
     parse_worksheet,
     reply_digest,
 )
@@ -187,8 +186,9 @@ def reconcile_document(doc_path: str | Path, *, pages: Sequence[str],
         blocks = parse_worksheet(text)
         if (not _addresses_the_same_regions(blocks, page)
                 or any(block.get("_seen", 1) != 1 or block.get("_duplicate_fields")
+                       or invalid_fields(block)
                        for block in blocks.values())):
-            raise ValueError(f"{page_id}: reconcile the named regions and duplicate fields first")
+            raise ValueError(f"{page_id}: reconcile named regions, duplicate fields and invalid decisions first")
         pending.append((path, page, ir.sha256_bytes(text.encode("utf-8"))))
     for path, page, digest in pending:
         _restamp(path, page, expected=digest)
@@ -280,7 +280,6 @@ def merge_document(
 ) -> dict[str, Any]:
     doc_path = Path(doc_path)
     doc = ir.load_doc(doc_path)
-    root = ir.doc_dir(doc_path)
     folder = ir.worksheet_folder(doc_path, doc, worksheets)
     if worksheets and pages != []:
         doc["meta"]["worksheets"] = str(folder)
@@ -299,6 +298,7 @@ def merge_document(
         "kept": [],
         "reclassified": [],
         "bad_kind": [],
+        "invalid_fields": [],
         "missing_outputs": [],
         "missing_regions": [],
         "unknown_regions": [],
@@ -321,7 +321,7 @@ def merge_document(
     #: Which report lists mean "this page's reply did not fully land".
     trouble = ("missing_regions", "unknown_regions", "duplicate_regions",
                "empty_translation", "bad_added_regions",
-               "conflicting_actions", "duplicate_fields", "bad_kind")
+               "conflicting_actions", "duplicate_fields", "bad_kind", "invalid_fields")
     list_keys = [key for key, value in report.items() if isinstance(value, list)]
     for page_id, page in by_page.items():
         path = folder / f"{page_id}.done.txt"
@@ -341,13 +341,15 @@ def merge_document(
         # A reply is read whole and judged whole before any of it is trusted.
         page_report: dict[str, list[str]] = {key: [] for key in list_keys}
         for region_id, block in blocks.items():
+            page_report["invalid_fields"] += [
+                f"{region_id}: {problem}" for problem in invalid_fields(block)]
             if int(block.get("_seen", 1)) > 1:
                 page_report["duplicate_regions"].append(region_id)
             repeated = block.get("_duplicate_fields", "")
             for name in sorted({n for n in repeated.split(",") if n}):
                 page_report["duplicate_fields"].append(f"{region_id}: {name}")
         malformed = (page_report["duplicate_regions"]
-                     + page_report["duplicate_fields"])
+                     + page_report["duplicate_fields"] + page_report["invalid_fields"])
 
         state = _stamp_state(path, by_page, document_stamp, blocks)
         if state == "stale" and not force:
@@ -399,7 +401,7 @@ def merge_document(
                    + page_report["conflicting_actions"]
                    + page_report["duplicate_fields"]
                    + page_report["bad_kind"]
-                   + page_report["bad_added_regions"])
+                   + page_report["bad_added_regions"] + page_report["invalid_fields"])
         for key, values in page_report.items():
             report[key] += values
         if refused:
@@ -454,6 +456,7 @@ def merge_document(
         or report["stale_worksheets"] or report["empty_translation"]
         or report["bad_kind"] or report["bad_added_regions"]
         or report["conflicting_actions"] or report["duplicate_fields"]
+        or report["invalid_fields"]
     )
     report["ok"] = not blocking
     if report["added"]:
@@ -467,7 +470,6 @@ def merge_document(
 def status(doc_path: str | Path, worksheets: str | Path | None = None) -> dict[str, Any]:
     doc_path = Path(doc_path)
     doc = ir.load_doc(doc_path)
-    root = ir.doc_dir(doc_path)
     folder = ir.worksheet_folder(doc_path, doc, worksheets)
 
     by_id = {page["id"]: page for page in doc["pages"]}

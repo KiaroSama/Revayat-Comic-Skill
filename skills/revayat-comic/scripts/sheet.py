@@ -11,7 +11,7 @@ from typing import Any
 
 import pageir as ir
 import falint
-from replies import field_lines
+from replies import field_lines, protocol_lines
 
 #: Written into every sheet this build produces, so a reply that comes back
 #: without it is recognisable as one an older build handed out — whose
@@ -32,6 +32,8 @@ def _rows(pairs: list[tuple[str, dict[str, Any]]]) -> list[str]:
     long name was printed as most of itself — a binding spelling that was
     not the spelling, which is worse than no table at all.
     """
+    import glossary
+
     source_width = max(len(source) for source, _ in pairs)
     target_width = max(len(entry.get("target", "")) for _, entry in pairs)
     lines = [
@@ -44,6 +46,13 @@ def _rows(pairs: list[tuple[str, dict[str, Any]]]) -> list[str]:
             f"{entry.get('target', ''):<{target_width}}  "
             f"{entry.get('role', '')}"
         )
+        aliases = glossary.forms(source, entry)[1:]
+        forms = [form for form in glossary.target_forms(entry)
+                 if form != (entry.get("target") or "").strip()]
+        if aliases:
+            lines.append("#     Source aliases: " + ", ".join(aliases))
+        if forms:
+            lines.append("#     Alternative Persian forms: " + ", ".join(forms))
     return lines
 
 
@@ -235,7 +244,7 @@ def page_worksheet(doc: dict[str, Any], page: dict[str, Any], fingerprint: str) 
     safe = []
     for line in lines:
         if line.startswith("#"):
-            first, *rest = line.split("\n")
+            first, *rest = protocol_lines(line)
             safe.extend([first, *("# " + part for part in rest)])
         else:
             safe.append(line)
