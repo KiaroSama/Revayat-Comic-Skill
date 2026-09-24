@@ -212,6 +212,7 @@ original's SHA-256 is re-checked at the end.
 | `crops.py` | the overview and crop sheets the reader looks at |
 | `sheet.py` | the sheet a reader fills in: header, glossary table, blocks |
 | `worksheet.py` | the `@@` protocol, and every named way a reply can be wrong |
+| `worksheet_paths.py` | stable worksheet locations across independent working directories |
 | `glossary.py` | names and terms, and the drift check |
 | `falint.py` | Persian typography, mechanically |
 | `clean.py` | tiered repair and the mask-bounded composite |

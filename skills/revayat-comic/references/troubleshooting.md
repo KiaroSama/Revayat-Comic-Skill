@@ -115,6 +115,7 @@ widen the gate.
 | `bad_kind` | `kind:` is not one of the six | fix the value |
 | `bad_added_regions` | an `@@ +<name>` block has no usable `box: x y w h` | add one; there is no default for *where* |
 | `stale_worksheets` | the reply cannot prove the current region mapping | preserve its Persian and review/reconcile only the affected pages; see `recovery.md` |
+| worksheet status finds no external replies after changing working directory | an old recorded relative folder may have meant a different invocation directory | pass the actual folder once with `--worksheets`; preserve existing reply files and see `recovery.md` |
 
 `added` in the report lists regions you created with `@@ +<name>`. They have no
 mask yet, so run `mask` again before `clean`. Merging the same sheet twice
