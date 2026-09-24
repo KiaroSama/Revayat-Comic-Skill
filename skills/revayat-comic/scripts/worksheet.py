@@ -369,6 +369,16 @@ def merge_document(
             consumed.append(path)
             continue
 
+        # Validate scalar/header contracts before applying even to a copy.
+        # An invalid added orientation must be a reported refusal, not an
+        # exception from constructing a region before the refusal is checked.
+        if page_report["invalid_fields"]:
+            for key, values in page_report.items():
+                report[key] += values
+            page["worksheet_digest"] = digest
+            page["worksheet_clean"] = False
+            continue
+
         known = {region["id"] for region in page.get("regions", [])}
         additions = sorted(key for key in blocks if key.startswith("+"))
         page_report["unknown_regions"] += sorted(set(blocks) - known - set(additions))

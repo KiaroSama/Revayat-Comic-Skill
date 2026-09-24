@@ -75,7 +75,9 @@ def escape(line: str) -> str:
 
 def field_lines(name: str, value: str) -> list[str]:
     """Escape every value line symmetrically; a bare backslash preserves a blank."""
-    parts = str(value).split("\n")
+    # Match the reader's physical-line framing before escaping syntax.
+    # A lone CR otherwise exposes the following text as a new action.
+    parts = protocol_lines(str(value))
     first = escape(parts[0]) if value else ""
     return [f"{name}: {first}", *(escape(line) for line in parts[1:])]
 
@@ -116,10 +118,12 @@ def parse_worksheet(text: str) -> dict[str, dict[str, Any]]:
             # echoed back from the document and ignored; for an added one they
             # are the only place the kind is written, so they are kept.
             words = (header.group("rest") or "").split()
-            if words and words[0] in ir.REGION_KINDS:
-                current["_kind"] = words[0]
-            if len(words) > 1 and words[1] in ir.ORIENTATIONS:
-                current["_orientation"] = words[1]
+            # Keep explicit invalid values so validation can reject them.
+            # Discarding a typo silently defaulted an added speech balloon to SFX.
+            if words:
+                current["_kind"] = words[0].lower()
+            if len(words) > 1:
+                current["_orientation"] = words[1].lower()
             field = None
             blanks = 0
             continue
@@ -172,6 +176,10 @@ def invalid_fields(block: dict[str, Any]) -> list[str]:
     an invalid scalar that an older parser silently accepted.
     """
     errors = []
+    for name, allowed in (("_kind", ir.REGION_KINDS),
+                          ("_orientation", ir.ORIENTATIONS)):
+        if name in block and block[name] not in allowed:
+            errors.append(f"header {name[1:]}: expected {', '.join(allowed)}")
     for name in ACTIONS:
         value = block.get(name, "")
         if not isinstance(value, str) or value.strip().lower() not in {

@@ -37,6 +37,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from glossary import is_locked
 import languages
 import pageir as ir
 import worksheet
@@ -150,9 +151,11 @@ def _next(doc: dict[str, Any], page_id: str) -> list[dict[str, str]]:
         return []
     following = doc["pages"][position]
     out = []
-    for region in following.get("regions", [])[:MAX_NEXT]:
+    for region in following.get("regions", []):
         if region.get("dropped"):
             continue
+        if len(out) >= MAX_NEXT:
+            break
         source = (region.get("source_text") or "").strip()
         entry = {"region": region["id"], "kind": region["kind"],
                  "speaker": (region.get("speaker") or "").strip()}
@@ -408,7 +411,7 @@ def build(doc: dict[str, Any], page_id: str, *,
     glossary = {
         term: _glossary_constraint(term, entry)
         for term, entry in entries.items()
-        if isinstance(entry, dict) and entry.get("locked")
+        if isinstance(entry, dict) and is_locked(entry)
         and (entry.get("target") or "").strip()
     }
 
