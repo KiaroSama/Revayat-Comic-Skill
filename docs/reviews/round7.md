@@ -69,9 +69,9 @@ Tests: `test_context_exposes_source_aliases_the_glossary_enforces`, `test_worksh
 
 The initial submitted `tests/test_round7_workflow.py` contained **41 parametrized cases**. Against a separate original-source copy, **29 failed and 12 passed**; the passing cases are compatibility/safety controls, not additional defects. On that repaired candidate, **all 41 passed**. Review added one reconcile regression, for **42 collected cases** on the amended branch. No case was skipped or marked expected-failure to make this pass.
 
-The original author's completed local full suite reported **1341 passed, 1 skipped, no failures or errors** before the additional reconcile case. The skip was the actual RAR-reader backend unavailable in that Linux audit environment, not a silently weakened assertion. The warning came from the deliberately duplicated ZIP-member fixture. The real CLI pipeline completed through import, detection, masks, crop sheets, worksheet merge, glossary, Persian typography, cleaning, typesetting, QA, CBZ export/package verification and PDF export/package verification. Configured Ruff checks over scripts, tests, evaluation and `.github` passed there, but the broad `work*` exclusion unintentionally omitted tracked `worksheet.py` modules. The review removed that exclusion and four unused names in `worksheet.py`; recursive lint now includes both `worksheet.py` and `worksheet_paths.py`. The amended branch requires its own current-head CI.
+The original author's completed local full suite reported **1341 passed, 1 skipped, no failures or errors** before the additional reconcile case. The skip was the actual RAR-reader backend unavailable in that Linux audit environment, not a silently weakened assertion. The warning came from the deliberately duplicated ZIP-member fixture. The real CLI pipeline completed through import, detection, masks, crop sheets, worksheet merge, glossary, Persian typography, cleaning, typesetting, QA, CBZ export/package verification and PDF export/package verification. Configured Ruff checks over scripts, tests, evaluation and `.github` passed there, but the broad `work*` exclusion unintentionally omitted tracked `worksheet.py` modules. The review removed that exclusion and four unused names in `worksheet.py`; recursive lint now includes both `worksheet.py` and `worksheet_paths.py`. The amended branch passed its own current-head CI.
 
-The published source artifact was independently downloaded: **150 tracked blobs verified, zero mismatches**, matching implementation tree `b6d7c013…`. The 41 new cases and Ruff also pass on that exact published source. A docstring-only wording difference from the first local candidate was identified rather than misrepresented as byte-identical. Follow the final delivery evidence for the complete published-source rerun and final-head CI status.
+The initial published source artifact was independently downloaded: **150 tracked blobs verified, zero mismatches**, matching implementation tree `b6d7c013…`. The 41 initial cases and Ruff passed on that exact source under the exclusion described above. A docstring-only wording difference from the first local candidate was identified rather than misrepresented as byte-identical. The reviewer amendment has a separate exact-head check below.
 
 Preserve the current operating-system/Python matrix, literal dependency-floor lane, RAQM/fallback coverage, actual RAR capability checks and explicit skip allowlist. The new regression module is automatically collected by the existing `pytest tests` jobs. There is no reason to duplicate that suite in another workflow. Neither production dependency requirements nor the existing Dependabot configuration needs changing for these four fixes. The zero version-update PR limits for the two pip manifests are intentional; they are not evidence that security updates are disabled. Security-update enablement is separately configured and was not claimed verified through administrative settings.
 
@@ -111,18 +111,25 @@ Defer a generative test harness until a concrete state-transition gap needs
 it; the focused 41 submitted cases and one reconcile regression stay in the
 normal bounded CI suite.
 
-## 5. Reviewer completion and all-PR disposition
+## 5. Reviewer verification and PR disposition
 
-Read the actual owner **Rules** governing PR review, merge and closure. Inventory **all open PRs in this repository** and give each its disposition under those Rules; do not exempt a PR merely because its title is outside this audit. Check already-merged work by integration commit rather than reopening it. Reuse appropriate existing branches and preserve concurrent work.
+PR #4 was the only open PR at review; PR #3 had already been integrated.
+Review found the reconcile and lint-discovery gaps described above. Amended
+head `de5caee49d04522abfc6d0f87ff89c932744c646` passed
+[CI](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/runs/36059207852),
+[CodeQL](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/runs/36059208068),
+dependency review and source evidence. Seven CI JUnit artifacts each collected
+**1343 tests**, including all **42 round-seven cases** and the reconcile
+regression, with zero failures/errors. The allowed skips were macOS 7,
+Windows 1, and Ubuntu/dependency floors 0.
 
-For each confirmed repair, independently inspect the implementation, its callers, the regression and the before/after evidence. If you discover another genuine bug on the way, reproduce and fix it in the same review session, add a regression and rerun affected and combined gates. Do not leave actionable defects as “next time,” weaken a gate, or replace a required code fix with instructions. If repeated attempts produce the same failure, inspect the failed invariant instead of repeating the same command. Unavailable external prerequisites must be recorded precisely, never converted into fabricated success.
-
-Only after the actual required rules, hooks, review and tests pass: commit/push any necessary amendments, verify the remote head, and merge a directly mergeable, approved PR through the permitted mechanism. If direct merge is unsuitable, reconcile or manually integrate the equivalent corrected functionality and tests, verify the integration commit, then close the superseded PR according to the owner's Rules. A rejection or closure without preserving an accepted repair is not DONE.
-
-The task is complete only when every open PR has an evidence-backed merge or
-closure and accepted repairs are integrated. The local round-seven ledger
-records findings, tests, integration SHA and final state; the combined main
-branch needs its own checks after the PR-head pass.
+The original PR commits used a user-attributed email outside this repository's
+sole approved public identity. Their content was integrated in a fresh
+approved-identity commit `5524a34901c435a41035200f21901adbab439a01`;
+its tree exactly equals the reviewed PR head. [Main CI](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/runs/36060514785)
+passed all 14 jobs and [main CodeQL](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/runs/36060514771)
+passed on that SHA. PR #4 was closed with an integration note and its remote
+and local branches were deleted. No open PR remained after closure.
 
 ## 6. Useful primary references
 
