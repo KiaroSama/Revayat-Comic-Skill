@@ -13,7 +13,7 @@ folder is the set and the scorer.
 
 | | |
 | --- | --- |
-| `cases.json` | 32 cases across Japanese, Korean, Chinese, English, French and Spanish, each with difficulty tags, a semantic-unit count and **several** Persian candidates. The original 20, including five adversarial controls, are retained. Twelve new context-sensitive cases await bilingual review |
+| `cases.json` | 34 cases across Japanese, Korean, Chinese, English, French and Spanish, each with difficulty tags, a semantic-unit count and **several** Persian candidates. The original 20, including five adversarial controls, are retained. Fourteen context-sensitive cases await bilingual review |
 | `build_pages.py` | draws a layout template for each case — two speakers, a balloon, a second balloon for a continuation — and exports its source/context in an answer-free `.input.json` companion |
 | `score.py` | scores axis by axis, and refuses to produce one number |
 

@@ -677,6 +677,40 @@
    "balloon": [0.34, 0.12],
    "human_only": true,
    "human_note": "Preserve the tentative status and not yet; neither confirmation nor cancellation is warranted. References await bilingual review."
+  },
+  {
+   "id": "ctx-fr-04",
+   "language": "fr",
+   "source": "Génial, encore une panne.",
+   "gloss": "Great, another breakdown (ironic complaint).",
+   "context": "The tram has stopped for the third time. The speaker points to the stalled carriage with a tired expression; the companion is already late. The praise is ironic, not approval of the failure.",
+   "difficulty": ["irony", "scene-context", "voice-consistency"],
+   "units": 2,
+   "must_preserve": {},
+   "accept": [
+    "عالی شد، باز هم خراب شد!",
+    "به‌به، یه خرابی دیگه!"
+   ],
+   "balloon": [0.39, 0.13],
+   "human_only": true,
+   "human_note": "The panel and the previous breakdowns establish ironic frustration; retain another breakdown and avoid genuine praise. Multiple Persian voices are plausible and await bilingual review."
+  },
+  {
+   "id": "ctx-es-04",
+   "language": "es",
+   "source": "Ya llegó.",
+   "gloss": "The courier has arrived.",
+   "context": "The previous balloon asked whether the courier would reach the door soon. A person in the courier's uniform enters in this panel while the parcel is still with them. The implied subject is the courier, not a delivered parcel.",
+   "difficulty": ["implied-subject", "scene-context", "cross-balloon-reference"],
+   "units": 1,
+   "must_preserve": {},
+   "accept": [
+    "پیک رسید.",
+    "پیک اومد."
+   ],
+   "balloon": [0.30, 0.12],
+   "human_only": true,
+   "human_note": "Retain the arrived person from the answering panel. A generic package-delivery claim changes the subject; Persian register may vary. References await bilingual review."
   }
  ]
 }
