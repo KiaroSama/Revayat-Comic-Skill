@@ -2,10 +2,10 @@
 # is a syntax error before 3.10 — on 3.9 you get a traceback from the import,
 # not a helpful message. CI tests the oldest and newest supported interpreters.
 #
-# Note for whoever reads this after 2026-10-04: 3.10 reaches end of life on that
-# date and stops receiving security fixes. It is kept as the floor for now
-# because dropping it would strand users on a system Python; raising the floor
-# to 3.11 is a one-line change here and in the CI matrix.
+# Python 3.10 is now end-of-life (last release 3.10.22, 2026-10-01).
+# It remains a tested compatibility floor for users on an existing system Python,
+# not a security-supported runtime recommendation. Prefer a maintained Python;
+# raising the floor needs an explicit compatibility decision and CI/doc updates.
 
 # Core — required for every run.
 pillow>=10.0                  # page IO, and the Persian text renderer

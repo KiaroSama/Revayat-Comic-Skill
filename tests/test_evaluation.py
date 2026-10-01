@@ -284,7 +284,7 @@ def test_the_case_set_was_extended_not_rebuilt(score):
                      "cont-01b", "ell-01", "name-01", "mod-01", "fit-01",
                      "neg-03", "neg-04", "num-03", "num-04", "cont-02"):
         assert original in ids, original
-    assert len(cases) == 34
+    assert len(cases) == 38
     # And every new one carries more than one acceptable Persian form.
     for case in cases:
         assert len(case.get("accept") or []) >= 2, case["id"]

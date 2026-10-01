@@ -2,6 +2,8 @@
 
 # روایت کمیک — Revayat Comic
 
+<div align="center">
+
 [![CI](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/ci.yml)
 [![CodeQL روی main](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/codeql.yml)
 [![بررسی وابستگی‌ها](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/dependency-audit.yml/badge.svg?branch=main)](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/dependency-audit.yml)
@@ -9,30 +11,19 @@
 [![آزمون ابزارهای اختیاری](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/integration.yml/badge.svg?branch=main)](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/integration.yml)
 [![ثبت شواهد منبع PR](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/source-evidence.yml/badge.svg?event=pull_request)](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/source-evidence.yml)
 
+[![مجوز GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue)](LICENSE)
 [![نسخهٔ 1.0.0](https://img.shields.io/badge/Version-1.0.0-blue)](.claude-plugin/plugin.json)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue)](skills/revayat-comic/requirements.txt)
 [![ویندوز، لینوکس و مک](https://img.shields.io/badge/Platforms-Windows%20%7C%20Linux%20%7C%20macOS-4c1)](.github/workflows/ci.yml)
-[![مجوز GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue)](LICENSE)
-[![قالب Agent Skills](https://img.shields.io/badge/Format-Agent%20Skills-purple)](skills/revayat-comic/SKILL.md)
-[![افزونه‌های Claude، Cursor و Codex](https://img.shields.io/badge/Plugins-Claude%20%7C%20Cursor%20%7C%20Codex-purple)](#نصب)
-
-[![راهنمای زبان‌های مبدأ](https://img.shields.io/badge/Source-ja%20%7C%20ko%20%7C%20zh%20%7C%20fr%20%7C%20es%20%7C%20en%20%2B%20others-007b83)](skills/revayat-comic/references/source-languages.md)
-[![زبان مقصد فارسی](https://img.shields.io/badge/Target-Persian-007b83)](skills/revayat-comic/SKILL.md)
-[![ورودی‌های CBZ، CBR، PDF و تصویر](https://img.shields.io/badge/Input-CBZ%20%7C%20CBR%20%7C%20PDF%20%7C%20images-007b83)](skills/revayat-comic/SKILL.md)
-[![خروجی‌های CBZ، PDF و پوشهٔ تصاویر](https://img.shields.io/badge/Output-CBZ%20%7C%20PDF%20%7C%20pages-007b83)](skills/revayat-comic/SKILL.md)
-[![نسخهٔ Word قابل‌ویرایش برای بازبینی](https://img.shields.io/badge/Review-DOCX-007b83)](skills/revayat-comic/references/native-documents.md)
-[![رابط CLI و MCP](https://img.shields.io/badge/Interface-CLI%20%7C%20MCP-007b83)](skills/revayat-comic/references/serving.md)
-[![بازبینی حفظ پیکسل‌ها](https://img.shields.io/badge/QA-pixel%20preservation-007b83)](skills/revayat-comic/references/artwork-preservation.md)
-[![۳۴ مورد ارزیابی](https://img.shields.io/badge/Evaluation-34%20cases-007b83)](evaluation/README.md)
-
-[![ستاره‌های گیت‌هاب](https://img.shields.io/github/stars/KiaroSama/Revayat-Comic-Skill?style=flat)](https://github.com/KiaroSama/Revayat-Comic-Skill)
-[![فورک‌های گیت‌هاب](https://img.shields.io/github/forks/KiaroSama/Revayat-Comic-Skill?style=flat)](https://github.com/KiaroSama/Revayat-Comic-Skill/forks)
-[![ایرادهای باز](https://img.shields.io/github/issues/KiaroSama/Revayat-Comic-Skill?style=flat)](https://github.com/KiaroSama/Revayat-Comic-Skill/issues)
-[![درخواست‌های مرج باز](https://img.shields.io/github/issues-pr/KiaroSama/Revayat-Comic-Skill?style=flat)](https://github.com/KiaroSama/Revayat-Comic-Skill/pulls)
-[![مشارکت‌کنندگان](https://img.shields.io/github/contributors/KiaroSama/Revayat-Comic-Skill?style=flat)](https://github.com/KiaroSama/Revayat-Comic-Skill/graphs/contributors)
-[![آخرین commit شاخهٔ main](https://img.shields.io/github/last-commit/KiaroSama/Revayat-Comic-Skill/main?style=flat)](https://github.com/KiaroSama/Revayat-Comic-Skill/commits/main/)
 [![مستندات انگلیسی و فارسی](https://img.shields.io/badge/Docs-English%20%7C%20Persian-8a2be2)](README.md)
-[![حمایت مالی](https://img.shields.io/badge/Support-Donate-e75480)](#حمایت-مالی)
+[![Pillow](https://img.shields.io/badge/Built%20with-Pillow-007b83)](skills/revayat-comic/requirements.txt)
+
+[![NumPy](https://img.shields.io/badge/Built%20with-NumPy-007b83)](skills/revayat-comic/requirements.txt)
+[![OpenCV](https://img.shields.io/badge/Built%20with-OpenCV-007b83)](skills/revayat-comic/requirements.txt)
+[![PyMuPDF](https://img.shields.io/badge/Built%20with-PyMuPDF-007b83)](skills/revayat-comic/requirements.txt)
+[![Support donations](https://img.shields.io/badge/Support-donations-d04a9a)](#donate)
+
+</div>
 
 **ترجمهٔ مانگا، مانهوا، مانهوای چینی و کمیک به فارسی — و تحویل یک CBZ یا PDF که دست‌نخوردگیِ هنرِ صفحه در آن اثبات شده باشد.**
 
@@ -333,6 +324,8 @@ python evaluation/score.py --answers my-answers.json
 شکل کلی مسئله — تشخیص، OCR، ترجمه، پاک‌سازی، حروف‌چینی — همان چیزی است که پروژه‌های متن‌بازِ ترجمهٔ مانگا پیش از این درآورده‌اند: [manga-image-translator](https://github.com/zyddnys/manga-image-translator)، [BallonsTranslator](https://github.com/dmMaze/BallonsTranslator) و [comic-translate](https://github.com/ogkalu2/comic-translate). این یکی در جایی که خواندن اتفاق می‌افتد فرق دارد، و در اینکه حفظ نقاشی را چیزی می‌داند که باید *اثبات* شود — اما زمینه‌اش مالِ آن‌هاست.
 
 چیدمان متن فارسی بر [HarfBuzz](https://harfbuzz.github.io/) و [FriBidi](https://github.com/fribidi/fribidi) از طریق [Pillow](https://github.com/python-pillow/Pillow) استوار است، و جایی که Pillow راقم ندارد بر [arabic-reshaper](https://github.com/mpcabd/python-arabic-reshaper) و [python-bidi](https://github.com/MeirKriheli/python-bidi). تشخیص، ماسک و inpainting از [OpenCV](https://github.com/opencv/opencv) استفاده می‌کنند؛ ورودی و خروجی PDF از [PyMuPDF](https://github.com/pymupdf/PyMuPDF).
+
+<a id="donate"></a>
 
 ## حمایت مالی
 

@@ -91,6 +91,12 @@ Both transports:
 
 - **bound one message.** A stdio line over 1 MiB is refused unparsed, for the
   same reason the HTTP body is.
+- **bound decoded structure and numbers.** The shared decoder permits at most
+  128 container levels and 1024 integer digits, and refuses nonfinite numbers
+  (including overflowing exponents). Invalid JSON gets a protocol error while
+  the next valid request remains usable; interpreter-wide settings are unchanged.
+  Discovery still lists healthy tools when one stage cannot import, marking that
+  stage unavailable. Invocation reports its failure normally.
 - **answer a malformed envelope instead of dropping it.** A `jsonrpc` that is
   not `"2.0"`, a `method` that is not a string, an `id` that is an object, and
   an explicit `"id": null` all come back as JSON-RPC errors. Only a message

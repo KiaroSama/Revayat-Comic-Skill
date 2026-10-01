@@ -49,6 +49,22 @@ PR #6 is the combined candidate. Correct both author and committer identities to
 
 After the combined repairs, identity, hooks and tests are verified, the authorized reviewer may integrate the complete PR #6 result, then close PR #5 as superseded **with the integrating commit and evidence**. Alternatively, port the full verified equivalent onto the branch selected by the owner's Rules, check it again and dispose of both PRs accordingly. Do not close #5 before its accepted independent fixes are integrated. Do not merge its partial tree first and assume its missing code is resolved. Inventory every other open PR too and assign its Rules-defined disposition. Fix newly found genuine defects in the same review session; do not defer required code or repeatedly retry an unchanged failure. The authoring assistant leaves both PRs open.
 
+## Reviewer continuation
+
+The native reviewer found one additional legacy mutation path: `set_entry`
+converted malformed approval through `bool()` even though context, worksheets
+and QA used the shared typed guard. An optimized in-memory regression failed
+with `DID NOT RAISE ValueError`, then passed after mutation required an explicit
+boolean repair. Correcting a legacy false decision does not invent previously
+approved revision history; approved valid entries retain their existing history.
+
+The accepted source-first Persian integration is on demand through
+`references/persian-review.md`: a Persian-only speakability pass followed by
+source comparison, with suggestions accepted by the existing worksheet route.
+Four original evaluation microcases retain multiple proposed renderings and
+wrong controls. Semantic axes remain unscored; no model, corpus or upstream prose
+was imported, and no native-speaker quality improvement is claimed.
+
 ## Research record and useful references
 
 Primary documents were consulted for these additional mechanisms. Preserve the original research/optional Persian-quality guidance in `round8.md`; record further research in the location and format prescribed by the owner's Rules. This integration reuses inspected code already in the owner's repository, not an untested external model or a new dependency.

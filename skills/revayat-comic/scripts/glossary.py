@@ -437,7 +437,10 @@ def set_entry(doc: dict[str, Any], source: str, record: dict[str, Any]
     # edit REPLACES is asked of the state it found, not of the state it is
     # half-way through writing.
     previous = (entry.get("target") or "").strip()
-    was_locked = bool(entry.get("locked"))
+    # Corrupt legacy approval needs an explicit correction before mutation.
+    # That correction supplies the missing decision; it is not historical approval.
+    was_locked = (is_locked(entry) if type(entry.get("locked", False)) is bool
+                  or "locked" not in record else record["locked"])
     was = dict(entry)
 
     if "locked" in record:

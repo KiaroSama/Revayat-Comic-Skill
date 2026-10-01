@@ -56,6 +56,12 @@ $PY $SKILL_DIR/scripts/revayat-comic.py worksheet merge \
 An absent fingerprint, or an old fingerprint with its scheme removed, provides no geometry evidence.
 Stable IDs alone do not authorize migration. Reconciliation preserves the reply's
 Persian; it does not retranslate the page or waive duplicate/missing-region checks.
+Explicit kind/orientation typos are refused before region changes, including on
+added boxes and during reconciliation. Correct the named header rather than
+forcing it through. Field CR/LF/CRLF endings normalize to logical LF; action-like
+continuations remain literal text. Malformed legacy glossary approval requires
+an explicit boolean correction before reading or mutating that entry; the text
+`"false"` is not approval and does not create approved revision history.
 
 Rebuilt compression approvals carry a content fingerprint. Editing `fa`,
 `fa_full` or `src` leaves the old approval attached to its old meaning. After

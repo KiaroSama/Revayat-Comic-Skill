@@ -48,9 +48,11 @@ written in Persian. Ignore the balloon's size completely at this stage. A
 sentence written to fit is a sentence written twice, and the second one is
 always worse.
 
-**3 — Check, then fit.** Put the source and your Persian side by side and go
-through the list below. Only then look at whether it fits, and fix that as a
-layout problem first — see *Length*.
+**3 — Check, then fit.** Read the Persian alone for speakability, then put the
+source and revised Persian side by side and go through the list below. For
+stilted dialogue, drifting register or ambiguous replies, follow
+[persian-review.md](persian-review.md). Only then look at whether it fits,
+and fix that as a layout problem first — see *Length*.
 
 ## What has to survive the trip
 

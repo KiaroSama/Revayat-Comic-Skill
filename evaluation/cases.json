@@ -711,6 +711,70 @@
    "balloon": [0.30, 0.12],
    "human_only": true,
    "human_note": "Retain the arrived person from the answering panel. A generic package-delivery claim changes the subject; Persian register may vary. References await bilingual review."
+  },
+  {
+   "language": "en",
+   "units": 1,
+   "balloon": [0.4, 0.14],
+   "id": "review-negative-reply",
+   "source": "You didn't send it? — I did.",
+   "gloss": "The reply asserts that the speaker sent it.",
+   "context": "A colleague asks about an apparently unsent letter. The speaker points to the sent-message receipt and corrects the assumption.",
+   "difficulty": ["negative-question", "scene-context"],
+   "accept": ["فرستادم.", "چرا، فرستادمش."],
+   "wrong": "نه، نفرستادم.",
+   "human_only": true,
+   "human_note": "Judge the affirmed sending, not matching yes/no words; candidates await bilingual review."
+  },
+  {
+   "language": "en",
+   "units": 1,
+   "balloon": [0.4, 0.14],
+   "id": "review-register",
+   "source": "Could you wait here, Professor?",
+   "gloss": "A respectful request to wait here.",
+   "context": "A student addresses their professor using an established respectful register. The professor has not been addressed familiarly in earlier pages.",
+   "difficulty": ["voice-consistency", "register"],
+   "accept": ["استاد، می‌توانید اینجا منتظر بمانید؟", "استاد، لطفاً همین‌جا صبر می‌کنید؟"],
+   "wrong": "هی، اینجا وایسا!",
+   "human_only": true,
+   "human_note": "Compare respectful request and established relationship; fluent but blunt wording is not an equivalent. Candidates await bilingual review."
+  },
+  {
+   "language": "en",
+   "units": 1,
+   "balloon": [0.4, 0.14],
+   "id": "review-idiom",
+   "source": "Break a leg!",
+   "gloss": "A wish for success before a performance, not an injury request.",
+   "context": "A friend speaks to an actor immediately before the curtain rises. Nobody is injured or threatening anyone.",
+   "difficulty": ["idiom", "scene-context"],
+   "accept": ["موفق باشی!", "بترکونی!"],
+   "wrong": "پایت را بشکن!",
+   "human_only": true,
+   "human_note": "Judge the stage wish and voice from the scene; the literal injury changes meaning. Candidates await bilingual review."
+  },
+  {
+   "language": "en",
+   "units": 1,
+   "balloon": [0.4, 0.14],
+   "id": "review-protected-measurement",
+   "source": "Set port UART2 to 12.5 V.",
+   "gloss": "Keep the exact port identifier and voltage.",
+   "context": "A technician points to the port labeled UART2. A separate UART3 port must not be adjusted.",
+   "difficulty": ["quantity", "protected-string"],
+   "must_preserve": {
+    "numbers": [
+     "12.5"
+    ],
+    "terms": [
+     "UART2",
+     "V"
+    ]
+   },
+   "accept": ["ولتاژ درگاه UART2 را روی ۱۲٫۵ V تنظیم کن.", "درگاه UART2 رو روی 12.5 V بذار."],
+   "wrong": "درگاه UART3 رو روی 125 V بذار.",
+   "human_note": "Machine checks catch changed digits/label only; unit interpretation, register and full meaning still await bilingual review."
   }
  ]
 }

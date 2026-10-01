@@ -13,7 +13,7 @@ folder is the set and the scorer.
 
 | | |
 | --- | --- |
-| `cases.json` | 34 cases across Japanese, Korean, Chinese, English, French and Spanish, each with difficulty tags, a semantic-unit count and **several** Persian candidates. The original 20, including five adversarial controls, are retained. Fourteen context-sensitive cases await bilingual review |
+| `cases.json` | 38 cases across Japanese, Korean, Chinese, English, French and Spanish, each with difficulty tags, a semantic-unit count and **several** Persian candidates. The original 20, including five adversarial controls, are retained. Fourteen context-sensitive cases await bilingual review |
 | `build_pages.py` | draws a layout template for each case — two speakers, a balloon, a second balloon for a continuation — and exports its source/context in an answer-free `.input.json` companion |
 | `score.py` | scores axis by axis, and refuses to produce one number |
 
@@ -50,7 +50,14 @@ Their wording differs from the research/prompt examples. Their Persian
 candidates are authored proposals, not human-validated gold translations.
 Adequacy, fluency, voice and omissions/additions stay `null` until a person
 scores them. The total language distribution is 16 Japanese, 4 Korean,
-4 Chinese, 2 English, 4 French and 4 Spanish cases.
+4 Chinese, 6 English, 4 French and 4 Spanish cases.
+
+Four original `review-*` microcases add negative-question replies, established
+register, scene-selected idioms and an exact technical label/measurement. Each
+has multiple Persian candidates and a deliberately wrong control. The first
+three remain human-only; the last checks retained numbers/terms, not complete
+meaning. Their candidates are not bilingual-certified references. The shipped
+`references/persian-review.md` guide supplies the source-first review route.
 
 A check the scorer cannot decide is reported as `review` rather than scored: a
 Persian word beginning with `ن` may be a negated verb or may be a name, and
