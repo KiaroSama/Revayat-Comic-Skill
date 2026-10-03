@@ -40,9 +40,13 @@ into each row so a reviewer can judge the actual scene. A CLI exit of zero,
 Quantity checks compare finite decimal spellings without binary floating-point
 rounding. Signs, leading/trailing zeros and Unicode decimal digits normalize;
 compound alternatives such as `12:30` or `1/2` retain their order and separators.
+Each compound component also normalizes redundant zeros, so `012:030.00`
+can preserve `12:30`; a longer clock such as `12:30:45` cannot. Numeric fragments
+inside ASCII identifiers (`UART-3`, `HTTP/3`) or dotted versions (`1.2.3`) do not
+count as separate quantities. Attached units such as `12.5V` remain supported.
 Clock components can still be requested separately by a case. Scientific
-notation is not converted to a decimal value: list the required literal form
-or another accepted spelling explicitly. The existing comma-as-decimal
+notation is unsupported by numeric preservation, not converted to a decimal
+value; supply a supported finite-decimal or written-word alternative explicitly. The existing comma-as-decimal
 convention is retained; no thousands separator or unit conversion is inferred.
 Written-out alternatives are whole words/phrases, not prefixes of names or
 weekday compounds. `num-02` explicitly lists `سومین`, which its existing
@@ -78,6 +82,9 @@ has multiple Persian candidates and a deliberately wrong control. The first
 three remain human-only; the last checks retained numbers/terms, not complete
 meaning. Their candidates are not bilingual-certified references. The shipped
 `references/persian-review.md` guide supplies the source-first review route.
+`review-negative-reply` translates only the answer balloon, `I did.`; the prior
+`You didn't send it?` question is context, not a second sentence to translate.
+Its two Persian proposals and deliberately wrong control remain human-only.
 
 A check the scorer cannot decide is reported as `review` rather than scored: a
 Persian word beginning with `ن` may be a negated verb or may be a name, and

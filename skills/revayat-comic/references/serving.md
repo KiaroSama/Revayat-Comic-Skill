@@ -90,7 +90,17 @@ The HTTP transport therefore:
 Both transports:
 
 - **bound one message.** A stdio line over 1 MiB is refused unparsed, for the
-  same reason the HTTP body is.
+  same reason the HTTP body is. Native MCP reads physical LF-delimited byte frames
+  before strict UTF-8 decoding, including when stdin has a text wrapper. Bad bytes
+  produce `-32700`, null ID and fixed `invalid JSON`, without stage dispatch or
+  request echo; the next healthy frame in the same session still works. LF, CRLF,
+  final EOF without LF, Persian and astral text remain supported. The transport
+  borrows a fresh unread exclusive buffer and never closes it; mixing another
+  reader with it is unsupported. Oversize discard stops after at most four limits
+  plus one byte on binary streams. Decoded-only library streams keep character
+  caps and can overshoot that byte budget by one capped chunk. An unfinished huge
+  frame requires reconnecting; arbitrary stdin gains no inactivity deadline.
+  Fixed warning kinds go to the shared run log, never protocol stdout.
 - **bound decoded structure and numbers.** The shared decoder permits at most
   128 container levels and 1024 integer digits, and refuses nonfinite numbers
   (including overflowing exponents). Invalid JSON gets a protocol error while

@@ -410,43 +410,34 @@ def serve_mcp(stream_in=None, stream_out=None) -> int:
     stream_in = sys.stdin if stream_in is None else stream_in
     stream_out = sys.stdout if stream_out is None else stream_out
 
+    from runlog import event
+    from stdio_frames import read_frame
+
+    # The transport owns a fresh unread stream; mixing another reader with
+    # its buffer is outside that contract. Borrow, never detach or close it.
+    stream_in = getattr(stream_in, "buffer", stream_in)
     while True:
-        # Read a bounded prefix BEFORE trimming whitespace or parsing JSON.
-        # Text streams count codepoints, so enforce the UTF-8 byte limit too.
-        line = stream_in.readline(MAX_BODY_BYTES + 1)
-        if not line:
-            return 0
-        size = len(line.encode("utf-8"))
-        if size > MAX_BODY_BYTES:
-            reply = _error(None, -32600,
-                           f"a message may be at most {MAX_BODY_BYTES} bytes")
-            stream_out.write(_wire(reply) + "\n")
-            stream_out.flush()
-            # Drain only a bounded amount to regain newline framing. A client
-            # that never ends an enormous frame must reconnect, not consume
-            # unbounded memory or an unlimited discard loop.
-            discarded = size
-            while not line.endswith("\n"):
-                if discarded >= 4 * MAX_BODY_BYTES:
-                    return 1
-                line = stream_in.readline(min(MAX_BODY_BYTES + 1,
-                                              4 * MAX_BODY_BYTES - discarded + 1))
-                if not line:
-                    return 0
-                discarded += len(line.encode("utf-8"))
+        line, error, stop = read_frame(stream_in, MAX_BODY_BYTES)
+        if error:
+            event("WARNING", "Rejected MCP frame: " + error, component="server")
+            reply = (_error(None, -32600, f"a message may be at most {MAX_BODY_BYTES} bytes")
+                     if error == "oversize" else _error(None, -32700, "invalid JSON"))
+        elif stop is not None:
+            return stop
+        elif not line.strip():
             continue
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            message = wire_json.loads(line)
-        except (ValueError, RecursionError):
-            reply = _error(None, -32700, "invalid JSON")
         else:
-            reply = handle(message)
+            try:
+                message = wire_json.loads(line.strip())
+            except (ValueError, RecursionError):
+                reply = _error(None, -32700, "invalid JSON")
+            else:
+                reply = handle(message)
         if reply is not None:
             stream_out.write(_wire(reply) + "\n")
             stream_out.flush()
+        if stop is not None:
+            return stop
 
 
 # --------------------------------------------------------------------------- #

@@ -22,7 +22,8 @@ def _literal_pattern(form: str) -> str:
     # still must not match C+++ or C++20; ordinary sentence punctuation is OK.
     first = re.escape(form[0]) if not form[0].isalnum() else ""
     last = re.escape(form[-1]) if not form[-1].isalnum() else ""
-    return rf"(?<![\w\u0300-\u036f{first}]){body}(?![\w\u0300-\u036f{last}])"
+    suffix = r"|[./:\-]\w" if any(c.isdecimal() for c in form) else ""
+    return rf"(?<![\w\u0300-\u036f{first}]){body}(?![\w\u0300-\u036f{last}]{suffix})"
 
 
 def used(text: str, candidates: list[str]) -> bool:
@@ -55,8 +56,19 @@ def numeric_text(text: str) -> str:
 # quantity without a space. Clock components remain individual tokens when
 # a case explicitly asks for each component rather than the whole clock.
 _NUMBER_BODY = r"[+-]?(?:\d+(?:[.,]\d+)?|[.,]\d+)"
-NUMBER = re.compile(rf"(?<![\w.,]){_NUMBER_BODY}(?:[eE][+-]?\d+)?(?!\d|[.,]\d)")
+NUMBER = re.compile(rf"(?<![\w.,+\-]){_NUMBER_BODY}(?:[eE][+-]?\d+)?(?!\d|[.,]\d)")
 _WHOLE_NUMBER = re.compile(_NUMBER_BODY)
+_NON_QUANTITY = re.compile(
+    r"(?<!\w)(?:[A-Za-z_][A-Za-z0-9_./:+\-]*|\d+[A-Za-z_][A-Za-z0-9_]*[./:+\-][A-Za-z0-9_./:+\-]*)"
+    r"|\d+(?:\.\d+){2,}"
+)
+
+
+def _number_spans(text: str) -> list[re.Match]:
+    excluded = [(m.start(), m.end()) for m in _NON_QUANTITY.finditer(text)]
+    return [m for m in NUMBER.finditer(text)
+            if _WHOLE_NUMBER.fullmatch(m.group())
+            and not any(start < m.end() and m.start() < end for start, end in excluded)]
 
 
 def canonical_number(token: str) -> str:
@@ -71,8 +83,7 @@ def canonical_number(token: str) -> str:
 
 
 def digits_in(text: str) -> set[str]:
-    return {canonical_number(match.group()) for match in NUMBER.finditer(numeric_text(text))
-            if _WHOLE_NUMBER.fullmatch(match.group())}
+    return {canonical_number(match.group()) for match in _number_spans(numeric_text(text))}
 
 
 def number_spelling_used(spelling: str, answer: str, present: set[str]) -> bool:
@@ -81,12 +92,29 @@ def number_spelling_used(spelling: str, answer: str, present: set[str]) -> bool:
     if _WHOLE_NUMBER.fullmatch(wanted):
         return canonical_number(wanted) in present
     if any(c.isdecimal() for c in wanted):
-        # Case-authored compound (e.g. 12:30 or 1/2): same ordered spelling,
-        # with optional spacing around separators, not scattered digits. No
-        # inferred conversion from a decimal to a clock or vice versa.
-        pattern = re.escape(wanted)
-        pattern = pattern.replace(":", r"\s*:\s*").replace("/", r"\s*/\s*")
-        return bool(re.search(rf"(?<![\w:/]){pattern}(?!\w|[.:/]\d)", numeric_text(answer)))
+        components = _number_spans(wanted)
+        if not components or components[0].start() != 0 or components[-1].end() != len(wanted):
+            # Preserve explicit finite-number phrases; do not infer their units
+            # or prefix meaning. Scientific tokens remain unsupported.
+            if re.search(r"\d(?:[.,]\d+)?[eE][+-]?\d", wanted):
+                return False
+            pattern = re.escape(wanted).replace(":", r"\s*:\s*").replace("/", r"\s*/\s*")
+            return bool(re.search(rf"(?<![\w:/]){pattern}(?!\w|[.:/]\d)", numeric_text(answer)))
+        def signature(text, spans):
+            return ([canonical_number(m.group()) for m in spans],
+                    [re.sub(r"\s*([:/])\s*", r"\1", text[a.end():b.start()])
+                     for a, b in zip(spans, spans[1:])])
+        expected = signature(wanted, components)
+        normalized = numeric_text(answer)
+        tokens = _number_spans(normalized)
+        for index in range(len(tokens) - len(components) + 1):
+            window = tokens[index:index + len(components)]
+            before, after = normalized[:window[0].start()], normalized[window[-1].end():]
+            if re.search(r"\w$|[:/+\-]\s*$", before) or re.match(r"\w|\s*[:/]|\.\d", after):
+                continue
+            if signature(normalized, window) == expected:
+                return True
+        return False
     # Written number alternatives are whole words, not prefixes of a name
     # or a ZWNJ compound such as سه‌شنبه. Additional inflections belong in
     # the case's explicit alternatives rather than a guessed morphology rule.
