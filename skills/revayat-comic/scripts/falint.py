@@ -54,7 +54,11 @@ PERSIAN_DIGIT = r"۰-۹"
 _STRUCTURED = r"""
     (?:https?://|www\.)\S+
     | [\w.+-]+@[\w-]+\.[\w.-]+
-    | \b[0-9]{1,4}(?:[.:/-][0-9]{1,4})+\b
+    | (?<![\w.,٫٬]) [+-−]?
+      (?: \d+(?:[.,٫٬:/-]\d+)+(?:[eE][+-−]?\d+)?
+        | \d+[eE][+-−]?\d+
+        | [.,٫]\d+(?:[eE][+-−]?\d+)? )
+      (?!\d)
 """
 #: Everything the FIXER keeps its hands off: the above, plus any Latin word,
 #: because folding an Arabic kaf or pairing a quote inside one corrupts it.
@@ -353,7 +357,7 @@ def fix_text(text: str, options: Options | None = None) -> str:
     if not text:
         return text
     options = options or Options()
-    return "\n".join(fix_line(line, options) for line in text.split("\n")).strip(" \t\r")
+    return "\n".join(fix_line(line, options) for line in re.split(r"\r\n|[\r\n]", text)).strip(" \t\r")
 
 
 # --------------------------------------------------------------------------- #
@@ -487,6 +491,14 @@ def settled(region: dict[str, Any], code: str, span: str | None = None) -> bool:
             return False
     spans = region.get("review_ack_spans")
     return spans is None or span is None or span in set(spans)
+
+
+def compression_review_needed(region: dict[str, Any], sfx_policy: str = "keep") -> bool:
+    full = (region.get("target_full") or "").strip()
+    shown = (region.get("target_text") or "").strip()
+    return bool(not region.get("dropped") and ir.translatable(region, sfx_policy)
+                and full and shown and full != shown
+                and not settled(region, "compressed-variant"))
 
 
 def lint_region(region: dict[str, Any]) -> list[dict[str, str]]:

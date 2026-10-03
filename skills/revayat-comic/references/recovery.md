@@ -42,6 +42,12 @@ text and its receipt commit together in the document. The receipt binds the
 consumed reply to its verified old/new page mapping, so retry can finish a failed
 header update without reapplying the Persian or undoing normalization.
 
+Context progress compares a well-formed accepted receipt's page identity separately
+from today's glossary/header constraints. Normal terminology, title-policy or language
+updates do not falsely report moved regions. Actual box/kind/orientation/source-image
+changes remain blocking, including with `--allow-unmerged`. Older or malformed
+receipts keep the conservative stage guard; edited replies still need merging.
+
 A genuinely stale reply needs review of the named page's current crop sheet.
 Match its existing Persian to the current region IDs and geometry, correct only
 the affected mappings, then explicitly confirm those reviewed pages:
@@ -67,7 +73,11 @@ Rebuilt compression approvals carry a content fingerprint. Editing `fa`,
 `fa_full` or `src` leaves the old approval attached to its old meaning. After
 reviewing the new pair, replace the stamped entry with bare
 `reviewed: compressed-variant` to record a new decision; the earlier one remains
-in its history.
+in its history. Retained `fa_full` after an explicit keep/drop/erase decision is
+recovery history, not a shortened translation; an empty display does not request
+compression approval. Returning to active translation with a different nonempty
+full/display pair requires a current review again. Missing active text and unfinished
+cleaning still fail their own gates.
 
 ## Refresh after text-revision hardening
 

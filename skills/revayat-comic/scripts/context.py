@@ -33,6 +33,7 @@ thing it was supposed to carry.
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -362,8 +363,26 @@ def _merged_onto_moved_geometry(doc: dict[str, Any], page_id: str) -> list[str]:
         return []
     upto = [page["id"] for page in doc["pages"]]
     upto = upto[:upto.index(page_id) + 1] if page_id in upto else upto
-    return [page_id for page_id in stages.stale_pages(doc, "worksheet")
-            if page_id in answered and page_id in upto]
+    moved = []
+    stale = None
+    for page in doc["pages"]:
+        if page["id"] not in answered or page["id"] not in upto:
+            continue
+        receipt = page.get("worksheet_receipt")
+        after = receipt.get("after") if isinstance(receipt, dict) else None
+        digest = receipt.get("digest") if isinstance(receipt, dict) else None
+        valid = (isinstance(after, str) and re.fullmatch(r"[0-9a-f]{64}", after)
+                 and isinstance(digest, str) and re.fullmatch(r"[0-9a-f]{16}", digest)
+                 and digest == page.get("worksheet_digest"))
+        if valid:
+            changed = after != ir.page_fingerprint(page)
+        else:
+            if stale is None:
+                stale = set(stages.stale_pages(doc, "worksheet"))
+            changed = page["id"] in stale
+        if changed:
+            moved.append(page["id"])
+    return moved
 
 
 def refusal(state: dict[str, Any], doc_path: str | Path) -> str:

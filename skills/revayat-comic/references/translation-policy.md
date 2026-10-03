@@ -234,7 +234,12 @@ one: absent means nobody has decided, and then the page decides, as above.
 ## Persian specifics
 
 - Natural Persian punctuation: `،` `؛` `؟` `«»`. The typography pass fixes these
-  mechanically, so write naturally and do not fight it.
+  mechanically, so write naturally and do not fight it. Structured quantity notation
+  is protected exactly: decimal/grouping separators, signs, clocks/dates, leading
+  decimals and scientific notation are not localized or reinterpreted. `3,14` and
+  `1,200` keep their original digits even with `--digits persian`; plain prose digits
+  still follow the option. Physical CR/LF/CRLF line endings normalize to logical LF,
+  with deliberate blank lines preserved; this is not broad Unicode line splitting.
 - Persian letters, not Arabic: `ی` and `ک`, never `ي` and `ك`.
 - Half-spaces where they belong: `می‌روم`, `کتاب‌ها`. **Write them yourself.**
   What is joined for you is the possessive family — `کتاب هایم` → `کتاب‌هایم`,

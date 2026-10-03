@@ -412,8 +412,7 @@ def check_document(doc_path: str | Path, *, strict: bool = False,
     for _page, region in ir.iter_regions(doc):
         full = (region.get("target_full") or "").strip()
         shown = (region.get("target_text") or "").strip()
-        if full and full != shown and not falint.settled(
-                region, "compressed-variant", shown):
+        if falint.compression_review_needed(region, meta.get("sfx_policy", "keep")):
             # Not a judgement about the shortening — only a person can make
             # that one. The pair is surfaced so it is made, instead of the
             # shorter line quietly becoming the translation.

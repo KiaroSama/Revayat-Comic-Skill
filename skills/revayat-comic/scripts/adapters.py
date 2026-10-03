@@ -28,6 +28,7 @@ from __future__ import annotations
 from typing import Any
 
 import providers
+from provider_errors import PublicProviderError, validate_bearer
 
 #: How confident to call a `manga-ocr` reading. The model returns text and no
 #: score of its own, so this is a judgement about the model rather than about
@@ -153,7 +154,7 @@ def _endpoint(path: str) -> str:
 
     base = (os.environ.get(API_BASE) or "").rstrip("/")
     if not base:
-        raise RuntimeError(
+        raise PublicProviderError(
             f"{API_BASE} is not set. Point it at an OpenAI-compatible endpoint "
             f"— a hosted one, or something local like http://127.0.0.1:1234/v1"
         )
@@ -219,9 +220,8 @@ def _redirect_guard():
             if req.has_header("Authorization"):
                 target = urllib.parse.urljoin(req.full_url, newurl)
                 if _origin(target) != _origin(req.full_url):
-                    host = urllib.parse.urlsplit(target).hostname or target
-                    raise RuntimeError(
-                        f"refusing to follow a redirect to {host}: the request "
+                    raise PublicProviderError(
+                        "refusing to follow a redirect: the request "
                         f"carries {API_KEY} and that is a different origin from "
                         f"the one {API_BASE} names. Point {API_BASE} straight at "
                         f"the endpoint that answers."
@@ -265,6 +265,7 @@ def _send(path: str, content_type: str, body: bytes, timeout: float) -> dict:
     headers = {"Content-Type": content_type}
     endpoint = _endpoint(path)
     key = os.environ.get(API_KEY)
+    validate_bearer(key or "")
     if key:
         # Only when there is one: a local server usually wants no credential,
         # and an empty bearer token makes some of them refuse outright.
@@ -272,9 +273,8 @@ def _send(path: str, content_type: str, body: bytes, timeout: float) -> dict:
             # Before the socket, deliberately. A key that has been sent in
             # cleartext cannot be un-sent; it has to be rotated, and nothing
             # here can tell whether anyone on the path was listening.
-            host = urllib.parse.urlsplit(endpoint).hostname or endpoint
-            raise RuntimeError(
-                f"refusing to send {API_KEY} to {host} over plain http, where "
+            raise PublicProviderError(
+                f"refusing to send {API_KEY} over plain http, where "
                 f"anything on the path can read it. Point {API_BASE} at the "
                 f"same endpoint over https://, or unset {API_KEY} if that "
                 f"endpoint needs no credential."
@@ -296,12 +296,12 @@ def _send(path: str, content_type: str, body: bytes, timeout: float) -> dict:
         # header lookup and saves the allocation and the socket both.
         declared = response.headers.get("Content-Length")
         if declared and declared.isdigit() and int(declared) > MAX_RESPONSE_BYTES:
-            raise RuntimeError(too_big)
+            raise PublicProviderError(too_big)
         # One byte over the limit is enough to know it is over the limit; there
         # is no reason to hold the rest in memory to find out.
         answer = response.read(MAX_RESPONSE_BYTES + 1)
     if len(answer) > MAX_RESPONSE_BYTES:
-        raise RuntimeError(too_big)
+        raise PublicProviderError(too_big)
     return json.loads(answer.decode("utf-8"))
 
 
@@ -355,7 +355,7 @@ class HostedTranslation:
 
         model = os.environ.get(TRANSLATION_MODEL)
         if not model:
-            raise RuntimeError(f"{TRANSLATION_MODEL} is not set")
+            raise PublicProviderError(f"{TRANSLATION_MODEL} is not set")
 
         answer = _post("chat/completions", {
             "model": model,
@@ -421,7 +421,7 @@ def _edit_mask(page_png: bytes, mask_png: bytes) -> bytes:
     with Image.open(io.BytesIO(mask_png)) as opened:
         grey = opened.convert("L")
     if grey.size != rgba.size:
-        raise RuntimeError(
+        raise PublicProviderError(
             f"the mask is {grey.size[0]}x{grey.size[1]} and the page is "
             f"{rgba.size[0]}x{rgba.size[1]}; the endpoint requires them to "
             "match"
@@ -466,7 +466,7 @@ class HostedImageEdit:
 
         model = os.environ.get(IMAGE_MODEL)
         if not model:
-            raise RuntimeError(f"{IMAGE_MODEL} is not set")
+            raise PublicProviderError(f"{IMAGE_MODEL} is not set")
         if not mask_png:
             # No mask means "edit the whole page". `clean.py` composites under
             # its own mask regardless, so nothing unsafe would reach the page —

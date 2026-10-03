@@ -45,6 +45,7 @@ import math
 import numbers
 import threading
 import time
+from provider_errors import public_detail
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol, runtime_checkable
 
@@ -240,10 +241,8 @@ def get(role: str, name: str | None):
         # traceback on the CLI and took the MCP loop down with it; as a
         # `ValueError` it is the same refusal an unknown name already is, and
         # every caller of a stage already turns that into a result.
-        raise ValueError(
-            f"the {role} provider {name!r} could not be built: "
-            f"{type(error).__name__}: {error}"
-        ) from error
+        raise ValueError(f"the {role} provider {name!r} could not be built: "
+                         f"{public_detail(error)}") from None
 
 
 def wants(provider, role: str, keyword: str) -> bool:
@@ -388,7 +387,7 @@ def call(provider, role: str, *args, timeout: float = DEFAULT_TIMEOUT,
     if "error" in outcome:
         error = outcome["error"]
         return Result(False, "error", label, role,
-                      detail=f"{type(error).__name__}: {error}", elapsed=elapsed)
+                      detail=public_detail(error), elapsed=elapsed)
 
     value = outcome["value"]
     confidence = None

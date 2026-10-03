@@ -68,6 +68,16 @@ so. See `persian-typesetting.md` for what differs between the two paths.
 | `translate` skipped everything | the regions already have Persian, or no `src:` yet | it fills empty regions only; a value already there is never replaced |
 | `translate`/`ocr` re-run did nothing | that work is recorded as complete | by design — rerunning costs no calls; edit the text to have it looked at again |
 
+Provider failure details intentionally omit arbitrary network/SDK exception messages,
+response bodies and credential-bearing headers. Reports and persisted provenance keep
+an exception type with fixed configuration/service guidance. First-party adapters use
+bounded single-line public guidance; never include secrets in that contract or enable
+HTTP wire logging to recover raw errors. `REVAYAT_API_KEY` must be printable ASCII
+without whitespace; invalid values are refused before request/opener construction,
+not trimmed or echoed. Keyless local endpoints and valid HTTPS/loopback keys remain
+supported. Already-exposed credentials need owner-controlled rotation and cleanup;
+this repair does not rewrite old chapter files silently.
+
 ## Detection
 
 | Symptom | Fix |
