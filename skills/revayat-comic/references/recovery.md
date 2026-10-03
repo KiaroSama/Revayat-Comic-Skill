@@ -69,6 +69,22 @@ reviewing the new pair, replace the stamped entry with bare
 `reviewed: compressed-variant` to record a new decision; the earlier one remains
 in its history.
 
+## Refresh after text-revision hardening
+
+Text/source revision hashing now encodes field boundaries structurally. A pipe
+inside `target_text`, `target_full` or source dialogue cannot hide a change by
+moving characters across fields or region IDs. Existing comparable stage records
+stay comparable: their old text/source hashes become stale, rather than being
+accepted as unverified legacy output. The public record scheme remains `3`.
+
+Run the named inexpensive affected stages once; for an old finished page, rerun
+`typeset`, check publication QA, then export again. Unchanged detection, masks
+and cleaning remain fresh; do not re-detect or retranslate the chapter solely
+for this hash upgrade. If a `translate` or `glossary` stamp is inspected, refresh
+it through its ordinary command; existing provider request identities still
+protect completed answers from unnecessary calls. A partial-page refresh leaves
+only the unrefreshed pages stale. Repeating a successful refresh converges.
+
 ## Package integrity
 
 Unchanged native PDFs are bound to their committed package SHA-256. Modified

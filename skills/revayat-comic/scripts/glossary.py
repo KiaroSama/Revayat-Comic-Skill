@@ -28,16 +28,15 @@ was rendered differently, which is the drift that no amount of care prevents.
 from __future__ import annotations
 
 import argparse
-import re
 import json
 import sys
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
-import falint
 import pageir as ir
 import stages
+from textmatch import used  # noqa: F401 - public glossary matching API
 
 #: A balloon that is only a name is short. Longer than this and a repeat is a
 #: catchphrase or a stock reaction, not a candidate for the names table.
@@ -199,34 +198,6 @@ def scan(doc_path: str | Path) -> dict[str, Any]:
     }
 
 
-#: A term written in a script that has word boundaries. `Ann` inside
-#: `Anna` is not an occurrence of `Ann`, and reporting it sends a
-#: translator to correct something that was already right.
-#: Latin letters, accents included: `Renée` and `Ångström` are names and
-#: `[A-Za-z]` could not even spell them. Deliberately NOT `\w` under
-#: `re.UNICODE`, which counts katakana and han as word characters — and then
-#: `\b` between two of them never matches, so every CJK term silently stopped
-#: being enforced.
-_LATIN = r"A-Za-z\u00C0-\u024F\u1E00-\u1EFF"
-#: One such word. `Ann` must not match inside `Anna`.
-_BOUNDED_TERM = re.compile(rf"^[{_LATIN}][{_LATIN}\u2019'-]*$")
-#: Several of them, so `the Iron Gate` is matched as a phrase rather than as
-#: three separate substrings that may be anywhere in the balloon.
-_BOUNDED_PHRASE = re.compile(
-    rf"^[{_LATIN}][{_LATIN}\u2019'-]*(?: [{_LATIN}][{_LATIN}\u2019'-]*)+$")
-
-
-def _pattern(term: str) -> str:
-    """A regular expression that matches `term` where a word may begin and end."""
-    return r"\b" + r"\s+".join(re.escape(word) for word in term.split()) + r"\b"
-
-
-#: Persian and Arabic letters, from the module that owns Persian text. A form
-#: written in this script attaches its clitics directly — `آنا را`, `آنا‌ی` —
-#: so it is bounded by anything that is NOT one of these, and by nothing else.
-_ATTACHING = re.compile(rf"[{falint.PERSIAN_LETTER}]")
-
-
 def _string_list(value: Any) -> list[str]:
     """A list of written forms, or nothing.
 
@@ -265,42 +236,6 @@ def target_forms(entry: dict[str, Any]) -> list[str]:
         if form not in out:
             out.append(form)
     return [form for form in out if form]
-
-
-def used(text: str, candidates: list[str]) -> bool:
-    """Whether `text` really uses one of these forms.
-
-    ONE matcher, for the source side and the target side, because there were
-    two: the source was matched at word boundaries and the target by plain
-    substring presence. So the canonical target `آنا` was found inside
-    `آنان رسیدند` — *they arrived* — and a balloon that never mentions Anna
-    counted as having rendered her name correctly.
-
-    Three scripts, three answers, and the script decides which:
-
-    * **Latin** has spaces and no attachment, so a form is a whole word or a
-      whole phrase. `Ann` must not match inside `Anna`.
-    * **Persian and Arabic** attach clitics with no space — `آنا را`, `آنا‌ی` —
-      so a form is bounded by any character that is not a letter of that
-      script. An attached spelling that a reader has approved goes in
-      `target_forms` and is matched in its own right; nothing is inferred.
-    * **Everything else**, meaning CJK, has no boundaries at all. A boundary
-      test never matches one and would silently stop enforcing every Japanese,
-      Chinese and Korean term in the table.
-    """
-    for form in candidates:
-        if not form:
-            continue
-        if _BOUNDED_TERM.match(form) or _BOUNDED_PHRASE.match(form):
-            if re.search(_pattern(form), text, re.UNICODE):
-                return True
-        elif _ATTACHING.search(form):
-            letter = f"[{falint.PERSIAN_LETTER}]"
-            if re.search(f"(?<!{letter}){re.escape(form)}(?!{letter})", text):
-                return True
-        elif form in text:
-            return True
-    return False
 
 
 def _mentions(term: str, source: str, entry: dict[str, Any] | None = None) -> bool:
@@ -370,7 +305,7 @@ def _affected(doc: dict[str, Any], term: str, previous: str,
         if region.get("dropped"):
             continue
         target = region.get("target_text") or ""
-        if not any(spelling and spelling in target for spelling in spellings):
+        if not used(target, spellings):
             continue
         if _mentions(term, region.get("source_text") or "", entry):
             touched.append(region["id"])

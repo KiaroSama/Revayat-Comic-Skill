@@ -38,9 +38,9 @@ from typing import Any
 
 import pageir as ir
 
-#: Bumped when a facet's definition changes, so every stamp written by an older
-#: build is recognised as unverified rather than silently compared against a
-#: hash that now means something else.
+#: The freshness record format. Incompatible record formats are unverified.
+#: Framing hardening within this format deliberately rehashes known inputs:
+#: old text/source revisions become stale once, never exempt as unverified.
 SCHEME = "3"
 
 #: Facets each stage reads. `policy` and `constraints` are document-wide; the
@@ -108,7 +108,10 @@ def _region_text(region: dict[str, Any]) -> str:
     nothing at all. The test meant to catch it invented the same two fields in
     its own fixture and agreed with the bug.
     """
-    return "|".join([
+    # JSON frames the fields even when the dialogue contains pipes or quotes.
+    # Keep this inside the comparable record scheme so old ambiguous hashes
+    # require a rerender instead of becoming a legacy publication exemption.
+    return _stable([
         region["id"],
         region.get("target_text") or "",
         region.get("target_full") or "",
@@ -160,10 +163,11 @@ def _page_facet(page: dict[str, Any], name: str) -> str:
         for region in page.get("regions", []):
             digest.update((_region_render(region) + "|").encode("utf-8"))
     elif name == "source":
-        for region in page.get("regions", []):
-            digest.update(
-                f"{region['id']}|{region.get('source_text') or ''}|"
-                .encode("utf-8"))
+        # Preserve region boundaries; source text may literally contain a
+        # neighboring region ID and the old pipe separator.
+        digest.update(_stable([
+            [region["id"], region.get("source_text") or ""]
+            for region in page.get("regions", [])]).encode("utf-8"))
     elif name == "text":
         for region in page.get("regions", []):
             digest.update((_region_text(region) + "|").encode("utf-8"))

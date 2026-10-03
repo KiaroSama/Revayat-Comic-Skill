@@ -35,6 +35,26 @@ The JSON score report carries source, submitted answer, context and human note
 into each row so a reviewer can judge the actual scene. A CLI exit of zero,
 `machine_ok`, or `matches_a_reference` is never semantic approval.
 
+## Exact textual preservation
+
+Quantity checks compare finite decimal spellings without binary floating-point
+rounding. Signs, leading/trailing zeros and Unicode decimal digits normalize;
+compound alternatives such as `12:30` or `1/2` retain their order and separators.
+Clock components can still be requested separately by a case. Scientific
+notation is not converted to a decimal value: list the required literal form
+or another accepted spelling explicitly. The existing comma-as-decimal
+convention is retained; no thousands separator or unit conversion is inferred.
+Written-out alternatives are whole words/phrases, not prefixes of names or
+weekday compounds. `num-02` explicitly lists `سومین`, which its existing
+reference answer already used.
+
+Required terms use the same script-aware matcher as `glossary check`. Latin
+identifiers such as `UART2`, `Section 7` and `C++` are bounded forms, not
+substrings of `UART20`, `Section 70` or `C++20`. Ordinary Persian attaching-letter
+boundaries and the existing CJK substring policy remain unchanged. A retained
+`V` is not a retained `mV`; none of these lexical checks establishes that the
+quantity belongs to the right object or that the dialogue is semantically sound.
+
 ## Context-sensitive expansion
 
 | Added cases | What needs a reader |

@@ -32,6 +32,10 @@ HERE = Path(__file__).resolve().parent
 CASES = HERE / "cases.json"
 sys.path.insert(0, str(HERE.parent / "skills" / "revayat-comic" / "scripts"))
 import pageir as ir  # noqa: E402
+from textmatch import (  # noqa: E402, F401 - retain private numeric accessors
+    canonical_number as _canonical_number, digits_in as _digits_in,
+    number_spelling_used, used,
+)
 
 #: Negation this file is willing to DECIDE: the imperfective negative prefix,
 #: and the free negative words. Each of these negates and nothing else is
@@ -67,34 +71,6 @@ def load_cases(path: Path = CASES) -> list[dict]:
     return payload["cases"]
 
 
-#: A numeric token: an optional sign, digits, and an optional decimal part.
-#: Persian and ASCII digits are normalised first, and `٫` — the Arabic decimal
-#: separator — reads as a point.
-NUMBER = re.compile(r"[-−+]?\d+(?:[.,]\d+)?")
-
-
-def _digits_in(text: str) -> set[str]:
-    """Every numeric token in the line, normalised.
-
-    Whole tokens, because membership was tested with `in` against the raw
-    string as well: a case requiring `3` was satisfied by a line that said
-    `30`, which is not the same quantity and is exactly the kind of error this
-    axis exists to catch.
-    """
-    normalised = text.translate(DIGITS).replace("٫", ".")
-    return {_canonical_number(token) for token in NUMBER.findall(normalised)}
-
-
-def _canonical_number(token: str) -> str:
-    """`+3`, `3`, `3.0` and `۳` are one quantity; `3` and `30` are two."""
-    token = token.replace("−", "-").replace(",", ".").lstrip("+")
-    try:
-        value = float(token)
-    except ValueError:              # pragma: no cover - NUMBER cannot produce it
-        return token
-    return str(int(value)) if value == int(value) else repr(value)
-
-
 def _units(text: str) -> int:
     return len([piece for piece in UNIT.split(text) if piece.strip()]) or 1
 
@@ -123,22 +99,14 @@ def check_preserved(case: dict, answer: str) -> dict[str, object]:
             spellings = [entry] if isinstance(entry, str) else list(entry)
             found = False
             for spelling in spellings:
-                digits = _digits_in(spelling)
-                if digits:
-                    # A numeric spelling matches a numeric TOKEN. `3` is not
-                    # satisfied by `30`, and `۳` and `3` are the same number.
-                    found = digits <= present
-                else:
-                    # A written-out spelling — `سه و ربع` — is a phrase, and a
-                    # phrase is matched as text.
-                    found = spelling in answer
+                found = number_spelling_used(spelling, answer, present)
                 if found:
                     break
             if not found:
                 missing.append(spellings[0])
         out["numbers"] = {"missing": missing, "ok": not missing}
     if wanted.get("terms"):
-        missing = [t for t in wanted["terms"] if t not in answer]
+        missing = [t for t in wanted["terms"] if not used(answer, [t])]
         out["terms"] = {"missing": missing, "ok": not missing}
     if wanted.get("ellipsis"):
         out["ellipsis"] = bool(ELLIPSIS.search(answer))
