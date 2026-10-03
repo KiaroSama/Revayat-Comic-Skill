@@ -31,6 +31,21 @@ def _constant(_value: str) -> None:
     raise ValueError("nonstandard JSON number")
 
 
+def _validate_strings(value: Any) -> None:
+    if isinstance(value, str):
+        try:
+            value.encode("utf-8", errors="strict")
+        except UnicodeEncodeError:
+            raise ValueError("JSON contains unsupported Unicode") from None
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            _validate_strings(key)
+            _validate_strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            _validate_strings(item)
+
+
 def loads(text: str) -> Any:
     """Decode one bounded frame; callers turn ValueError into protocol errors."""
     depth = 0
@@ -52,5 +67,7 @@ def loads(text: str) -> Any:
         elif char in "]}":
             depth -= 1
     # Syntax and matching delimiters are the standard decoder's job.
-    return json.loads(text, parse_int=_integer, parse_float=_float,
-                      parse_constant=_constant)
+    value = json.loads(text, parse_int=_integer, parse_float=_float,
+                       parse_constant=_constant)
+    _validate_strings(value)
+    return value

@@ -95,6 +95,11 @@ Both transports:
   128 container levels and 1024 integer digits, and refuses nonfinite numbers
   (including overflowing exponents). Invalid JSON gets a protocol error while
   the next valid request remains usable; interpreter-wide settings are unchanged.
+  Every decoded string and object key must also strictly encode UTF-8: isolated
+  surrogate escapes are refused before stage invocation, with no lossy replacement
+  or raw request echo. Valid paired escapes, astral characters, Persian and literal
+  backslash-u text remain unchanged. This is an interoperability restriction,
+  not a claim that RFC 8259's grammar forbids every unpaired escape.
   Discovery still lists healthy tools when one stage cannot import, marking that
   stage unavailable. Invocation reports its failure normally.
 - **answer a malformed envelope instead of dropping it.** A `jsonrpc` that is

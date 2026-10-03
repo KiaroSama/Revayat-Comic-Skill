@@ -374,11 +374,8 @@ def _apply(region: dict[str, Any], block: dict[str, str],
             # different pair of words.
             # A rebuilt worksheet carries an existing decision, not fresh
             # permission to approve any subsequent edit of its meaning.
-            bound = "compressed-variant@" + falint.compression_fingerprint(region, target)
-            current = ["compressed-variant" if code == bound else code for code in codes
-                       if not code.startswith("compressed-variant@") or code == bound]
-            if current:
-                falint.record_acknowledgement(region, current, target)
+            current = falint.resolve_acknowledgements(region, codes, target)
+            falint.record_acknowledgement(region, current, target)
         else:
             import falint
 
@@ -593,6 +590,9 @@ def _apply_page(page: dict[str, Any], blocks: dict[str, dict[str, str]],
     Separate from `merge_document` so the same work can be done against a copy
     and thrown away if the reply turns out not to be about this page.
     """
+    from pageorder import assign_panel
+
+    boxes = {region["id"]: list(region["bbox"]) for region in page.get("regions", [])}
     merged = 0
     for region in page.get("regions", []):
         if region["id"] in covered:
@@ -610,7 +610,10 @@ def _apply_page(page: dict[str, Any], blocks: dict[str, dict[str, str]],
         if _add_region(page, slug[1:] or "added", blocks[slug], report,
                        policy):
             merged += 1
-    if additions:
-        # A new box changes what comes before what, and it has no mask yet.
+    moved = [region for region in page.get("regions", [])
+             if boxes.get(region["id"]) != list(region["bbox"])]
+    for region in moved:
+        assign_panel(page, region)
+    if moved:
         ir.assign_reading_order(page, direction)
     return merged

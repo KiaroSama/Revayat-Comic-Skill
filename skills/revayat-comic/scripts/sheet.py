@@ -168,6 +168,8 @@ def page_worksheet(doc: dict[str, Any], page: dict[str, Any], fingerprint: str) 
         "#   reviewed: a lint code you have looked at and settled, so the",
         "#             gate stops asking — e.g. `reviewed: zwnj-review` on a",
         "#             line where `می` is wine and not the verb prefix",
+        "#             A carried code@fingerprint is prior evidence; edited wording",
+        "#             needs a fresh comparison and explicit bare code to reapprove.",
         "#   propose: a name or term this balloon MENTIONS but does not say —",
         "#            `propose: Anna` for \"did you see Anna?\". Several are",
         "#            separated by commas. This is NOT who is talking.",
@@ -217,11 +219,8 @@ def page_worksheet(doc: dict[str, Any], page: dict[str, Any], fingerprint: str) 
         if region.get("target_full"):
             lines += field_lines("fa_full", region["target_full"])
         if region.get("review_ack"):
-            valid = [code for code in region["review_ack"]
-                     if code != "compressed-variant" or falint.settled(region, code)]
-            if valid:
-                carried = [code + "@" + falint.compression_fingerprint(region)
-                           if code == "compressed-variant" else code for code in valid]
+            carried = falint.carried_acknowledgements(region)
+            if carried:
                 lines += field_lines("reviewed", ", ".join(carried))
         # Decisions already taken are written back out. An ABSENT field resets
         # them at the next merge, so a rebuilt worksheet silently undid every

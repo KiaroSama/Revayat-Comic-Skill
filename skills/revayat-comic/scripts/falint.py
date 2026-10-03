@@ -387,6 +387,54 @@ def _compression_identity(region: dict[str, Any], target: str | None = None) -> 
             "kind": region.get("kind"), "orientation": region.get("orientation")}
 
 
+TEXT_LINT_CODES = frozenset({
+    "arabic-forms", "guillemets", "latin-quotes", "double-punctuation",
+    "zwnj-review", "untranslated", "source-script-left", "script-collision",
+})
+
+
+def _text_identity(region: dict[str, Any], target: str | None = None) -> dict[str, Any]:
+    return {"region": region.get("id"), "source": region.get("source_text") or "",
+            "source_revision": region.get("source_revision"),
+            "shown": (region.get("target_text") or "") if target is None else target}
+
+
+def review_fingerprint(region: dict[str, Any], code: str,
+                       target: str | None = None) -> str:
+    if code == "compressed-variant":
+        return compression_fingerprint(region, target)
+    return ir.sha256_bytes(ir.dumps(_text_identity(region, target)).encode("utf-8"))
+
+
+def carried_acknowledgements(region: dict[str, Any]) -> list[str]:
+    carried = []
+    for code in region.get("review_ack") or ():
+        if code not in TEXT_LINT_CODES and code != "compressed-variant":
+            carried.append(code)
+            continue
+        if not settled(region, code):
+            continue
+        if code == "zwnj-review" and "review_ack_text" not in region:
+            spans = region.get("review_ack_spans")
+            if spans is not None and not set(ambiguous_spans(region.get("target_text") or "")).issubset(spans):
+                continue
+        carried.append(code + "@" + review_fingerprint(region, code))
+    return carried
+
+
+def resolve_acknowledgements(region: dict[str, Any], codes: Sequence[str],
+                             target: str) -> list[str]:
+    current = []
+    for value in codes:
+        code, marker, fingerprint = value.partition("@")
+        if marker and (code in TEXT_LINT_CODES or code == "compressed-variant"):
+            if fingerprint == review_fingerprint(region, code, target):
+                current.append(code)
+        else:
+            current.append(value)
+    return current
+
+
 def record_acknowledgement(region: dict[str, Any], codes: Sequence[str],
                            target: str) -> None:
     """Store what a reader settled, and the exact text it was settled about.
@@ -398,14 +446,21 @@ def record_acknowledgement(region: dict[str, Any], codes: Sequence[str],
     """
     spans = ambiguous_spans(target)
     compression = _compression_identity(region, target) if "compressed-variant" in codes else None
+    identity = _text_identity(region, target) if TEXT_LINT_CODES.intersection(codes) else None
     prior = {"codes": list(region.get("review_ack") or []),
              "spans": list(region.get("review_ack_spans") or []),
-             "compression": region.get("review_ack_compression")}
-    current = {"codes": list(codes), "spans": spans, "compression": compression}
+             "compression": region.get("review_ack_compression"),
+             "text": region.get("review_ack_text")}
+    current = {"codes": list(codes), "spans": spans, "compression": compression,
+               "text": identity}
     if prior["codes"] and prior != current:
         region.setdefault("review_ack_history", []).append(prior)
     region["review_ack"] = list(codes)
     region["review_ack_spans"] = spans
+    if identity is not None:
+        region["review_ack_text"] = identity
+    else:
+        region.pop("review_ack_text", None)
     if compression is not None:
         region["review_ack_compression"] = compression
     else:
@@ -427,6 +482,9 @@ def settled(region: dict[str, Any], code: str, span: str | None = None) -> bool:
         return False
     if code == "compressed-variant":
         return region.get("review_ack_compression") == _compression_identity(region)
+    if code in TEXT_LINT_CODES and "review_ack_text" in region:
+        if region["review_ack_text"] != _text_identity(region):
+            return False
     spans = region.get("review_ack_spans")
     return spans is None or span is None or span in set(spans)
 
@@ -440,8 +498,10 @@ def lint_region(region: dict[str, Any]) -> list[dict[str, str]]:
     which answer a reader got depended on which command they ran.
     """
     return lint_text(region.get("target_text") or "",
-                     acknowledged=region.get("review_ack") or (),
-                     acknowledged_spans=region.get("review_ack_spans"))
+                     acknowledged=[code for code in region.get("review_ack") or ()
+                                   if settled(region, code)],
+                     acknowledged_spans=(region.get("review_ack_spans")
+                                         if settled(region, "zwnj-review") else []))
 
 
 def lint_text(text: str, *, acknowledged: Sequence[str] = (),

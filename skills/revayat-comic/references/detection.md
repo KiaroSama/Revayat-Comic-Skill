@@ -149,6 +149,7 @@ that is where the reader is already looking at the crop:
 
 - `drop: yes` — there is no text here
 - `keep: yes` — there *is* text, and it stays in the artwork
+- `box: x y w h` on an existing region — correct its box in original page pixels
 - `kind:` — it is a sign, not speech
 - `speaker:` — who is talking
 - `propose:` — a name or term the balloon mentions, for the glossary
@@ -181,6 +182,13 @@ so both halves are clipped to their own interior like any detected balloon. Say
 nothing, or `sfx`, and the box is treated as lettering on open artwork. Re-run
 `mask` after a merge that added regions; merging again updates the same regions
 rather than making more, and re-drawing a `box:` moves the one that is there.
+
+New or actually moved boxes use the detector's first containing panel rule
+(0.6 containment); moving into a gutter clears old panel membership. The merge
+refreshes panel-aware RTL/LTR reading order after those geometry changes, so later
+context follows the corrected page. Text-only edits preserve manual panel/order
+choices. Inspect the new crops before relying on them; malformed replies still
+refuse the whole page's region changes.
 
 Draw the box around **all** of the lettering. One drawn a few pixels too tight
 on the left left the `A` of `ALREADY` on the cleaned page — `source-text-survived`

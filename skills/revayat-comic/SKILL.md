@@ -313,10 +313,11 @@ assignment/snapshot contract from `references/parallel-workflow.md`:**
 >     is wine and not the verb prefix. It records **which words** you
 >     settled, so a later edit that introduces a different ambiguity is
 >     still raised rather than covered by the old decision.
->     Rebuilt compression approvals include `@<fingerprint>` to bind the old
->     decision. After changing either text or the source, compare the new pair
->     and replace that stamped value with bare `compressed-variant` only when
->     you have reviewed and approved the new meaning.
+>     Rebuilt lint and compression approvals carry `code@<fingerprint>` as
+>     prior evidence, not a fresh decision. Changed source/revision or displayed
+>     wording reopens lint review. Compare the edited pair before replacing a
+>     stamp with its bare code to explicitly approve it again. Compression also
+>     binds the full rendering and layout; old decisions remain in history.
 >   - `propose: <name>, <name>` — a name or term this balloon *mentions*
 >     but does not say. It reaches the glossary without claiming somebody
 >     else is talking.

@@ -699,10 +699,8 @@ def detect_document(
             )
             region["balloon"] = raw["balloon"]
             region["polarity"] = raw["polarity"]
-            for panel in page["panels"]:
-                if ir.bbox_contains(panel["bbox"], region["bbox"], slack=0.6):
-                    region["panel"] = panel["id"]
-                    break
+            from pageorder import assign_panel
+            assign_panel(page, region)
             page["regions"].append(region)
 
         ir.assign_reading_order(page, direction)

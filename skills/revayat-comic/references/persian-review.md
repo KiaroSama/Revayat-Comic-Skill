@@ -25,6 +25,21 @@ locked glossary, title policy and recorded relationships remain authoritative.
    For shortening keep `fa_full:` and compare it with the actual displayed
    `fa:` before accepting `compressed-variant`; fit remains a layout check.
 
+## Carrying a prior decision
+
+Generated `reviewed: code@<fingerprint>` values refer to the exact source,
+source revision and displayed wording already reviewed. Editing either wording
+or source does not approve it again: compare the current pair and use the bare
+code only for a new explicit decision. Direct stored-text edits also reopen modern
+lint decisions. Legacy records keep direct compatibility, but an old half-space
+review is not carried over newly introduced ambiguous spans. Compression review
+additionally binds full wording and layout. A matching stamp is not linguistic
+truth or reviewer authentication.
+
+After a box correction, inspect refreshed crops/panel order before using adjacent
+dialogue to infer a referent or speaker. Wording-only edits preserve manual spatial
+choices; moving a region does not identify who is speaking.
+
 ## Cases that need source evidence
 
 - A negative question's short answer: translate the intended proposition, not
