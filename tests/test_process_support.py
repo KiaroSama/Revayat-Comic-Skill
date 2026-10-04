@@ -59,6 +59,33 @@ threading.Event().wait(30)
         assert not status.stdout.strip() or status.stdout.strip().startswith("Z")
 
 
+def test_cleanup_error_still_closes_job_and_reaps_root(monkeypatch):
+    from types import SimpleNamespace
+    import process_support
+    events = []
+    class Job:
+        def assign(self, process):
+            events.append("assigned")
+        def stop(self):
+            raise OSError("controlled membership failure")
+        def close(self):
+            events.append("closed")
+    class Process:
+        returncode = 0
+        def communicate(self, *args, **kwargs):
+            events.append("reaped")
+            return b"", b""
+        def poll(self):
+            return 0
+    monkeypatch.setattr(process_support, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(process_support, "WindowsJob", Job)
+    monkeypatch.setattr(process_support.subprocess, "CREATE_NO_WINDOW", 0, raising=False)
+    monkeypatch.setattr(process_support.subprocess, "Popen", lambda *args, **kwargs: Process())
+    with pytest.raises(OSError, match="controlled membership failure"):
+        run_process(["unused controlled command"])
+    assert events == ["assigned", "reaped", "closed", "reaped"]
+
+
 def test_normal_child_returns_utf8_output_and_exit_code():
     result = run_process([sys.executable, "-c", "print('فارسی'); raise SystemExit(7)"], timeout=10, idle=5,
                          env={**os.environ, "PYTHONIOENCODING": "utf-8"})

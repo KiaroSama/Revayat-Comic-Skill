@@ -8,7 +8,6 @@ import signal
 import subprocess
 import sys
 import time
-from threading import Event
 
 
 class WindowsJob:
@@ -142,24 +141,24 @@ def run_process(command, *, env=None, cwd=None, timeout=30, idle=20, check=False
             result.check_returncode()
         return result
     finally:
-        if process:
-            if job:
-                job.stop()
-            else:
+        try:
+            if process:
                 try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-            if process.poll() is None:
-                process.kill()
-            process.communicate(timeout=5)
-        if job:
-            try:
-                deadline = time.monotonic() + 5
-                while job.active():
-                    if time.monotonic() >= deadline:
-                        raise RuntimeError("owned Windows child processes survived termination")
-                    # Job accounting, not root liveness, proves descendant cleanup.
-                    Event().wait(min(0.02, max(0, deadline - time.monotonic())))
-            finally:
+                    if job:
+                        job.stop()
+                    else:
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                finally:
+                    # KILL_ON_JOB_CLOSE remains the backstop if membership/wait fails.
+                    if job:
+                        job.close()
+                        job = None
+                    if process.poll() is None:
+                        process.kill()
+                    process.communicate(timeout=5)
+        finally:
+            if job:
                 job.close()
