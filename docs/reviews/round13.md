@@ -60,7 +60,30 @@ Preserve all eight agent layouts and existing `all` discovery: explicit agents c
 
 The state lives under `.revayat-comic-installer` in the selected project/home. Pending candidates and backups are outside native skill folders, preventing duplicate active discovery. Existing customizations are backed up, not automatically merged into the new active version. Links/junctions and cross-filesystem promotion are refused conservatively. Pre-journal residue is reported and retained; empty created parent directories may remain after a preparation failure. This targets process interruption and detected cooperating edits, not hostile same-user races, arbitrary hardware failure or universal power-loss durability.
 
-## Completed verification and CI
+## Reviewer repair delta — 2026-10-04
+
+The owner explicitly authorized the reviewing agent to apply requirements and
+integrate after verification. The existing proposal's 54 installer controls and
+61-file payload are retained. Additional source-backed gaps were repaired:
+
+- Rollback quarantines verified cleanup before recursive disposal, so a partial
+  deletion does not prevent restoring the remaining original destinations.
+- The complete destination batch is checked before first promotion, while
+  per-item checks continue to protect later cooperating edits.
+- Bash probes each interpreter candidate; an explicit override stays authoritative.
+- The shared bootstrap writes unique UTF-8 UTC diagnostic logs and omits exception
+  payloads, with safe console fallback and closed handlers.
+- Native test wrappers own descendant processes with wall/idle bounds and cleanup;
+  modified fixture text I/O explicitly declares UTF-8.
+
+Persistent controls cover partial disposal, original-byte preservation on a late
+pointer conflict, fallback/override behavior, log lifecycle/privacy/fallback and
+native descendant timeout cleanup. Four repaired production seams passed their
+bounded red/green checks; the child-tree cleanup seam passed separately. This
+is local development evidence, not final matrix or integration evidence.
+Replacement-SHA and final-main checks must be read before integration/completion.
+
+## Historical authoring verification and CI
 
 The original archive checksum and **180 tracked Git blobs** were verified without mismatches. Its synthetic test-merge snapshot has the audited main tree and is not an assistant-performed merge. Resumed evidence is separately recorded rather than inheriting an interrupted session's claimed counts:
 
@@ -69,8 +92,9 @@ The original archive checksum and **180 tracked Git blobs** were verified withou
 | Original full suite | 1768 passed, 1 unavailable RAR-backend skip |
 | 16 baseline native-entry/manifest contracts | 15 failed, 1 passed |
 | Six resumed recovery/pointer contracts on initial Draft | 6 failed |
-| All installer contracts on repaired candidate | 53 passed, no skips |
-| Final complete local suite | 1821 passed, 1 RAR skip; 1822 collected; no failures/errors |
+| Intermediate installer contracts | 53 passed, no skips; superseded by final proposal54 |
+| Intermediate local suite | 1821 passed, 1 RAR skip; 1822 collected; no failures/errors |
+| Original final proposal CI, run37209793660 | Authoring evidence reports1823 collected and54 installer controls across seven lanes; replacement SHA requires new verification |
 | Real CLI pipeline, preservation checks, CBZ/PDF verification | Passed |
 | Recursive Ruff and whitespace checks | Passed |
 

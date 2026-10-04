@@ -6,6 +6,7 @@ are backed up before promotion; interrupted work is recovered explicitly.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import json
 import logging
@@ -16,6 +17,8 @@ import shutil
 import socket
 import stat
 import sys
+import time
+import traceback
 import uuid
 
 LOG = logging.getLogger("revayat.install")
@@ -196,10 +199,14 @@ def paths(item: dict) -> tuple[Path, Path, Path]:
 def remove_owned(path: Path, expected: str) -> None:
     if digest(path) != expected:
         raise RuntimeError(f"artifact changed; preserved for inspection: {path}")
-    if path.is_dir():
-        shutil.rmtree(path)
+    # Disposal is not atomic. Move the verified object out of the journal's
+    # staged path first, so interrupted recursive deletion cannot block restore.
+    disposal = path.with_name(path.name + ".discard-" + uuid.uuid4().hex)
+    path.rename(disposal)
+    if disposal.is_dir():
+        shutil.rmtree(disposal)
     else:
-        path.unlink()
+        disposal.unlink()
 
 
 def rollback(items: list[dict]) -> None:
@@ -410,6 +417,11 @@ def install(repo: Path, *, agent: str, scope: str, project: Path,
             LOG.debug("Prepared and verified %s", target)
         if any(digest(source / name) != value for name, value in source_digests.items()):
             raise RuntimeError("source bundle changed during staging")
+        # Detect every already-known conflict before publishing any destination.
+        for item in staged_items:
+            target, stage, backup = paths(item)
+            if digest(target) != item["old"] or digest(stage) != item["new"] or backup.exists():
+                raise RuntimeError("destination changed before promotion; preserving evidence")
         record = {"version": 1, "token": token, "phase": "prepared", "items": staged_items}
         atomic(pending, json.dumps(record, indent=2).encode("utf-8"))
         prepared_here = True
@@ -458,6 +470,60 @@ def install(repo: Path, *, agent: str, scope: str, project: Path,
             LOG.warning("Installer lock changed or could not be released; preserved for inspection")
 
 
+def failure_guidance(error: Exception) -> str:
+    message = error.args[0] if len(error.args) == 1 and isinstance(error.args[0], str) else ""
+    if message == "installer owner is live or unknown; preserve its lock":
+        return "owner-live-or-unknown: wait for the original local installer to end; preserve its lock"
+    if message.startswith("AGENTS.md has "):
+        return "invalid-pointer-markers: repair the balanced Revayat block without changing outside owner instructions"
+    if message.startswith(("installation ownership changed;", "destination changed before promotion;",
+                           "AGENTS.md changed during", "committed installation changed;")):
+        return "artifact-conflict: preserve journal/backups and reconcile the operator's intervening changes"
+    if message.startswith(("incomplete source bundle:", "source changed", "source bundle changed")):
+        return "source-incomplete-or-changed: restore the complete declared bundle before retrying"
+    if message == "interrupted installation; run the installer with --recover":
+        return "pending-transaction: after the original owner exits, use --recover with the same scope/base"
+    if message == "nothing selected for installation; existing files were kept":
+        return "nothing-selected: select an agent; replacement requires affirmative consent or --force"
+    return "installation-refused: inspect preserved recovery state and verify paths, permissions and source bundle"
+
+
+def diagnostics() -> tuple[list[logging.Handler], int, bool]:
+    level = os.environ.get("REVAYAT_LOG_LEVEL", "INFO").upper()
+    levels = {"DEBUG": logging.DEBUG, "INFO": logging.INFO,
+              "WARNING": logging.WARNING, "ERROR": logging.ERROR}
+    previous = LOG.level, LOG.propagate
+    LOG.setLevel(levels.get(level, logging.INFO))
+    LOG.propagate = False
+    formatter = logging.Formatter("[%(asctime)s UTC] [%(levelname)s] [installer] %(message)s",
+                                  datefmt="%Y-%m-%d %H:%M:%S")
+    formatter.converter = time.gmtime
+    handlers = [logging.StreamHandler(sys.stderr)]
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
+    handlers[0].setFormatter(formatter)
+    LOG.addHandler(handlers[0])
+    try:
+        folder = Path(__file__).resolve().parent / "logs"
+        folder.mkdir(exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%S_UTC")
+        path = folder / f"safe_install_{stamp}.log"
+        try:
+            handler = logging.FileHandler(path, mode="x", encoding="utf-8")
+        except FileExistsError:
+            handler = logging.FileHandler(path.with_stem(path.stem + "_" + uuid.uuid4().hex),
+                                          mode="x", encoding="utf-8")
+        handler.setFormatter(formatter)
+        LOG.addHandler(handler)
+        handlers.append(handler)
+    except OSError as error:
+        LOG.warning("file logging unavailable type=%s; using console diagnostics", type(error).__name__)
+    if level not in levels:
+        LOG.warning("Invalid diagnostic level; using INFO")
+    return handlers, *previous
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--agent", choices=[*AGENTS, "all"], default="all")
@@ -465,21 +531,36 @@ def main(argv=None) -> int:
     parser.add_argument("--path", type=Path, default=Path.cwd())
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--recover", action="store_true")
-    args = parser.parse_args(argv)
-    level = os.environ.get("REVAYAT_LOG_LEVEL", "INFO").upper()
-    levels = {"DEBUG": logging.DEBUG, "INFO": logging.INFO,
-              "WARNING": logging.WARNING, "ERROR": logging.ERROR}
-    logging.basicConfig(level=levels.get(level, logging.INFO),
-                        format="%(asctime)s [%(levelname)s] [installer] %(message)s")
-    if level not in levels:
-        LOG.warning("Invalid diagnostic level; using INFO")
+    handlers, previous_level, previous_propagate = diagnostics()
+    start = time.monotonic()
+    code = 1
+    LOG.info("start run=%s os=%s python=%s", uuid.uuid4().hex, os.name, sys.version.split()[0])
     try:
+        args = parser.parse_args(argv)
+        LOG.debug("configuration agent=%s scope=%s force=%s recover=%s", args.agent, args.scope,
+                  args.force, args.recover)
         install(Path(__file__).resolve().parents[1], agent=args.agent, scope=args.scope,
                 project=args.path, force=args.force, recover=args.recover)
+        code = 0
+        return code
     except (OSError, ValueError, RuntimeError) as error:
-        LOG.error("%s", error)
-        return 1
-    return 0
+        # Exception payloads may contain operator input; retain frames, not values.
+        frames = traceback.extract_tb(error.__traceback__)[-10:]
+        trace = " <- ".join(f"{Path(frame.filename).name}:{frame.lineno}:{frame.name}" for frame in frames)
+        LOG.error("%s type=%s stack=%s", failure_guidance(error), type(error).__name__, trace)
+        return code
+    except SystemExit as error:
+        code = error.code if isinstance(error.code, int) else 1
+        raise
+    finally:
+        LOG.log(logging.INFO if not code else logging.ERROR, "end exit=%s elapsed=%.3fs",
+                code, time.monotonic() - start)
+        for handler in handlers:
+            LOG.removeHandler(handler)
+            handler.flush()
+            handler.close()
+        LOG.setLevel(previous_level)
+        LOG.propagate = previous_propagate
 
 
 if __name__ == "__main__":

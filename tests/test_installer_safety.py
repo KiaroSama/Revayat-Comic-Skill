@@ -5,7 +5,7 @@ import logging
 import os
 from pathlib import Path
 import shutil
-import subprocess
+from process_support import run_process
 import sys
 
 import pytest
@@ -48,9 +48,7 @@ def run_installer(repo, project, agent="codex", *, force=True, recover=False, au
             command.append("--force")
         if recover:
             command.append("--recover")
-    result = subprocess.run(command, env=env, stdin=subprocess.DEVNULL, capture_output=True,
-                            text=True, encoding="utf-8", errors="replace", timeout=30,
-                            start_new_session=os.name != "nt")
+    result = run_process(command, env=env, timeout=30, idle=20)
     LOG.info("Installer exit=%s for isolated %s", result.returncode, agent)
     return result
 
@@ -68,8 +66,8 @@ def test_headless_install_never_assumes_replacement_consent(fixture):
     target = old_install(project)
     result = run_installer(repo, project, force=False)
     assert result.returncode != 0
-    assert (target / "operator-note.md").read_text() == "private local work"
-    assert (target / "SKILL.md").read_text() == "previous skill"
+    assert (target / "operator-note.md").read_text(encoding="utf-8") == "private local work"
+    assert (target / "SKILL.md").read_text(encoding="utf-8") == "previous skill"
 
 
 @pytest.mark.parametrize("markers", [BEGIN, END, BEGIN + b"\n" + BEGIN + b"\n" + END,
@@ -83,7 +81,7 @@ def test_malformed_pointer_refuses_without_losing_rules_or_installation(fixture,
     result = run_installer(repo, project, "opencode")
     assert result.returncode != 0
     assert pointer.read_bytes() == raw
-    assert (target / "operator-note.md").read_text() == "private local work"
+    assert (target / "operator-note.md").read_text(encoding="utf-8") == "private local work"
 
 
 @pytest.mark.parametrize("missing", ["SKILL.md", "requirements.txt", "scripts/revayat-comic.py",
@@ -94,13 +92,13 @@ def test_incomplete_source_cannot_replace_working_installation(fixture, missing)
     (repo / "skills/revayat-comic" / missing).unlink()
     result = run_installer(repo, project)
     assert result.returncode != 0
-    assert (target / "operator-note.md").read_text() == "private local work"
+    assert (target / "operator-note.md").read_text(encoding="utf-8") == "private local work"
 
 
 @pytest.mark.parametrize("ending", [b"\n", b"\r\n", b"\r"])
 def test_pointer_preserves_outside_bytes_and_unowned_scratch(fixture, ending):
     repo, project = fixture
-    prefix = b"# Owner rules" + ending + "نام کاربر".encode() + ending
+    prefix = b"# Owner rules" + ending + "نام کاربر".encode("utf-8") + ending
     suffix = b"USER SUFFIX WITHOUT FINAL NEWLINE"
     pointer = project / "AGENTS.md"
     pointer.write_bytes(prefix + BEGIN + ending + b"old section" + ending + END + ending + suffix)
@@ -123,7 +121,7 @@ def test_successful_upgrade_keeps_previous_operator_files_in_backup(fixture):
     assert (target / "scripts/revayat-comic.py").is_file()
     backups = list((project / ".revayat-comic-installer/backups").iterdir())
     assert len(backups) == 1
-    assert (backups[0] / "operator-note.md").read_text() == "private local work"
+    assert (backups[0] / "operator-note.md").read_text(encoding="utf-8") == "private local work"
 
 
 def test_only_manifest_files_ship_not_runtime_caches_or_local_outputs(fixture):
@@ -131,7 +129,7 @@ def test_only_manifest_files_ship_not_runtime_caches_or_local_outputs(fixture):
     source = repo / "skills/revayat-comic"
     for folder in ("logs", "venv", "__pycache__", "private-reading-copies"):
         (source / folder).mkdir(exist_ok=True)
-        (source / folder / "private.txt").write_text("not for installation")
+        (source / folder / "private.txt").write_text("not for installation", encoding="utf-8")
     assert run_installer(repo, project).returncode == 0
     target = project / ".codex/skills/revayat-comic"
     for folder in ("logs", "venv", "__pycache__", "private-reading-copies"):
@@ -141,11 +139,34 @@ def test_only_manifest_files_ship_not_runtime_caches_or_local_outputs(fixture):
 def test_manifest_covers_all_tracked_skill_files():
     manifest = ROOT / "install/skill-files.txt"
     assert manifest.is_file()
-    names = manifest.read_text().splitlines()
-    tracked = subprocess.run(["git", "ls-files", "skills/revayat-comic"], cwd=ROOT,
-                             capture_output=True, text=True, check=True).stdout.splitlines()
+    names = manifest.read_text(encoding="utf-8").splitlines()
+    tracked = run_process(["git", "ls-files", "skills/revayat-comic"], cwd=ROOT,
+                          timeout=10, idle=5, check=True).stdout.splitlines()
     assert set(names) == {name.removeprefix("skills/revayat-comic/") for name in tracked}
     assert len(names) == len(set(names))
+
+
+@pytest.mark.parametrize("override", [False, True])
+def test_bash_probes_next_supported_candidate_but_honors_override(fixture, override):
+    repo, project = fixture
+    env = os.environ.copy()
+    env["REAL_PY"] = sys.executable.replace("\\", "/")
+    env.pop("REVAYAT_PYTHON", None)
+    if override:
+        env["REVAYAT_PYTHON"] = "python3"
+    tools = project / "probe-tools"
+    tools.mkdir()
+    for name, body in (("python3", "exit 1"), ("python", 'exec "$REAL_PY" "$@"')):
+        path = tools / name
+        path.write_text("#!/usr/bin/env bash\n" + body + "\n", encoding="utf-8", newline="")
+        path.chmod(0o755)
+    script = 'export PATH="$1:$PATH"; shift; exec bash "$@"'
+    result = run_process([shutil.which("bash"), "-c", script, "candidate-test", str(tools).replace("\\", "/"),
+                          str(repo / "install/install.sh").replace("\\", "/"), "--agent", "codex",
+                          "--scope", "project", "--path", str(project)], env=env)
+    target = project / ".codex/skills/revayat-comic/SKILL.md"
+    assert (result.returncode != 0) if override else result.returncode == 0, result.stderr
+    assert target.exists() is not override
 
 
 def test_native_entry_discovers_python_without_an_override(fixture):

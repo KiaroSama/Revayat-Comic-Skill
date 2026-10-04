@@ -84,6 +84,10 @@ Recovery is a separate operation; rerun the intended installation after it
 finishes. A prepared transaction restores its prior complete destinations. A
 committed transaction verifies the installed state and retained backups before
 finishing its history record. A partially completed rollback is resumable.
+Verified rollback candidates are renamed to unique `.discard-` quarantine paths
+before recursive disposal. If disposal is interrupted, that residue remains for
+inspection outside skill discovery; it does not block restoring the remaining
+original destinations. Do not treat a partial quarantine tree as a valid install.
 Uncommitted staging left before a journal was published is retained and reported;
 it never replaced an active skill.
 
@@ -103,10 +107,23 @@ preservation invariant.
 
 ## Diagnostics and validation
 
-`REVAYAT_LOG_LEVEL` selects INFO, WARNING, ERROR or DEBUG. Diagnostics on stderr
-carry timestamps, severity and the installer category. No credential is needed
-or recorded. Use shell redirection to retain diagnostics when needed; this does
-not replace the translation activity log required beside translated output.
+`REVAYAT_LOG_LEVEL` selects INFO, WARNING, ERROR or DEBUG. Every Python bootstrap
+execution creates an exclusive UTF-8 log in `install/logs/`, beside the launcher,
+not in the caller's working directory: `safe_install_YYYY-MM-DD_HH-mm-ss_UTC.log`
+(with a unique suffix on a same-second collision). Entries use
+`[YYYY-MM-DD HH:mm:ss UTC] [LEVEL] [installer] Message`; stderr carries the same
+concise status. Logs record startup, preparation, publication/recovery, warnings,
+sanitary exception types/stack locations, exit status and elapsed time. Exception
+payloads, environment values and owner file contents are omitted; no credential
+is needed or recorded. Handlers are flushed and closed after each run. If file
+logging cannot initialize, a warning reports console-only diagnostics without
+blocking installation or falsely claiming a file exists. A missing interpreter
+cannot run this logger; the native wrapper reports that prerequisite on stderr.
+
+Logs are retained, not automatically rotated or deleted. Review a log before
+attaching it for support; redact sensitive path names and remove older logs only
+when no longer needed. Installer diagnostics do not replace the translation
+activity log required beside translated output.
 
 After installation, run the installed copy's `scripts/revayat-comic.py doctor`,
 then perform a normal pipeline smoke test. The repository tests exercise native

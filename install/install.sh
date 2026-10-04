@@ -4,9 +4,12 @@ set -euo pipefail
 root="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 python="${REVAYAT_PYTHON:-}"
 if [ -z "$python" ]; then
-    if command -v python3 >/dev/null 2>&1; then python=python3
-    elif command -v python >/dev/null 2>&1; then python=python
-    fi
+    for candidate in python3 python; do
+        if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1; then
+            python="$candidate"
+            break
+        fi
+    done
 fi
 if [ -z "$python" ] || ! "$python" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1; then
     printf '%s [ERROR] [installer] Python 3.10+ is required; set REVAYAT_PYTHON to its executable.\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >&2

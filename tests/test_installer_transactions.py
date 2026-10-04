@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 import shutil
 import socket
-import subprocess
+from process_support import run_process
 import sys
 
 import pytest
@@ -34,8 +34,8 @@ def layout(tmp_path):
     for agent in (".codex", ".opencode"):
         old = base / agent / "skills/revayat-comic"
         old.mkdir(parents=True)
-        (old / "SKILL.md").write_text("old skill for " + agent)
-        (old / "note.txt").write_text("operator work")
+        (old / "SKILL.md").write_text("old skill for " + agent, encoding="utf-8")
+        (old / "note.txt").write_text("operator work", encoding="utf-8")
     (base / "AGENTS.md").write_bytes(b"USER RULES\r\nNo changes here.\r\n")
     return repo, base
 
@@ -110,8 +110,8 @@ def changed(path, target):
 pathlib.Path.rename = changed
 m.install(root, agent='all', scope='project', project=base, force=True)
 '''
-    result = subprocess.run([sys.executable, "-c", code, str(repo), str(base), boundary],
-                            capture_output=True, text=True, timeout=30)
+    result = run_process([sys.executable, "-c", code, str(repo), str(base), boundary],
+                         timeout=30, idle=20)
     assert result.returncode == 73, result.stderr
     spec = importlib.util.spec_from_file_location("recover_install", repo / "install/safe_install.py")
     m = importlib.util.module_from_spec(spec)
@@ -142,7 +142,7 @@ def test_intervening_edit_is_not_overwritten_by_rollback(core, layout, monkeypat
         result = original(path, target)
         calls += 1
         if calls == 2:
-            (base / ".codex/skills/revayat-comic/new-operator-work.txt").write_text("keep me")
+            (base / ".codex/skills/revayat-comic/new-operator-work.txt").write_text("keep me", encoding="utf-8")
         return result
     # Codex was changed by another writer after promotion; a later error must preserve it.
     atomic = core.atomic
@@ -155,7 +155,7 @@ def test_intervening_edit_is_not_overwritten_by_rollback(core, layout, monkeypat
         changed.setattr(core, "atomic", write)
         with pytest.raises(RuntimeError, match="ownership changed"):
             call(core, layout)
-    assert (base / ".codex/skills/revayat-comic/new-operator-work.txt").read_text() == "keep me"
+    assert (base / ".codex/skills/revayat-comic/new-operator-work.txt").read_text(encoding="utf-8") == "keep me"
     pending = base / ".revayat-comic-installer/pending.json"
     assert pending.is_file()
     with pytest.raises(RuntimeError, match="ownership changed"):
@@ -171,14 +171,17 @@ def test_agreeing_digest_cannot_hide_pointer_edited_during_staging(core, layout,
         nonlocal changed_once
         result = original(*args, **kwargs)
         if not changed_once:
-            (base / "AGENTS.md").write_text("new owner rules")
+            (base / "AGENTS.md").write_text("new owner rules", encoding="utf-8")
             changed_once = True
         return result
     with monkeypatch.context() as changed:
         changed.setattr(core.shutil, "copy2", copy)
         with pytest.raises(RuntimeError):
             call(core, layout)
-    assert (base / "AGENTS.md").read_text() == "new owner rules"
+    assert (base / "AGENTS.md").read_text(encoding="utf-8") == "new owner rules"
+    for agent in (".codex", ".opencode"):
+        assert (base / agent / "skills/revayat-comic/note.txt").read_text(encoding="utf-8") == "operator work"
+        assert (base / agent / "skills/revayat-comic/SKILL.md").read_text(encoding="utf-8") == "old skill for " + agent
 
 
 def test_live_owner_is_not_displaced(core, layout):
@@ -186,7 +189,7 @@ def test_live_owner_is_not_displaced(core, layout):
     control = base / ".revayat-comic-installer"
     control.mkdir()
     lock = control / "lock.json"
-    raw = json.dumps({"pid": os.getpid(), "host": socket.gethostname(), "token": "a" * 32}).encode()
+    raw = json.dumps({"pid": os.getpid(), "host": socket.gethostname(), "token": "a" * 32}).encode("utf-8")
     lock.write_bytes(raw)
     with pytest.raises(RuntimeError, match="live or unknown"):
         call(core, layout, recover=True)
@@ -199,7 +202,7 @@ def test_linked_files_are_refused_without_writing_through(core, layout, tmp_path
     outside = tmp_path / "outside"
     outside.mkdir()
     sentinel = outside / "rules.md"
-    sentinel.write_text("private")
+    sentinel.write_text("private", encoding="utf-8")
     if os.name == "nt":
         if foreign == "pointer":
             # A hard-linked file requires no symlink privilege. Atomic pointer
@@ -208,15 +211,15 @@ def test_linked_files_are_refused_without_writing_through(core, layout, tmp_path
             target.unlink()
             os.link(sentinel, target)
             call(core, layout)
-            assert sentinel.read_text() == "private"
-            assert target.read_text().startswith("private")
+            assert sentinel.read_text(encoding="utf-8") == "private"
+            assert target.read_text(encoding="utf-8").startswith("private")
             return
         # Junctions need no symlink privilege on Windows CI.
         target = (repo / "skills/revayat-comic/scripts" if foreign == "source"
                   else base / ".codex")
         shutil.rmtree(target)
-        result = subprocess.run(["cmd", "/c", "mklink", "/J", str(target), str(outside)],
-                                capture_output=True, text=True)
+        result = run_process(["cmd", "/c", "mklink", "/J", str(target), str(outside)],
+                             timeout=10, idle=5)
         assert result.returncode == 0, result.stdout + result.stderr
     elif foreign == "source":
         target = repo / "skills/revayat-comic/SKILL.md"
@@ -232,7 +235,7 @@ def test_linked_files_are_refused_without_writing_through(core, layout, tmp_path
         target.symlink_to(outside, target_is_directory=True)
     with pytest.raises(ValueError, match="linked"):
         call(core, layout)
-    assert sentinel.read_text() == "private"
+    assert sentinel.read_text(encoding="utf-8") == "private"
 
 
 def test_backups_are_outside_skill_discovery_directories(core, layout):
@@ -308,13 +311,39 @@ def test_source_edit_during_staging_does_not_publish_a_mixed_bundle(core, layout
     assert originals(layout[1]) == before
 
 
+def test_rollback_recovers_after_partial_recursive_disposal(core, layout, monkeypatch):
+    before = originals(layout[1])
+    atomic, remove = core.atomic, core.shutil.rmtree
+    interrupted = False
+    def fail_commit(path, data):
+        if json.loads(data)["phase"] == "committed":
+            raise OSError("commit failure")
+        return atomic(path, data)
+    def partial_remove(path, *args, **kwargs):
+        nonlocal interrupted
+        if not interrupted:
+            interrupted = True
+            next(Path(path).rglob("*.py")).unlink()
+            raise OSError("interrupted recursive disposal")
+        return remove(path, *args, **kwargs)
+    with monkeypatch.context() as changed:
+        changed.setattr(core, "atomic", fail_commit)
+        changed.setattr(core.shutil, "rmtree", partial_remove)
+        with pytest.raises(OSError, match="interrupted recursive disposal"):
+            call(core, layout)
+    assert (layout[1] / ".revayat-comic-installer/pending.json").is_file()
+    call(core, layout, recover=True)
+    assert originals(layout[1]) == before
+    assert call(core, layout)
+
+
 @pytest.mark.parametrize("record", [[], {"version": 1, "token": None},
     {"version": 1, "token": "a" * 32, "phase": "prepared", "items": [None]}])
 def test_unknown_recovery_record_is_preserved(core, layout, record):
     control = layout[1] / ".revayat-comic-installer"
     control.mkdir()
     pending = control / "pending.json"
-    raw = json.dumps(record).encode()
+    raw = json.dumps(record).encode("utf-8")
     pending.write_bytes(raw)
     before = originals(layout[1])
     with pytest.raises(ValueError):

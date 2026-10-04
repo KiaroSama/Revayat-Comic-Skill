@@ -27,17 +27,17 @@ def test_subset_upgrade_retains_both_installed_pointer_targets(setup):
     for name in ('opencode', 'antigravity'):
         core.install(ROOT, agent=name, scope='project', project=base, force=True)
     core.install(ROOT, agent='opencode', scope='project', project=base, force=True)
-    text = (base / 'AGENTS.md').read_text()
+    text = (base / 'AGENTS.md').read_text(encoding="utf-8")
     assert str(base / '.opencode/skills/revayat-comic').replace('\\', '/') in text
     assert str(base / '.agents/skills/revayat-comic').replace('\\', '/') in text
-    assert text.count(core.BEGIN.decode()) == text.count(core.END.decode()) == 1
+    assert text.count(core.BEGIN.decode("utf-8")) == text.count(core.END.decode("utf-8")) == 1
 
 
 def link_folder(target, outside):
     import os
-    import subprocess
+    from process_support import run_process
     if os.name == 'nt':
-        result = subprocess.run(['cmd', '/c', 'mklink', '/J', str(target), str(outside)], capture_output=True)
+        result = run_process(['cmd', '/c', 'mklink', '/J', str(target), str(outside)], timeout=10, idle=5)
         assert result.returncode == 0
     else:
         target.symlink_to(outside, target_is_directory=True)
@@ -58,7 +58,7 @@ def test_recovery_does_not_follow_linked_storage_parents(setup, tmp_path, storag
     record = {'version': 1, 'token': token, 'phase': 'prepared', 'items': [
         {'target': str(target), 'stage': str(stage), 'backup': str(backup), 'old': None, 'new': '0'*64}]}
     pending = control / 'pending.json'
-    pending.write_text(json.dumps(record))
+    pending.write_text(json.dumps(record), encoding="utf-8")
     raw = pending.read_bytes()
     with pytest.raises(ValueError, match='linked'):
         core.install(ROOT, agent='codex', scope='project', project=base, recover=True)
@@ -92,7 +92,7 @@ def test_committed_recovery_does_not_certify_missing_backups(setup, monkeypatch)
         with pytest.raises(OSError):
             core.install(ROOT, agent='codex', scope='project', project=base, force=True)
     pending = base / '.revayat-comic-installer/pending.json'
-    record = json.loads(pending.read_text())
+    record = json.loads(pending.read_text(encoding="utf-8"))
     backup = Path(record['items'][0]['backup'])
     shutil.rmtree(backup)
     raw = pending.read_bytes()
@@ -109,11 +109,11 @@ def test_post_promotion_edit_is_preserved_without_reporting_success(setup, monke
     def concurrent(path, new):
         result = rename(path, new)
         if Path(new) == target:
-            (target / 'operator.txt').write_text('new work')
+            (target / 'operator.txt').write_text('new work', encoding="utf-8")
         return result
     with monkeypatch.context() as changed:
         changed.setattr(Path, 'rename', concurrent)
         with pytest.raises(RuntimeError, match='ownership changed'):
             core.install(ROOT, agent='codex', scope='project', project=base, force=True)
-    assert (target / 'operator.txt').read_text() == 'new work'
+    assert (target / 'operator.txt').read_text(encoding="utf-8") == 'new work'
     assert (base / '.revayat-comic-installer/pending.json').is_file()
