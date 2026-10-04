@@ -35,6 +35,9 @@ class WindowsJob:
             "TerminateJobObject": ([w.HANDLE, w.UINT], w.BOOL),
             "QueryInformationJobObject": ([w.HANDLE, ctypes.c_int, ctypes.c_void_p, w.DWORD, ctypes.c_void_p], w.BOOL),
             "CloseHandle": ([w.HANDLE], w.BOOL),
+            "OpenProcess": ([w.DWORD, w.BOOL, w.DWORD], w.HANDLE),
+            "IsProcessInJob": ([w.HANDLE, w.HANDLE, ctypes.POINTER(w.BOOL)], w.BOOL),
+            "WaitForSingleObject": ([w.HANDLE, w.DWORD], w.DWORD),
         }
         for name, (arguments, result) in signatures.items():
             function = getattr(self.api, name)
@@ -53,8 +56,43 @@ class WindowsJob:
             raise ctypes.WinError(ctypes.get_last_error())
 
     def stop(self):
-        if not self.api.TerminateJobObject(self.handle, 124):
+        from ctypes import wintypes as w
+        # Accounting may reach zero before the kernel process object is signaled.
+        # Pin current members before termination, then wait on those exact handles.
+        class Members(ctypes.Structure):
+            _fields_ = [("assigned", w.DWORD), ("listed", w.DWORD),
+                        ("pids", ctypes.c_size_t * 128)]
+        members = Members()
+        if not self.api.QueryInformationJobObject(self.handle, 3, ctypes.byref(members),
+                                                   ctypes.sizeof(members), None):
             raise ctypes.WinError(ctypes.get_last_error())
+        if members.listed != members.assigned:
+            raise RuntimeError("owned Windows process membership exceeded the bounded buffer")
+        handles = []
+        try:
+            for pid in members.pids[:members.listed]:
+                handle = self.api.OpenProcess(0x101000, False, pid)
+                if not handle:
+                    if ctypes.get_last_error() == 87:
+                        continue
+                    raise ctypes.WinError(ctypes.get_last_error())
+                owned = w.BOOL()
+                if not self.api.IsProcessInJob(handle, self.handle, ctypes.byref(owned)):
+                    self.api.CloseHandle(handle)
+                    raise ctypes.WinError(ctypes.get_last_error())
+                if owned.value:
+                    handles.append(handle)
+                else:
+                    self.api.CloseHandle(handle)
+            if not self.api.TerminateJobObject(self.handle, 124):
+                raise ctypes.WinError(ctypes.get_last_error())
+            deadline = time.monotonic() + 5
+            for handle in handles:
+                if self.api.WaitForSingleObject(handle, max(0, int((deadline - time.monotonic()) * 1000))) != 0:
+                    raise RuntimeError("owned Windows process did not finish termination")
+        finally:
+            for handle in handles:
+                self.api.CloseHandle(handle)
 
     def active(self):
         information = self.accounting()
