@@ -75,7 +75,11 @@ def run_process(command, *, env=None, cwd=None, timeout=30, idle=20, check=False
     started = progress = time.monotonic()
     size = 0
     try:
-        process = subprocess.Popen([sys.executable, "-B", "-c", gate, json.dumps(command)],
+        # A Windows venv redirector can spawn its interpreter before job assignment.
+        # The stdlib-only gate must be the real interpreter, then launch the venv
+        # command only after it belongs to our non-breakaway ownership job.
+        bootstrap = getattr(sys, "_base_executable", sys.executable) if job else sys.executable
+        process = subprocess.Popen([bootstrap, "-B", "-c", gate, json.dumps(command)],
                                    env=env, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                    stderr=subprocess.PIPE, start_new_session=job is None,
                                    creationflags=subprocess.CREATE_NO_WINDOW if job else 0)
