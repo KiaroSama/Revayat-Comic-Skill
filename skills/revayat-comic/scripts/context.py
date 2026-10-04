@@ -108,7 +108,8 @@ def _previous(doc: dict[str, Any], page_id: str,
     for page in reversed(doc["pages"][:_index(doc, page_id)]):
         for region in reversed(page.get("regions", [])):
             target = (region.get("target_text") or "").strip()
-            if not target or region.get("dropped"):
+            if not target or not ir.translatable(
+                    region, doc["meta"].get("sfx_policy", "keep")):
                 continue
             source = (region.get("source_text") or "").strip()
             cost = len(target) + len(source)

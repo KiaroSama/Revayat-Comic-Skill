@@ -34,7 +34,8 @@ DELIVERY_FIELDS = ("final", "clean", "writable")
 CLEANING_FIELDS = ("source", "mask", "clean")
 
 
-def certify_artifact(findings: Any, root: Path, page: dict[str, Any]) -> None:
+def certify_artifact(findings: Any, root: Path, page: dict[str, Any],
+                     sfx_policy: str = "keep") -> None:
     """Is this page allowed to ship the file it is about to ship?
 
     The gate asked this about Persian only. An erasure had no equivalent, so
@@ -48,7 +49,7 @@ def certify_artifact(findings: Any, root: Path, page: dict[str, Any]) -> None:
                      "this page has no image on disk at all")
         return
     shipping = found[1]
-    required = ir.required_artifact(page)
+    required = ir.required_artifact(page, sfx_policy)
     if ir.ARTIFACT_ORDER.index(shipping) <= ir.ARTIFACT_ORDER.index(required):
         return
     if required == "final":

@@ -30,11 +30,9 @@ from writers import staging_path  # noqa: F401
 FORMATS = ("cbz", "pdf", "dir")
 
 
-def _wants_rendering(page: dict[str, Any]) -> bool:
-    """Whether this page has Persian on it that a render has to carry."""
-    return any((region.get("target_text") or "").strip()
-               for region in page.get("regions", [])
-               if not region.get("dropped"))
+def _wants_rendering(page: dict[str, Any], sfx_policy: str = "keep") -> bool:
+    """Whether the current decisions require a rendered page."""
+    return ir.required_artifact(page, sfx_policy) == "final"
 
 
 def _manifest(doc: dict[str, Any], root: Path) -> dict[str, str]:
@@ -308,7 +306,8 @@ def _publish(doc_path: Path, out: Path, fmt: str | None, quality: int,
     sources = _manifest(doc, root)
     unrendered = sorted(
         page["id"] for page in doc["pages"]
-        if _wants_rendering(page) and sources[page["id"]] != "final"
+        if _wants_rendering(page, doc["meta"].get("sfx_policy", "keep"))
+        and sources[page["id"]] != "final"
     )
     if not draft:
         # The whole gate, not export's own narrower question. Asking only "is

@@ -257,7 +257,7 @@ def check(doc_path: str | Path, *, limit: int | None = 30) -> dict[str, Any]:
 
     drift: list[dict[str, str]] = []
     for _, region in ir.iter_regions(doc):
-        if region.get("dropped"):
+        if not ir.translatable(region, doc["meta"].get("sfx_policy", "keep")):
             continue
         source = (region.get("source_text") or "")
         target = (region.get("target_text") or "")

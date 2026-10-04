@@ -481,7 +481,7 @@ def check_document(doc_path: str | Path, *, strict: bool = False,
         # cleaned image is still the one the cleaner produced. An erase-only
         # chapter reaches neither `typeset` nor anything that used to look at
         # its bytes.
-        certify.certify_artifact(findings, root, page)
+        certify.certify_artifact(findings, root, page, policy)
         certify.certify_cleaning(findings, root, page)
         final = page.get("final")
         if final:
@@ -559,11 +559,11 @@ def check_document(doc_path: str | Path, *, strict: bool = False,
 
             target = (region.get("target_text") or "").strip()
             expected = ir.translatable(region, policy)
-            if not target:
+            if not expected or not target:
                 if expected:
                     findings.add("untranslated-region", region["id"],
                                  f"{region['kind']} region has no Persian")
-                elif region["kind"] == "sfx" and not region.get("keep"):
+                elif not target and region["kind"] == "sfx" and not region.get("keep"):
                     # An explicit `keep: yes` is a decision the reader made
                     # about this one region, not the global policy leaking
                     # through. Warning on it reports a choice as an omission,

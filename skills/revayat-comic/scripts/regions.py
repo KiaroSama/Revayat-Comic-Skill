@@ -41,7 +41,7 @@ DERIVED_FROM_REGIONS = ("clean", "cleaning", "final", "writable", "delivery")
 ARTIFACT_ORDER = ("final", "clean", "image")
 
 
-def required_artifact(page: dict[str, Any]) -> str:
+def required_artifact(page: dict[str, Any], sfx_policy: str = "keep") -> str:
     """The LEAST finished file this page's own decisions allow it to ship.
 
     `export` ships the most finished file that exists, and that fallback is
@@ -64,7 +64,8 @@ def required_artifact(page: dict[str, Any]) -> str:
     """
     live = [region for region in page.get("regions", [])
             if not region.get("dropped")]
-    if any((region.get("target_text") or "").strip() for region in live):
+    if any(translatable(region, sfx_policy) and
+           (region.get("target_text") or "").strip() for region in live):
         return "final"
     if any(region.get("fill") not in (None, "none", "keep") for region in live):
         return "clean"
@@ -161,7 +162,7 @@ def translatable(region: dict[str, Any], sfx_policy: str = "keep") -> bool:
     An SFX under the ``keep`` policy is deliberately left in the artwork, so it
     is not a hole in the translation and QA must not report one.
     """
-    if region.get("keep"):
+    if region.get("dropped") or region.get("keep"):
         # The reader looked at it and said: this is real lettering, leave it in
         # the artwork. Distinct from `dropped`, which says there is no text here
         # — using `drop` for this made the census classify real text as a false
@@ -207,6 +208,9 @@ def region_state(region: dict[str, Any], sfx_policy: str = "keep") -> str:
         return "erased" if region.get("fill") not in (None, "none", "keep") \
             else "needs_review"
 
+    if not translatable(region, sfx_policy):
+        return "kept_by_policy"
+
     typeset = region.get("typeset") or {}
     if typeset.get("status") in {"overflow", "unreliable"}:
         # Two different ways of not being placed, and both need a person.
@@ -219,9 +223,6 @@ def region_state(region: dict[str, Any], sfx_policy: str = "keep") -> str:
 
     if (region.get("target_text") or "").strip():
         return "translated"
-
-    if not translatable(region, sfx_policy):
-        return "kept_by_policy"
 
     # Seen and questioned by a reader, but left without an answer. That is a
     # different thing from never having been looked at, and it is worth the

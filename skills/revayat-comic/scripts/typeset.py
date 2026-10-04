@@ -171,7 +171,9 @@ def typeset_page(
     if union:
         writable = np.maximum(writable, mask_tools.load_mask(root / union))
     for region in page.get("regions", []):
-        if region.get("dropped") or not (region.get("target_text") or "").strip():
+        if (not ir.translatable(region, policy)
+                or not (region.get("target_text") or "").strip()
+                or region["kind"] == "sfx" and policy in ("bilingual", "annotate")):
             continue
         own = np.zeros((page["height"], page["width"]), np.uint8)
         if region.get("mask") :
@@ -209,11 +211,7 @@ def typeset_page(
     skipped = 0
     for region in page.get("regions", []):
         text = region.get("target_text") or ""
-        if region.get("dropped") or not text:
-            skipped += 1
-            continue
-        if region.get("keep") or (
-                region["kind"] == "sfx" and policy == "keep"):
+        if not ir.translatable(region, policy) or not text:
             skipped += 1
             continue
         if policy in ("bilingual", "annotate") and region["kind"] == "sfx":

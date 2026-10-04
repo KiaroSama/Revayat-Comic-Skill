@@ -79,6 +79,18 @@ compression approval. Returning to active translation with a different nonempty
 full/display pair requires a current review again. Missing active text and unfinished
 cleaning still fail their own gates.
 
+A retained displayed draft is also history when the current decision is keep,
+drop, erase or SFX keep. It is not drawn, normalized, policed as current Persian
+or supplied as a paired translation memory entry. Reactivation restores those
+checks without deleting the draft. Glossary rename impact still names historical
+nondropped spellings; that advisory is distinct from current glossary enforcement.
+
+Unchanged inactive pages may ship their original without a fake typesetting run;
+completed erasures require their verified cleaned image. Active translation still
+requires a render. A policy change stales the old edition: rebuild the affected
+mask/clean/typeset stages and check QA before exporting. Bilingual/annotated glosses
+still need an actual reserved placement; retained text does not invent one.
+
 ## Refresh after text-revision hardening
 
 Text/source revision hashing now encodes field boundaries structurally. A pipe

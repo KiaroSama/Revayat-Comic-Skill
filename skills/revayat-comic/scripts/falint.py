@@ -611,6 +611,8 @@ def fix_document(doc_path: str | Path, options: Options | None = None) -> dict[s
     options = options or Options()
     changed: list[str] = []
     for _, region in ir.iter_regions(doc):
+        if not ir.translatable(region, doc["meta"].get("sfx_policy", "keep")):
+            continue
         before = region.get("target_text") or ""
         after = fix_text(before, options)
         if after != before:
@@ -625,7 +627,7 @@ def lint_document(doc_path: str | Path) -> dict[str, Any]:
     doc = ir.load_doc(Path(doc_path))
     findings: list[dict[str, Any]] = []
     for _, region in ir.iter_regions(doc):
-        if region.get("dropped"):
+        if not ir.translatable(region, doc["meta"].get("sfx_policy", "keep")):
             continue
         for issue in lint_region(region):
             findings.append({"region": region["id"], **issue})

@@ -309,7 +309,7 @@ which is which:
 
 - **the machine's draft** — whatever `translate` wrote, recorded in the
   region's `provenance` with the provider that produced it;
-- **the approved translation** — `fa:`, which is what ships;
+- **the approved translation** — `fa:`, which ships only where the current decision calls for Persian;
 - **the compressed variant** — `fa:` when `fa_full:` is set beside it.
 
 Say so when you are not sure. `note:` on the region carries a question to
