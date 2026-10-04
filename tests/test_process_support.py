@@ -1,4 +1,5 @@
 """Timeout cleanup at the native wrapper/descendant boundary."""
+import json
 import os
 import subprocess
 import sys
@@ -10,12 +11,27 @@ from process_support import run_process
 
 def test_idle_timeout_terminates_wrapper_and_descendant(tmp_path):
     marker = tmp_path / "child.pid"
-    child = "import os,pathlib,sys,threading; pathlib.Path(sys.argv[1]).write_text(str(os.getpid()),encoding='utf-8'); print('child ready',flush=True); threading.Event().wait(30)"
+    child = """
+import ctypes, json, os, pathlib, sys, threading
+birth = None
+if os.name == 'nt':
+    from ctypes import wintypes as w
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel.GetCurrentProcess.restype = w.HANDLE
+    kernel.GetProcessTimes.argtypes = [w.HANDLE, *([ctypes.POINTER(w.FILETIME)] * 4)]
+    created, exited, system, user = w.FILETIME(), w.FILETIME(), w.FILETIME(), w.FILETIME()
+    assert kernel.GetProcessTimes(kernel.GetCurrentProcess(), ctypes.byref(created), ctypes.byref(exited), ctypes.byref(system), ctypes.byref(user))
+    birth = (created.dwHighDateTime << 32) | created.dwLowDateTime
+pathlib.Path(sys.argv[1]).write_text(json.dumps({'pid': os.getpid(), 'birth': birth}), encoding='utf-8')
+print('child ready', flush=True)
+threading.Event().wait(30)
+"""
     parent = "import subprocess,sys,threading; subprocess.Popen([sys.executable,'-u','-c',sys.argv[1],sys.argv[2]]); threading.Event().wait(30)"
     with pytest.raises(subprocess.TimeoutExpired):
         run_process([sys.executable, "-u", "-c", parent, child, str(marker)], timeout=15, idle=3)
     assert marker.is_file(), "the actual descendant must start before timeout"
-    pid = int(marker.read_text(encoding="utf-8"))
+    identity = json.loads(marker.read_text(encoding="utf-8"))
+    pid = identity["pid"]
     if os.name == "nt":
         import ctypes
         from ctypes import wintypes
@@ -24,10 +40,16 @@ def test_idle_timeout_terminates_wrapper_and_descendant(tmp_path):
         kernel.OpenProcess.restype = wintypes.HANDLE
         kernel.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
         kernel.CloseHandle.argtypes = [wintypes.HANDLE]
-        handle = kernel.OpenProcess(0x100000, False, pid)
+        kernel.GetProcessTimes.argtypes = [wintypes.HANDLE, *([ctypes.POINTER(wintypes.FILETIME)] * 4)]
+        handle = kernel.OpenProcess(0x101000, False, pid)
         if handle:
             try:
-                assert kernel.WaitForSingleObject(handle, 0) == 0
+                created, exited, system, user = (wintypes.FILETIME() for _ in range(4))
+                assert kernel.GetProcessTimes(handle, ctypes.byref(created), ctypes.byref(exited),
+                                               ctypes.byref(system), ctypes.byref(user))
+                birth = (created.dwHighDateTime << 32) | created.dwLowDateTime
+                # A reused PID is not the child this test owned; never kill it.
+                assert birth != identity["birth"] or kernel.WaitForSingleObject(handle, 0) == 0
             finally:
                 kernel.CloseHandle(handle)
         else:

@@ -152,15 +152,14 @@ def test_bash_probes_next_supported_candidate_but_honors_override(fixture, overr
     env = os.environ.copy()
     env["REAL_PY"] = sys.executable.replace("\\", "/")
     env.pop("REVAYAT_PYTHON", None)
-    if override:
-        env["REVAYAT_PYTHON"] = "python3"
+    env["OVERRIDE_PROBE"] = "1" if override else "0"
     tools = project / "probe-tools"
     tools.mkdir()
     for name, body in (("python3", "exit 1"), ("python", 'exec "$REAL_PY" "$@"')):
         path = tools / name
         path.write_text("#!/usr/bin/env bash\n" + body + "\n", encoding="utf-8", newline="")
         path.chmod(0o755)
-    script = 'export PATH="$1:$PATH"; shift; exec bash "$@"'
+    script = 'tools="$1"; if command -v cygpath >/dev/null 2>&1; then tools="$(cygpath -u "$tools")"; fi; export PATH="$tools:$PATH"; if [ "$OVERRIDE_PROBE" = 1 ]; then export REVAYAT_PYTHON="$tools/python3"; fi; shift; exec bash "$@"'
     result = run_process([shutil.which("bash"), "-c", script, "candidate-test", str(tools).replace("\\", "/"),
                           str(repo / "install/install.sh").replace("\\", "/"), "--agent", "codex",
                           "--scope", "project", "--path", str(project)], env=env)
