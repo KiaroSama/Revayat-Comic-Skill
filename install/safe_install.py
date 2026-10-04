@@ -254,6 +254,8 @@ def load_record(path: Path, base: Path, targets: set[Path]) -> dict:
         safe_path(target, base)
         if (stage, backup) != artifact_paths(path.parent, target, token):
             raise ValueError("invalid recovery artifact path")
+        safe_path(stage, base)
+        safe_path(backup, base)
         for key in ("old", "new"):
             value = item.get(key)
             if not (key == "old" and value is None) and not (
@@ -289,7 +291,9 @@ def install(repo: Path, *, agent: str, scope: str, project: Path,
     if os.name != "nt":
         control.chmod(0o700)
     lock = control / "lock.json"
+    pending = control / "pending.json"
     safe_path(lock, base)
+    safe_path(pending, base)
     if recover and lock.exists():
         previous_lock = read_bytes(lock)
         owner = json.loads(previous_lock)
@@ -307,11 +311,9 @@ def install(repo: Path, *, agent: str, scope: str, project: Path,
         json.dump(ownership, stream)
         stream.flush()
         os.fsync(stream.fileno())
-    pending = control / "pending.json"
     staged_items = []
     committed = False
     prepared_here = False
-    safe_path(pending, base)
     try:
         if pending.exists():
             record = load_record(pending, base, valid_targets)
@@ -322,7 +324,9 @@ def install(repo: Path, *, agent: str, scope: str, project: Path,
                 pending.unlink()
             else:
                 for item in record["items"]:
-                    if digest(Path(item["target"])) != item["new"]:
+                    target, stage, backup = paths(item)
+                    if (digest(target) != item["new"] or digest(stage) is not None
+                            or digest(backup) != item["old"]):
                         raise RuntimeError("committed installation changed; preserve recovery evidence")
                 finish(control, record)
             LOG.info("Recovery finished")
@@ -354,7 +358,15 @@ def install(repo: Path, *, agent: str, scope: str, project: Path,
             chosen.append((name, target))
         if not chosen:
             raise ValueError("nothing selected for installation; existing files were kept")
-        pointer_targets = [target for name, target in chosen if name in ("opencode", "antigravity")]
+        pointer_targets = []
+        if any(name in ("opencode", "antigravity") for name, _ in chosen):
+            selected = {target for _, target in chosen}
+            for name in ("opencode", "antigravity"):
+                target = targets[name]
+                safe_path(target / "SKILL.md", base)
+                # A one-agent upgrade must not erase another installed pointer.
+                if target in selected or (target / "SKILL.md").is_file():
+                    pointer_targets.append(target)
         pointer_path = base / "AGENTS.md"
         pointer_data = None
         expected = {target: digest(target) for _, target in chosen}
@@ -410,6 +422,11 @@ def install(repo: Path, *, agent: str, scope: str, project: Path,
             if target.exists() or linked(target):
                 raise RuntimeError("another writer created the installation destination")
             stage.rename(target)
+        for item in staged_items:
+            target, stage, backup = paths(item)
+            if (digest(target) != item["new"] or digest(stage) is not None
+                    or digest(backup) != item["old"]):
+                raise RuntimeError("installation changed before commit; preserve recovery evidence")
         record["phase"] = "committed"
         atomic(pending, json.dumps(record, indent=2).encode("utf-8"))
         committed = True
@@ -454,6 +471,8 @@ def main(argv=None) -> int:
               "WARNING": logging.WARNING, "ERROR": logging.ERROR}
     logging.basicConfig(level=levels.get(level, logging.INFO),
                         format="%(asctime)s [%(levelname)s] [installer] %(message)s")
+    if level not in levels:
+        LOG.warning("Invalid diagnostic level; using INFO")
     try:
         install(Path(__file__).resolve().parents[1], agent=args.agent, scope=args.scope,
                 project=args.path, force=args.force, recover=args.recover)
