@@ -17,18 +17,38 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-$python = $env:REVAYAT_PYTHON
-if (-not $python) {
+$requestedPython = $env:REVAYAT_PYTHON
+$candidates = @()
+if ($requestedPython) {
+    $candidates = @($requestedPython)
+} else {
     foreach ($name in @('python', 'python3')) {
-        $found = Get-Command $name -CommandType Application -ErrorAction SilentlyContinue
-        if ($found) { $python = $found.Source; break }
+        # ApplicationInfo.Path is one executable. Never invoke an array of
+        # matches as a command, and do not let an unusable first match hide
+        # another installed interpreter that meets the supported floor.
+        foreach ($found in @(Get-Command $name -CommandType Application -All -ErrorAction SilentlyContinue)) {
+            if ($found.Path -and $found.Path -notin $candidates) {
+                $candidates += [string] $found.Path
+            }
+        }
     }
 }
-try {
-    if (-not $python) { throw 'Python executable was not found' }
-    & $python -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>$null
-    if ($LASTEXITCODE -ne 0) { throw 'Python is older than the supported floor' }
-} catch {
+$python = $null
+foreach ($candidate in $candidates) {
+    try {
+        $probe = & $candidate -c 'import sys; print(sys.version_info.major, sys.version_info.minor); sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>$null
+        if ($LASTEXITCODE -eq 0 -and ($probe -match '^\d+ \d+$')) {
+            $python = $candidate
+            break
+        }
+    } catch {
+        # No raw exception/arguments: an explicit override may be sensitive.
+        if ($env:REVAYAT_LOG_LEVEL -eq 'DEBUG') {
+            [Console]::Error.WriteLine('{0} [DEBUG] [installer] Interpreter probe failed ({1}).' -f [DateTime]::UtcNow.ToString('o'), $_.Exception.GetType().Name)
+        }
+    }
+}
+if (-not $python) {
     [Console]::Error.WriteLine('{0} [ERROR] [installer] Python 3.10+ is required; set REVAYAT_PYTHON.' -f [DateTime]::UtcNow.ToString('o'))
     exit 1
 }

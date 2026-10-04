@@ -26,9 +26,12 @@ def fixture(tmp_path):
     return repo, project
 
 
-def run_installer(repo, project, agent="codex", *, force=True, recover=False):
+def run_installer(repo, project, agent="codex", *, force=True, recover=False, automatic=False):
     env = os.environ.copy()
-    env["REVAYAT_PYTHON"] = sys.executable
+    if automatic:
+        env.pop("REVAYAT_PYTHON", None)
+    else:
+        env["REVAYAT_PYTHON"] = sys.executable
     if os.name == "nt":
         shell = shutil.which("pwsh") or shutil.which("powershell")
         assert shell, "Windows installer testing requires PowerShell"
@@ -143,3 +146,10 @@ def test_manifest_covers_all_tracked_skill_files():
                              capture_output=True, text=True, check=True).stdout.splitlines()
     assert set(names) == {name.removeprefix("skills/revayat-comic/") for name in tracked}
     assert len(names) == len(set(names))
+
+
+def test_native_entry_discovers_python_without_an_override(fixture):
+    repo, project = fixture
+    result = run_installer(repo, project, automatic=True)
+    assert result.returncode == 0, result.stderr
+    assert (project / ".codex/skills/revayat-comic/scripts/revayat-comic.py").is_file()
