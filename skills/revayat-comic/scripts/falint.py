@@ -54,10 +54,10 @@ PERSIAN_DIGIT = r"۰-۹"
 _STRUCTURED = r"""
     (?:https?://|www\.)\S+
     | [\w.+-]+@[\w-]+\.[\w.-]+
-    | (?<![\w.,٫٬]) [+-−]?
-      (?: \d+(?:[.,٫٬:/-]\d+)+(?:[eE][+-−]?\d+)?
-        | \d+[eE][+-−]?\d+
-        | [.,٫]\d+(?:[eE][+-−]?\d+)? )
+    | (?<![\w.,٫٬]) [+\-−]?
+      (?: \d+(?:[.,٫٬:/-]\d+)+(?:[eE][+\-−]?\d+)?
+        | \d+[eE][+\-−]?\d+
+        | [.,٫]\d+(?:[eE][+\-−]?\d+)? )
       (?!\d)
 """
 #: Everything the FIXER keeps its hands off: the above, plus any Latin word,
