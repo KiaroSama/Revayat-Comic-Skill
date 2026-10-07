@@ -333,9 +333,11 @@ def test_correcting_an_added_box_refreshes_what_was_derived_from_it(detected):
     worksheet.build_document(detected)
     page_id = doc["pages"][0]["id"]
     base = ir.read_text(_sheets(detected) / f"{page_id}.txt")
-    _finish(detected, page_id, base
-            + "\n@@ +missed sfx vertical\nbox: 140 160 300 120\n"
-              "polarity: dark\nsrc: BOOM\nfa: بوم\n")
+    base = base.replace(f"@@ {added['id']} sfx horizontal",
+                        f"@@ {added['id']} sfx vertical")
+    base = _set_fields(base, added["id"], "box: 140 160 300 120",
+                       "polarity: dark", "src: BOOM", "fa: بوم")
+    _finish(detected, page_id, base)
     for other in doc["pages"][1:]:
         _finish(detected, other["id"])
     worksheet.merge_document(detected)

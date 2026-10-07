@@ -158,8 +158,9 @@ class StdioClient:
         try:
             self._send(None, deadline)
             while self.process.poll() is None:
+                remaining = self._remaining(deadline)
                 try:
-                    self.process.wait(timeout=self._remaining(deadline))
+                    self.process.wait(timeout=remaining)
                 except subprocess.TimeoutExpired:
                     continue
             return self.process.returncode

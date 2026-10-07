@@ -264,13 +264,14 @@ def build_document(
             image = ir.load_image(root / page["image"])
             sheets = render_sheets(image, page)
             if old - set(owned):
-                import masks as mask_tools
-
-                # Older documents recorded names, not hashes. Admit only an
-                # exact deterministic rerender, never an edited or ambiguous file.
-                rebuilt = {f"{folder}/sheet{index:02d}.png":
-                           ir.sha256_bytes(mask_tools._encode_png(sheet))
-                           for index, sheet in enumerate(sheets, start=1)}
+                # Use the original stage's encoder options, not the optimized
+                # mask encoder: identical pixels can have different PNG bytes.
+                rebuilt = {}
+                for index, sheet in enumerate(sheets, start=1):
+                    name = f"{folder}/sheet{index:02d}.png"
+                    probe = scratch / "legacy" / name
+                    ir.save_image(sheet, probe)
+                    rebuilt[name] = ir.sha256_file(probe)
                 for name in old - set(owned):
                     if name in rebuilt:
                         owned[name] = rebuilt[name]

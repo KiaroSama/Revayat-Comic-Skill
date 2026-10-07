@@ -140,6 +140,21 @@ def stop_owned(process, job, *, drain=True):
                         os.killpg(process.pid, signal.SIGKILL)
                     except ProcessLookupError:
                         pass
+                    except PermissionError:
+                        # Darwin returns EPERM for a group containing only zombies.
+                        # Suppress only after a bounded exact-group liveness check;
+                        # a live member or failed observation remains a real error.
+                        if sys.platform != "darwin":
+                            raise
+                        status = subprocess.run(["/bin/ps", "-axo", "pgid=,stat="],
+                                                stdin=subprocess.DEVNULL,
+                                                capture_output=True, text=True,
+                                                encoding="utf-8", timeout=5, check=True)
+                        members = [line.split() for line in status.stdout.splitlines()
+                                   if line.split() and line.split()[0] == str(process.pid)]
+                        if any(len(member) != 2 or not member[1].startswith("Z")
+                               for member in members):
+                            raise
             finally:
                 if job:
                     job.close()

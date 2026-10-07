@@ -506,7 +506,7 @@ def test_a_corrupt_archive_does_not_end_the_mcp_conversation(stdio_client,
     stdio_client.request("initialize", protocolVersion="2025-03-26",
                          capabilities={}, clientInfo={"name": "probe"})
     reply = stdio_client.request(
-        "tools/call", name="import",
+        "tools/call", name="revayat_import",
         arguments={"args": ["--source", str(broken),
                             "--out", str(tmp_path / "work")]})
     outcome = json.loads(reply["result"]["content"][0]["text"])
@@ -526,7 +526,7 @@ def test_a_directory_where_a_file_belongs_does_not_end_it_either(stdio_client,
 
     stdio_client.request("initialize", protocolVersion="2025-03-26",
                          capabilities={}, clientInfo={"name": "probe"})
-    reply = stdio_client.request("tools/call", name="detect",
+    reply = stdio_client.request("tools/call", name="revayat_detect",
                                  arguments={"args": ["--doc", str(folder)]})
     assert json.loads(reply["result"]["content"][0]["text"])["ok"] is False
     assert stdio_client.request("ping")["result"] == {}
