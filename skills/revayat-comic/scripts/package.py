@@ -100,10 +100,13 @@ def _manifest_of(doc: dict[str, Any], package: Path,
                     {"format": stamp.get("format") or fmt,
                      "manifest": stamp["manifest"]}}
     if target in editions:
-        return (editions[target].get("manifest") or []), ""
+        edition = editions[target]
+        if not isinstance(edition, dict):
+            return [], "this edition's export evidence is malformed; export it again"
+        return (edition.get("manifest") or []), ""
 
     matching = [edition for edition in editions.values()
-                if edition.get("format") == fmt]
+                if isinstance(edition, dict) and edition.get("format") == fmt]
     if len(matching) == 1:
         return (matching[0].get("manifest") or []), ""
     if not matching:
@@ -403,6 +406,31 @@ def check_package(package: str | Path, doc_path: str | Path) -> dict[str, Any]:
         return _package_report(findings, package, expected, 0)
 
     manifest, problem = _manifest_of(doc, package, fmt)
+    if fmt in {"cbz", "dir"}:
+        valid = (isinstance(manifest, list) and len(manifest) == expected
+                 and bool(manifest))
+        names = []
+        safe_rows = []
+        for row in manifest if isinstance(manifest, list) else []:
+            if not isinstance(row, dict):
+                valid = False
+                continue
+            name, digest = row.get("name"), row.get("sha256")
+            if not isinstance(name, str) or not name.strip():
+                valid = False
+                continue
+            names.append(name)
+            safe_rows.append(row)
+            if (not isinstance(digest, str) or len(digest) != 64
+                    or any(char not in "0123456789abcdefABCDEF" for char in digest)):
+                valid = False
+        if len(set(names)) != len(names):
+            valid = False
+        if not valid:
+            problem = problem or ("this edition has incomplete page names or SHA-256 "
+                                  "evidence. Restore its export record or export it again")
+        # Keep usable rows for count/name/hash diagnostics even when proof is incomplete.
+        manifest = safe_rows
     if problem:
         findings.add("archive-unverified", package.name, problem)
 

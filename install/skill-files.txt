@@ -32,6 +32,7 @@ scripts/masks.py
 scripts/ocr.py
 scripts/package.py
 scripts/pagegeometry.py
+scripts/pageimages.py
 scripts/pageir.py
 scripts/pageorder.py
 scripts/pdfpage.py

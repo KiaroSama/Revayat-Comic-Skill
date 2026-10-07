@@ -23,7 +23,7 @@ skills/revayat-comic/
   SKILL.md          the skill; `name: revayat-comic` is the activation key
   scripts/*.py      the pipeline (see below)
   references/*.md   loaded on demand, not up front
-  requirements.txt  the single dependency manifest
+  requirements.txt  the runtime dependency manifest
 commands/           slash commands for plugin hosts
 install/            install.ps1, install.sh — copy the skill into agents
 tests/              pytest; fixtures are generated, never committed
@@ -36,6 +36,7 @@ evaluation/         the translation benchmark and its scorer — cases, a
 | Module | Role |
 | --- | --- |
 | `pageir.py` | the page document, atomic UTF-8 IO, geometry, reading order, script detection |
+| `pageimages.py` | eager file-backed image decoding and counted loose-input byte admission |
 | `stages.py` | what each stage ran against, in what order, and what that makes stale |
 | `readers.py` | CBZ / CBR / PDF / folder / image → immutable page images |
 | `detect.py` | panels, balloons, free lettering |
@@ -115,7 +116,7 @@ exception.
 ## Working on it
 
 ```bash
-pip install -r skills/revayat-comic/requirements.txt
+pip install -r skills/revayat-comic/requirements.txt -r tests/requirements.txt
 python -m pytest tests -q
 python tests/e2e_pipeline.py
 python -m ruff check skills/revayat-comic/scripts tests
@@ -130,10 +131,10 @@ code ruff cannot see through.
 generated chapter, so a break in the dispatcher, an argument name or a report
 field shows up even when each module's own tests still pass.
 
-`.github/workflows/integration.yml` is the other tier, off the push path and run
-weekly: CBR through a real archive backend, and a whole four-page chapter at
-A4/300 dpi. Both need something the unit tier deliberately does not install, and
-a flake in either must not block an unrelated commit.
+Linux's main suite installs a real RAR backend and exercises CBR. The weekly
+`.github/workflows/integration.yml` tier checks that backend and a whole four-page
+chapter at A4/300 dpi. Developer test/lint/font-subset dependencies live in
+`tests/requirements.txt`, separate from the standalone skill's runtime manifest.
 
 Fixtures are drawn with plain shapes rather than real Japanese, deliberately:
 the detector measures geometry and does not care which script the ink came from,

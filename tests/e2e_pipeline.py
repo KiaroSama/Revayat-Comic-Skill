@@ -23,6 +23,8 @@ CLI = ROOT / "skills" / "revayat-comic" / "scripts" / "revayat-comic.py"
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(ROOT / "skills" / "revayat-comic" / "scripts"))
 
+from process_support import run_process  # noqa: E402
+
 FA = [
     "بس کن! این‌جا چه خبر است؟",
     "هیچ‌کس نمی‌داند او کجا رفته.",
@@ -42,14 +44,13 @@ def run(*args: str) -> dict:
     import os
 
     try:
-        result = subprocess.run(
+        result = run_process(
             [sys.executable, str(CLI), *args],
-            capture_output=True, text=True, encoding="utf-8",
             env={**os.environ, "PYTHONIOENCODING": "utf-8"},
-            timeout=STAGE_TIMEOUT,
+            timeout=STAGE_TIMEOUT, idle=60,
         )
     except subprocess.TimeoutExpired as expired:
-        # TimeoutExpired kills the child, but say which stage and what it had
+        # The shared owner stops the whole tree; say which stage and what it had
         # printed: "the pipeline hung" is not an actionable failure.
         raise SystemExit(
             f"FAILED: {' '.join(args[:2])} did not finish in {STAGE_TIMEOUT}s\n"

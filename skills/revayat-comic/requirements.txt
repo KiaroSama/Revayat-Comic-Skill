@@ -38,7 +38,5 @@ python-bidi>=0.4
 #                     and it pulls in torch — see references/ocr.md before
 #                     deciding you need it)
 
-# Development only.
-pytest>=8.0
-pytest-timeout>=2.3
-ruff>=0.16                    # the lint gate in CI; see ruff.toml for the rules
+# Developer tools live in the repository's tests/requirements.txt, not in the
+# self-contained runtime installation.

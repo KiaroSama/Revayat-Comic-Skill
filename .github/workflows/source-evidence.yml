@@ -40,7 +40,7 @@ jobs:
           retention-days: 7
       - uses: actions/setup-python@v7
         with:
-          python-version: '3.13'
+          python-version: '3.14'
       # Small optional shapers and tooling, not model weights or font binaries.
       # This is supplementary evidence, not a replacement for requirements.txt.
       - name: Collect offline reviewer tools

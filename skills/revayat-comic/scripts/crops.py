@@ -23,7 +23,10 @@ matched up by position afterwards.
 from __future__ import annotations
 
 import argparse
+import re
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -236,40 +239,111 @@ def build_document(
     doc = ir.load_doc(doc_path)
     root = ir.doc_dir(doc_path)
 
+    if list(root.glob(".crops-*.recovery")):
+        raise ValueError("crop recovery evidence requires inspection before rebuilding")
     produced: list[dict[str, Any]] = []
-    for page in doc["pages"]:
-        if pages is not None and page["id"] not in pages:
-            continue
-        image = ir.load_image(root / page["image"])
-        folder = f"crops/{page['id']}"
+    promoted: list[tuple[Path, Path | None]] = []
+    retiring: dict[str, str] = {}
+    # Stage every page before publication; a failed save restores prior images.
+    with tempfile.TemporaryDirectory(prefix=".crops-", dir=root) as scratch:
+        scratch = Path(scratch)
+        pending: list[tuple[Path, Path]] = []
+        for page in doc["pages"]:
+            if pages is not None and page["id"] not in pages:
+                continue
+            if not re.fullmatch(r"p[0-9]+", page["id"]):
+                raise ValueError("crop ownership requires a canonical page ID")
+            folder = f"crops/{page['id']}"
+            for parent in (root / "crops", root / folder):
+                if (parent.is_symlink()
+                        or parent.resolve() != root.resolve() / parent.relative_to(root)):
+                    raise ValueError("crop ownership cannot follow a link")
+            owned = dict(page.get("sheet_hashes") or {})
+            owned.update(page.get("sheets_retiring") or {})
+            old = set(page.get("sheets") or []) | set(owned)
+            image = ir.load_image(root / page["image"])
+            sheets = render_sheets(image, page)
+            if old - set(owned):
+                import masks as mask_tools
 
-        overview = f"{folder}/overview.png"
-        drawn, overview_scale = render_overview(image, page)
-        ir.save_image(drawn, root / overview)
-
-        sheets = render_sheets(image, page)
-        names: list[str] = []
-        for index, sheet in enumerate(sheets, start=1):
-            name = f"{folder}/sheet{index:02d}.png"
-            ir.save_image(sheet, root / name)
-            names.append(name)
-
-        page["overview"] = overview
-        # How to get from a box outlined on the overview back to the page:
-        # page_value = overview_value / overview_scale.
-        page["overview_scale"] = overview_scale
-        page["sheets"] = names
-        produced.append({
-            "page": page["id"],
-            "overview": overview,
-            "overview_scale": overview_scale,
-            "sheets": names,
-            "regions": len(page.get("regions", [])),
-        })
-
-    stages.stamp_stage(doc, "crops", {"rendered": len(produced)},
-                       pages=pages)
-    ir.save_doc(doc, doc_path)
+                # Older documents recorded names, not hashes. Admit only an
+                # exact deterministic rerender, never an edited or ambiguous file.
+                rebuilt = {f"{folder}/sheet{index:02d}.png":
+                           ir.sha256_bytes(mask_tools._encode_png(sheet))
+                           for index, sheet in enumerate(sheets, start=1)}
+                for name in old - set(owned):
+                    if name in rebuilt:
+                        owned[name] = rebuilt[name]
+            for name in old:
+                if not isinstance(name, str) or not re.fullmatch(
+                        re.escape(folder) + r"/sheet[0-9]{2,}\.png", name):
+                    raise ValueError("crop ownership has an invalid sheet path")
+                target = root / name
+                if target.is_symlink() or (target.exists() and (
+                        not target.is_file() or name not in owned
+                        or ir.sha256_file(target) != owned[name])):
+                    raise ValueError("crop sheet ownership is unknown or changed; preserve it")
+            drawn, scale = render_overview(image, page)
+            overview = f"{folder}/overview.png"
+            outputs = [(overview, drawn)] + [
+                (f"{folder}/sheet{index:02d}.png", sheet)
+                for index, sheet in enumerate(sheets, start=1)]
+            names = [name for name, _ in outputs[1:]]
+            hashes = {}
+            for name, image in outputs:
+                target = root / name
+                if target.is_symlink() or (target.exists() and not target.is_file()):
+                    raise ValueError("crop output ownership is not a regular file")
+                if name != overview and target.exists() and name not in old:
+                    raise ValueError("crop output ownership is unknown; preserve it")
+                staged = scratch / "new" / name
+                ir.save_image(image, staged)
+                pending.append((staged, target))
+                if name != overview:
+                    hashes[name] = ir.sha256_file(staged)
+            removed = {name: owned[name] for name in old - set(names)
+                       if (root / name).is_file()}
+            retiring.update(removed)
+            page.update(overview=overview, overview_scale=scale, sheets=names,
+                        sheet_hashes=hashes, sheets_retiring=removed)
+            produced.append({"page": page["id"], "overview": overview,
+                             "overview_scale": scale, "sheets": names,
+                             "regions": len(page.get("regions", []))})
+        try:
+            for staged, target in pending:
+                backup = None
+                if target.exists():
+                    backup = scratch / "old" / target.relative_to(root)
+                    backup.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(target, backup)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                ir.write_bytes(target, staged.read_bytes())
+                promoted.append((target, backup))
+            stages.stamp_stage(doc, "crops", {"rendered": len(produced)}, pages=pages)
+            ir.save_doc(doc, doc_path)
+        except BaseException:
+            failed = []
+            for target, backup in reversed(promoted):
+                try:
+                    if backup is None:
+                        target.unlink(missing_ok=True)
+                    else:
+                        ir.write_bytes(target, backup.read_bytes())
+                except OSError:
+                    failed.append(target)
+            if failed:
+                # Move surviving originals outside temporary cleanup; an unresolved
+                # restoration must never discard the only usable recovery copies.
+                retained = scratch.with_name(scratch.name + ".recovery")
+                scratch.rename(retained)
+                raise RuntimeError("crop restoration failed; inspect retained recovery evidence") from None
+            raise
+    # Persist pending ownership before deletion, so interrupted retirement retries safely.
+    for name, digest in retiring.items():
+        target = root / name
+        if target.is_symlink() or ir.sha256_file(target) != digest:
+            raise ValueError("crop retirement ownership changed; preserve it")
+        target.unlink()
     return {
         "document": str(doc_path),
         "pages": produced,

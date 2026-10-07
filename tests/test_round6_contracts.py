@@ -189,7 +189,7 @@ def test_all_four_log_levels_keep_timestamps_and_exclude_arguments(tiny_doc, mon
             runlog.event(level, "fixed diagnostic", component="test")
         return 0
     assert command(["--doc", str(tiny_doc), "--token", "never-record-this"]) == 0
-    content = "\n".join(path.read_text() for path in (tiny_doc.parent / "logs").glob("*.log"))
+    content = "\n".join(path.read_text(encoding="utf-8") for path in (tiny_doc.parent / "logs").glob("*.log"))
     for level in ("INFO", "WARNING", "ERROR", "DEBUG"):
         assert f"[{level}]" in content
     assert "UTC]" in content and "never-record-this" not in content

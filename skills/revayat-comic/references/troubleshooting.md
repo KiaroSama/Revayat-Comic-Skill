@@ -32,6 +32,19 @@ order — beside `python.exe` does not work.
 Without it the fallback runs, the pages are correct to read, and `doctor` says
 so. See `persian-typesetting.md` for what differs between the two paths.
 
+## Input and provider byte limits
+
+Loose page files use the same encoded budgets as archive members: 512 MiB per
+image and 2 GiB per import. Copying counts actual bytes, including a file that
+grows after admission. Image decoding uses a file-backed reader, closes the
+handle before returning RGB pixels and retains the 80-million-pixel limit.
+A rejected input is not fixed by shrinking the immutable baseline.
+
+Accepted provider redirects retain the ordinary method/origin/loop rules, but
+each intermediate response is limited to 64 MiB as well as the final response.
+An oversized redirect closes and fails; point the configured base directly at
+the endpoint rather than treating a byte-limit refusal as a successful call.
+
 ## Import
 
 | Symptom | Cause | Fix |
@@ -42,7 +55,7 @@ so. See `persian-typesetting.md` for what differs between the two paths.
 | pages in the wrong order | rare; the archive uses a naming scheme nothing can sort | extract to a folder, rename `0001.png`… and import the folder |
 | `webtoon_strips` is not empty | this is a webtoon | `--direction ltr` |
 | PDF import is slow | pages are being rendered, not extracted | expected when a page is not one embedded image |
-| an error naming a page count, a GB total, an MB entry or megapixels | the import guards — 2000 pages, 2 GB, 512 MB an entry, 80 MP a page | split a series into volumes, or lower `--dpi` for a PDF whose page rectangle is huge |
+| an error naming a page count, a GB total, an MB entry or megapixels | the import guards — 2000 pages, 2 GB, 512 MB an entry, 80 MP a page | process smaller chapters or report the limit; keep native preservation resolution and use separately identified reading derivatives, not lower import DPI to bypass the guard |
 
 ## Providers (optional, off by default)
 
@@ -56,7 +69,7 @@ so. See `persian-typesetting.md` for what differs between the two paths.
 | an OCR adapter's `orientation` argument is never set | the stage passes it only to a method whose signature names it, and a C callable or an un-introspectable wrapper is declined | name `orientation` (or `**kwargs`) directly on `read`; `stages.ocr.orientation_aware` in `comic.json` says which way it went |
 | `qa visual` findings look wrong | they are a model's opinions | they are advisory and never gate; `qa check` is the gate |
 | `serve http` answers 401 | the token is missing or wrong | it is printed to stderr when the server starts; send it as `X-Revayat-Token` |
-| `serve http` refuses to start | `--host` was not loopback | it runs stages that write files, so it binds `127.0.0.1` only — put a reverse proxy in front if you need more |
+| `serve http` refuses to start | `--host` was not loopback | it runs stages that write files, so it accepts loopback only; remote serving requires separately authorized authentication/path-isolation design, not a casual proxy |
 | an MCP client hangs at the handshake | it is waiting for a reply to a notification | notifications have no `id` and are never answered; check the client, this server does not reply to them |
 | `REVAYAT_API_BASE is not set` | the hosted adapters have nowhere to send the request | point it at any OpenAI-compatible endpoint, hosted or local (`http://127.0.0.1:1234/v1`), and set `REVAYAT_TRANSLATION_MODEL` or `REVAYAT_IMAGE_MODEL` |
 | `refusing to send REVAYAT_API_KEY ... over plain http` | a key is set and `REVAYAT_API_BASE` is a cleartext address off this machine, so the key would cross the network readable | switch the base to `https://`, or unset `REVAYAT_API_KEY` if that endpoint needs no credential; loopback (`http://127.0.0.1:1234/v1`) is exempt and still works |
@@ -183,7 +196,7 @@ re-import from scratch.
 | --- | --- |
 | `already contains ... image(s)` | you pointed `--out` at a folder that has other images in it; use an empty one |
 | `archive-page-count` | a page failed to write; re-run export |
-| pages in the wrong order in a reader | check `ComicInfo.xml` has `<Manga>Yes</Manga>` for a right-to-left comic |
+| pages in the wrong order in a reader | check `ComicInfo.xml` has `<Manga>YesAndRightToLeft</Manga>` for a right-to-left comic |
 | the file is bigger with `--jpeg-quality` | expected for line art; PNG compresses flat whites better |
 
 ## Windows
@@ -214,7 +227,7 @@ whose render was stale, whose lines had overflowed, or whose erasures had never
 been cleaned went into a package without `qa` ever running.
 
 ```bash
-revayat-comic qa --doc work/comic.json
+"$PY" "$SKILL_DIR/scripts/revayat-comic.py" qa check --doc "$WORK/comic.json"
 ```
 
 Fix what it names and export again. `--draft` still ships what is there —

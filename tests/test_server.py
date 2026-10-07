@@ -150,10 +150,11 @@ def test_a_bad_flag_does_not_take_the_server_down():
 
 def test_an_unknown_tool_says_what_there_is():
     replies = _talk(_ask(1, "tools/call", name="revayat_nonsense",
-                         arguments={}))
-    body = json.loads(replies[0]["result"]["content"][0]["text"])
-    assert body["ok"] is False
-    assert server.DOCTOR in body["expected"]
+                         arguments={}), _ask(2, "ping"))
+    assert replies[0]["id"] == 1
+    assert replies[1] == {"jsonrpc": "2.0", "id": 2, "result": {}}
+    assert replies[0]["error"]["code"] == -32602
+    assert "unknown tool" in replies[0]["error"]["message"]
 
 
 def test_a_stage_that_exits_with_a_message_is_an_answer_not_a_crash(detected):

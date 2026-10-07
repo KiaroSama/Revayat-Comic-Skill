@@ -220,15 +220,16 @@ def main(argv: list[str] | None = None) -> int:
                         help="comma-separated page ids; default is every page")
     args = parser.parse_args(argv)
 
-    ir.emit(mark_document(
+    report = mark_document(
         args.doc,
         parse_box(args.box),
         label=args.label,
         kind=args.kind,
         pages=ir.parse_pages(args.pages),
         from_overview=args.from_overview,
-    ))
-    return 0
+    )
+    ir.emit(report)
+    return 1 if report["refused"] else 0
 
 
 if __name__ == "__main__":

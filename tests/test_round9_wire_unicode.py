@@ -5,13 +5,13 @@ import io
 import json
 import logging
 import os
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
 
 import server
+from process_support import run_process
 import wire_json
 
 LOG = logging.getLogger(__name__)
@@ -63,16 +63,11 @@ def test_real_stdio_keeps_session_usable(tmp_path):
     env = {**os.environ, "PYTHONIOENCODING": "utf-8:strict",
            "PYTHONDONTWRITEBYTECODE": "1"}
     raw = b'{"id":"\\ud800","method":"ping"}\n{"id":2,"method":"ping"}\n'
-    process = subprocess.Popen([sys.executable, str(cli), "serve", "mcp"],
-                               stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                               stderr=subprocess.PIPE, cwd=tmp_path, env=env)
-    try:
-        stdout, stderr = process.communicate(raw, timeout=15)
-    finally:
-        if process.poll() is None:
-            process.kill()
-            process.communicate(timeout=5)
-    assert process.returncode == 0, stderr.decode("utf-8")
+    result = run_process([sys.executable, str(cli), "serve", "mcp"],
+                         cwd=tmp_path, env=env, input=raw, text=False,
+                         timeout=15, idle=10)
+    stdout, stderr = result.stdout, result.stderr
+    assert result.returncode == 0, stderr.decode("utf-8")
     responses = [json.loads(line) for line in stdout.decode("utf-8").splitlines()]
     assert responses[0]["error"]["code"] == -32700 and responses[0]["id"] is None
     assert responses[1]["id"] == 2 and responses[1]["result"] == {}

@@ -147,8 +147,9 @@ revayat-comic mask  --doc work/comic.json --free-lettering solid
 revayat-comic clean --doc work/comic.json --external reconstructed/
 ```
 
-`clean` refuses solid masks without `--external`, because painting one flat
-blanks a rectangle out of the drawing. Full reasoning in
+`clean` refuses an unrepaired solid patch without `--external` or a working
+`--provider`, because deterministic flat/Telea fallback blanks or smears the
+artwork. A failed provider does not authorize that fallback. Full reasoning in
 `artwork-preservation.md`.
 
 ## Leaving one effect as drawn under `translate`

@@ -104,31 +104,73 @@ class WindowsJob:
         self.api.CloseHandle(self.handle)
 
 
-def run_process(command, *, env=None, cwd=None, timeout=30, idle=20, check=False):
-    """A gated child joins its ownership group before it can launch the command."""
-    gate = "import json,subprocess,sys; sys.stdin.buffer.read(1); sys.exit(subprocess.call(json.loads(sys.argv[1]), stdin=subprocess.DEVNULL))"
+def start_owned(command, *, env=None, cwd=None, interactive=False):
+    """Return an assigned, unreleased gate; no target runs before ownership."""
+    gate = ("import json,os,subprocess,sys; os.read(sys.stdin.fileno(),1); "
+            "sys.exit(subprocess.call(json.loads(sys.argv[1]), stdin="
+            + ("sys.stdin" if interactive else "subprocess.DEVNULL") + "))")
     job = WindowsJob() if os.name == "nt" else None
     process = None
-    started = progress = time.monotonic()
-    size = 0
     try:
-        # A Windows venv redirector can spawn its interpreter before job assignment.
-        # The stdlib-only gate must be the real interpreter, then launch the venv
-        # command only after it belongs to our non-breakaway ownership job.
+        # A Windows venv redirector can spawn before assignment: gate with its
+        # REAL base interpreter, then release the venv command inside the job.
         bootstrap = getattr(sys, "_base_executable", sys.executable) if job else sys.executable
         process = subprocess.Popen([bootstrap, "-B", "-c", gate, json.dumps(command)],
                                    env=env, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                    stderr=subprocess.PIPE, start_new_session=job is None,
+                                   bufsize=0 if interactive else -1,
                                    creationflags=subprocess.CREATE_NO_WINDOW if job else 0)
         if job:
             job.assign(process)
+        return process, job
+    except BaseException:
+        stop_owned(process, job)
+        raise
+
+
+def stop_owned(process, job, *, drain=True):
+    """Stop exact owned members; closure/reaping survive membership errors."""
+    try:
+        if process:
+            try:
+                if job:
+                    job.stop()
+                else:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+            finally:
+                if job:
+                    job.close()
+                    job = None
+                if process.poll() is None:
+                    process.kill()
+                if drain:
+                    process.communicate(timeout=5)
+                else:
+                    process.wait(timeout=5)
+    finally:
+        if job:
+            job.close()
+
+
+def run_process(command, *, env=None, cwd=None, timeout=30, idle=20, check=False,
+                input=None, text=True):
+    """One-shot owned wall/idle execution, optionally with raw byte input."""
+    process = job = None
+    started = progress = time.monotonic()
+    size = 0
+    try:
+        process, job = start_owned(command, env=env, cwd=cwd, interactive=input is not None)
         first = True
         while True:
             remaining = min(timeout - (time.monotonic() - started), idle - (time.monotonic() - progress))
             if remaining <= 0:
                 raise subprocess.TimeoutExpired(command, timeout)
             try:
-                stdout, stderr = process.communicate(b"1" if first else None, timeout=min(1, remaining))
+                stdout, stderr = process.communicate(b"1" + (input or b"") if first else None,
+                                                     timeout=min(1, remaining))
                 break
             except subprocess.TimeoutExpired as error:
                 observed = len(error.output or b"") + len(error.stderr or b"")
@@ -136,29 +178,10 @@ def run_process(command, *, env=None, cwd=None, timeout=30, idle=20, check=False
                     size, progress = observed, time.monotonic()
                 first = False
         result = subprocess.CompletedProcess(command, process.returncode,
-                                             stdout.decode("utf-8"), stderr.decode("utf-8"))
+                                             stdout.decode("utf-8") if text else stdout,
+                                             stderr.decode("utf-8") if text else stderr)
         if check:
             result.check_returncode()
         return result
     finally:
-        try:
-            if process:
-                try:
-                    if job:
-                        job.stop()
-                    else:
-                        try:
-                            os.killpg(process.pid, signal.SIGKILL)
-                        except ProcessLookupError:
-                            pass
-                finally:
-                    # KILL_ON_JOB_CLOSE remains the backstop if membership/wait fails.
-                    if job:
-                        job.close()
-                        job = None
-                    if process.poll() is None:
-                        process.kill()
-                    process.communicate(timeout=5)
-        finally:
-            if job:
-                job.close()
+        stop_owned(process, job)

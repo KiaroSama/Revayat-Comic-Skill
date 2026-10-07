@@ -26,7 +26,7 @@ nobody can check, which defeats the point.
 Twenty to forty pages is enough to be useful. Two hundred sentence pairs with
 no images is not a substitute.
 
-**There is a starter set in this repository**, at `evaluation/`: thirty-four
+**There is a starter set in this repository**, at `evaluation/`: thirty-eight
 cases across Japanese, Korean, Chinese, English, French and Spanish, with
 proposed Persian renderings, a generated layout page and an answer-free
 source/context companion for each case. The scorer keeps human semantic/voice

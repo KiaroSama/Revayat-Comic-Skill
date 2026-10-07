@@ -176,6 +176,12 @@ def export_cbz(doc: dict[str, Any], root: Path, out: Path, quality: int,
             "manifest": manifest}
 
 
+def _encoded_name(source: Path, name: str, quality: int) -> str:
+    return (str(Path(name).with_suffix(".jpg"))
+            if quality > 0 and source.suffix.lower() not in {".jpg", ".jpeg"}
+            else name)
+
+
 def _encode(source: Path, name: str, quality: int) -> tuple[bytes, str]:
     """Bytes for the archive: as-is, or re-encoded to JPEG when asked."""
     if quality <= 0 or source.suffix.lower() in {".jpg", ".jpeg"}:
@@ -185,7 +191,7 @@ def _encode(source: Path, name: str, quality: int) -> tuple[bytes, str]:
     image = ir.load_image(source)
     buffer = io.BytesIO()
     image.save(buffer, "JPEG", quality=quality, subsampling=0, optimize=True)
-    return buffer.getvalue(), str(Path(name).with_suffix(".jpg"))
+    return buffer.getvalue(), _encoded_name(source, name, quality)
 
 
 def _comic_info(doc: dict[str, Any], draft: bool = False) -> str:
@@ -296,7 +302,7 @@ def export_dir(doc: dict[str, Any], root: Path, out: Path, quality: int,
     for page in doc["pages"]:
         source = _page_source(root, page)
         name = f"{page['index'] + 1:04d}{source.suffix.lower()}"
-        planned.add(_encode(source, name, quality)[1])
+        planned.add(_encoded_name(source, name, quality))
     planned.add("ComicInfo.xml")
     for name in planned:
         target = out / name

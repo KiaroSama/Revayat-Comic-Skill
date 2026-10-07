@@ -106,9 +106,11 @@ status, the confidence and a timestamp, so a later run can tell a machine's
 guess from a person's decision. That record is what makes the `locked` rule
 enforceable rather than aspirational.
 
-**Resumable.** A locked or already-filled region is compared rather than
-re-read, so interrupting the stage and running it again costs only the calls it
-did not finish.
+**Resumable.** Completed requests are reused only when the current rendered
+crop bytes and provider identity still match. The geometry-named crop cache is
+refreshed from the current renderer first; changing crop size, padding or pixels
+invalidates an old request. Locked or already-filled text is compared, not
+silently overwritten. An unchanged completed request makes no new call.
 
 **A working `manga-ocr` adapter ships with the project.** It is in
 `scripts/adapters.py`, it is not imported by the pipeline, and it loads the model

@@ -27,7 +27,7 @@ jobs:
 
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.13"
+          python-version: "3.14"
 
       - name: Install pip-audit
         run: |
@@ -37,6 +37,7 @@ jobs:
       # There is no lockfile — requirements.txt declares floors, and this
       # project is installed fresh with `pip install -r`. So the honest question
       # is whether a fresh install today resolves to anything vulnerable, which
-      # is exactly what auditing the requirements file asks.
+      # is exactly what auditing both runtime and developer manifests asks.
+      # Test/lint tools remain covered after moving out of the skill manifest.
       - name: No installed dependency has a known advisory
         run: python -m pip_audit -r skills/revayat-comic/requirements.txt -r tests/requirements.txt

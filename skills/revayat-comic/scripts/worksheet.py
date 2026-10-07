@@ -348,6 +348,13 @@ def merge_document(
             repeated = block.get("_duplicate_fields", "")
             for name in sorted({n for n in repeated.split(",") if n}):
                 page_report["duplicate_fields"].append(f"{region_id}: {name}")
+        # An addition's retained alias and stable ID address the same region.
+        # Resolve that identity before an accepted-reply digest can skip validation.
+        page_report["duplicate_regions"] += [
+            region["id"] for region in page.get("regions", [])
+            if region["id"] in blocks and region.get("added_as")
+            and f"+{region['added_as']}" in blocks
+        ]
         malformed = (page_report["duplicate_regions"]
                      + page_report["duplicate_fields"] + page_report["invalid_fields"])
 

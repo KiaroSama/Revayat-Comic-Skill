@@ -30,8 +30,10 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 CASES = HERE / "cases.json"
+sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent / "skills" / "revayat-comic" / "scripts"))
 import pageir as ir  # noqa: E402
+from inputs import validate_answers, validate_cases  # noqa: E402
 from textmatch import (  # noqa: E402, F401 - retain private numeric accessors
     canonical_number as _canonical_number, digits_in as _digits_in,
     number_spelling_used, used,
@@ -68,7 +70,9 @@ AXES = ("adequacy", "fluency", "voice", "omissions_additions", "visual_fit")
 
 def load_cases(path: Path = CASES) -> list[dict]:
     payload = json.loads(path.read_text(encoding="utf-8"))
-    return payload["cases"]
+    if not isinstance(payload, dict) or "cases" not in payload:
+        raise ValueError("evaluation input must contain a cases list")
+    return validate_cases(payload["cases"])
 
 
 def _units(text: str) -> int:
@@ -113,7 +117,7 @@ def check_preserved(case: dict, answer: str) -> dict[str, object]:
     if wanted.get("contrastive_subject"):
         # The subject is what makes the line contrastive; Persian drops it
         # freely, so its ABSENCE here is the failure.
-        out["contrastive_subject"] = bool(re.search(r"(?:^|\s)من(?:\s|$)", answer))
+        out["contrastive_subject"] = used(answer, ["من"])
     return out
 
 
@@ -134,6 +138,8 @@ def fits(case: dict, answer: str, *, page=(1000, 1500)) -> object:
 
     width = int(page[0] * case["balloon"][0])
     height = int(page[1] * case["balloon"][1])
+    if width < 2 or height < 2:
+        return None
     mask = Image.new("L", (width, height), 0)
     ImageDraw.Draw(mask).ellipse([0, 0, width - 1, height - 1], fill=255)
     canvas = ImageDraw.Draw(Image.new("RGB", (width, height), "white"))
@@ -198,7 +204,10 @@ def score_one(case: dict, answer: str) -> dict[str, object]:
 
 
 def score(answers: dict[str, str], cases: list[dict] | None = None) -> dict:
-    cases = cases if cases is not None else load_cases()
+    validate_answers(answers)
+    cases = validate_cases(cases) if cases is not None else load_cases()
+    if set(answers) - {case["id"] for case in cases}:
+        raise ValueError("evaluation answers contain unknown case IDs")
     rows = [score_one(case, answers.get(case["id"], "")) for case in cases]
     return {
         "cases": len(rows),

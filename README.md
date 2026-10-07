@@ -56,9 +56,10 @@ than approximately right.
 
 **Python 3.10 or newer.** The scripts use `X | Y` type unions throughout, so on
 3.9 the import fails with a syntax error rather than a useful message. CI tests
-3.10 and 3.13 on Linux, macOS and Windows. (3.10 reaches end of life on
-2026-10-04; it stays supported here for now, and the floor will rise to 3.11
-after that.)
+3.10, 3.13 and 3.14 on Linux, macOS and Windows. Python 3.10 reached end of life on
+2026-10-01; it remains a tested compatibility floor, not a security-supported
+runtime recommendation. Prefer a maintained Python. Raising the floor needs an
+explicit compatibility decision and matching tests/docs.
 
 ```bash
 git clone https://github.com/KiaroSama/Revayat-Comic-Skill.git
@@ -168,7 +169,7 @@ revayat-comic serve mcp                   # JSON-RPC 2.0 over stdio
 revayat-comic serve http --port 8765      # token printed to stderr
 ```
 
-Fifteen tools — `revayat_doctor` plus one per stage — each taking the arguments
+Seventeen tools — `revayat_doctor` plus one per stage — each taking the arguments
 the CLI takes. It is a transport, not a second implementation: every tool is
 that stage's own `main`, so there is nothing reachable here that the CLI cannot
 do. HTTP binds `127.0.0.1` only and requires the token in `X-Revayat-Token`,
@@ -385,9 +386,10 @@ generated chapter, so a break in the dispatcher, an argument name or a report
 field shows up even when each module's own tests pass. CI runs it on Linux,
 macOS and Windows.
 
-A second tier runs weekly rather than per commit — CBR through a real archive
-backend, and a whole chapter at A4/300 dpi — because apt and a third-party
-archive backend flaking must not block an unrelated commit.
+Linux's main suite exercises CBR with a real archive backend. The weekly
+integration tier checks that backend again and processes a whole chapter at
+A4/300 dpi. Runtime users install the skill requirements; developers also install
+`tests/requirements.txt` for pytest, timeout, Ruff and font-subset tooling.
 
 ## Credits
 

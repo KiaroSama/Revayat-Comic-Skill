@@ -199,8 +199,18 @@ def typeset_page(
             # box the region was masked at — approved geometry either way.
             bx, by, bw, bh = region["mask_box"]
             own[by:by + bh, bx:bx + bw] = 255
-        authority[region["id"]] = own
         writable = np.maximum(writable, own)
+        rows = np.flatnonzero(own.any(axis=1))
+        columns = np.flatnonzero(own.any(axis=0))
+        if rows.size and columns.size:
+            x, y = int(columns[0]), int(rows[0])
+            # A view would retain the full page; each region owns only its patch.
+            patch = own[y:int(rows[-1]) + 1, x:int(columns[-1]) + 1].copy()
+        else:
+            x = y = 0
+            patch = np.zeros((0, 0), np.uint8)
+        authority[region["id"]] = (x, y, patch)
+        del own
 
     placed = 0
     overflow: list[str] = []
@@ -391,10 +401,17 @@ def typeset_page(
                 # that lands in the NEXT balloon is outside this region's
                 # permission however legitimately that balloon belongs to
                 # somebody else's.
-                allowed = authority.get(region["id"])
-                if allowed is None:
-                    allowed = writable
-                stray = int((changed & (allowed[y0:y1, x0:x1] == 0)).sum())
+                allowed = np.zeros(changed.shape, np.uint8)
+                entry = authority.get(region["id"])
+                if entry is not None:
+                    ax, ay, patch = entry
+                    left, top = max(x0, ax), max(y0, ay)
+                    right = min(x1, ax + patch.shape[1])
+                    bottom = min(y1, ay + patch.shape[0])
+                    if right > left and bottom > top:
+                        allowed[top - y0:bottom - y0, left - x0:right - x0] = \
+                            patch[top - ay:bottom - ay, left - ax:right - ax]
+                stray = int((changed & (allowed == 0)).sum())
             if stray or clipped:
                 # Painted, checked, and taken back off again. Noticing the
                 # overflow after the ink is down is not enough — the ink is

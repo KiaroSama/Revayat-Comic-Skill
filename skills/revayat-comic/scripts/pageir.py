@@ -673,20 +673,7 @@ def require(module: str, package: str, why: str):
         ) from error
 
 
-def load_image(path: str | os.PathLike[str]):
-    """Open an image as RGB, with the file handle closed before we return.
-
-    Pillow is lazy; leaving the handle open means a later stage cannot replace
-    the file on Windows, which fails with a permission error that says nothing
-    about the real cause.
-    """
-    require("PIL", "pillow", "reading comic pages")
-    from PIL import Image
-
-    with open(path, "rb") as stream:
-        payload = stream.read()
-    with Image.open(io.BytesIO(payload)) as image:
-        return image.convert("RGB")
+from pageimages import load_image  # noqa: E402, F401 - shared eager file IO
 
 
 def save_image(image, path: str | os.PathLike[str], **options: Any) -> Path:

@@ -35,6 +35,20 @@ All document mutators use the same workspace claim. A stale document loaded by
 a library caller is refused on save rather than overwriting a newer edit.
 Reload the document and apply the intended edit to that current generation.
 
+## Crop-sheet recovery
+
+Rebuilding crops retires only previously recorded sheets whose bytes still match
+owned evidence. Unrecorded operator files remain untouched. Older sheet records
+without hashes are accepted only when an exact current rerender proves their
+bytes; changed geometry or edited sheets can require manual reconciliation.
+
+Failed publication restores prior derivatives. If restoration itself fails,
+original copies remain in a `.crops-*.recovery` directory beside the document,
+and another rebuild refuses until that evidence is inspected. Preserve these
+copies and the document; do not delete the directory merely to silence refusal.
+A failed surplus-sheet deletion retains hash-bound pending retirement in the
+page record so the ordinary crops command can retry safely.
+
 ## Interrupted worksheet merge
 
 Retry the ordinary `worksheet merge` after resolving the IO failure. Accepted
@@ -108,6 +122,11 @@ protect completed answers from unnecessary calls. A partial-page refresh leaves
 only the unrefreshed pages stale. Repeating a successful refresh converges.
 
 ## Package integrity
+
+CBZ and folder checks require a complete ordered page manifest with a valid
+SHA-256 for every page. Missing or malformed evidence is `archive-unverified`,
+not approval because the pages happen to open. Restore the original export
+record or re-export; never fill missing hashes from an unverified delivered copy.
 
 Unchanged native PDFs are bound to their committed package SHA-256. Modified
 containers must match the recorded visible RGB pixels at native resolution,

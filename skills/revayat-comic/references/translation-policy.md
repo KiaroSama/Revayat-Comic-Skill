@@ -30,8 +30,10 @@ their hands. If the panel does not settle it, leave a `note:` for review
 instead of inventing certainty. Likewise, praise beside a repeated mishap may
 be irony: keep the complaint and the speaker's voice without adding a new joke.
 Record the visual or neighboring-dialogue reason in the activity log before
-approving a compressed `fa:` variant. The [original contextual cases](../../../evaluation/README.md)
-exercise these distinctions; their automatic scores cannot certify them.
+approving a compressed `fa:` variant. The [original contextual cases](https://github.com/KiaroSama/Revayat-Comic-Skill/blob/main/evaluation/README.md)
+exercise these distinctions; their automatic scores cannot certify them. That
+benchmark is repository-only, not copied into the standalone installed skill;
+[evaluation.md](evaluation.md) is the shipped review guide.
 
 ## Three passes, in this order
 

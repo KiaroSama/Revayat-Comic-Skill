@@ -185,11 +185,13 @@ def test_a_crop_that_is_not_the_picture_that_was_read_is_not_resumed(
     # cropper's padding or rendering produces.
     from PIL import Image
 
-    for path in {Path(crop) for crop in reader.crops}:
+    current = {Path(crop): ir.sha256_file(Path(crop)) for crop in reader.crops}
+    for path in current:
         with Image.open(path) as image:
             repainted = Image.new("RGB", image.size, (13, 17, 19))
         repainted.save(path)
 
     ocr.read_document(detected, provider="counting")
 
-    assert len(reader.crops) > read, "a different picture was resumed"
+    assert len(reader.crops) == read, "cache damage should restore current rendering, not call OCR"
+    assert all(ir.sha256_file(path) == digest for path, digest in current.items())

@@ -36,7 +36,9 @@ what the stage does.
 `report` is exactly what the CLI would have printed. Failure is a value, not an
 exception: a missing dependency, a bad path, an unknown flag and a non-zero exit
 all come back with `ok: false` and a reason. Over MCP the same object is the
-text of the tool result and `isError` mirrors `ok`.
+text of the tool result and `isError` mirrors `ok`. An unknown MCP tool name
+is instead a JSON-RPC invalid-params error (`-32602`), not an execution result;
+the same stdio session can still handle the next request.
 
 **Stdout is captured for two reasons at once.** It is how a stage returns its
 report, and on the stdio transport it is also the JSON-RPC channel — a stage
@@ -46,8 +48,8 @@ printing into it would derail the conversation from the first real call.
 
 Exposing the stages does not make the pipeline autonomous. Step 5 is a reading
 model looking at the crop sheets, and that model is the one driving this server,
-not something the server can call. What these tools give it is the other fifteen
-stages without a shell.
+not something the server can call. Sixteen stage tools plus doctor provide the
+mechanical pipeline without a shell, not transcription or translation approval.
 
 ## One stage at a time
 

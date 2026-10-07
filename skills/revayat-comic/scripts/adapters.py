@@ -215,7 +215,43 @@ def _redirect_guard():
     import urllib.parse
     import urllib.request
 
+    class _BoundedResponse:
+        def __init__(self, response):
+            self.response = response
+            self.remaining = MAX_RESPONSE_BYTES
+
+        def read(self, size=-1):
+            limit = self.remaining + 1 if size < 0 else min(size, self.remaining + 1)
+            data = self.response.read(limit)
+            if len(data) > self.remaining:
+                raise PublicProviderError("provider redirect response exceeds the byte limit")
+            self.remaining -= len(data)
+            return data
+
+        def __getattr__(self, name):
+            return getattr(self.response, name)
+
     class _Guard(urllib.request.HTTPRedirectHandler):
+        def http_error_302(self, req, fp, code, msg, headers):
+            # Keep stdlib method/origin/loop handling, bound its intermediate drain.
+            import urllib.error
+
+            try:
+                result = super().http_error_302(req, _BoundedResponse(fp), code, msg, headers)
+            except urllib.error.HTTPError:
+                # Stdlib transfers the bounded error stream to the caller.
+                raise
+            except BaseException:
+                fp.close()
+                raise
+            if result is not None:
+                fp.close()
+            return result
+
+        http_error_301 = http_error_303 = http_error_307 = http_error_302
+        if hasattr(urllib.request.HTTPRedirectHandler, "http_error_308"):
+            http_error_308 = http_error_302
+
         def redirect_request(self, req, fp, code, msg, headers, newurl):
             if req.has_header("Authorization"):
                 target = urllib.parse.urljoin(req.full_url, newurl)
@@ -288,7 +324,14 @@ def _send(path: str, content_type: str, body: bytes, timeout: float) -> dict:
         "That is not a translation or a page; check what "
         f"{API_BASE} is pointing at."
     )
-    with opener.open(request, timeout=timeout) as response:
+    import urllib.error
+
+    try:
+        response = opener.open(request, timeout=timeout)
+    except urllib.error.HTTPError as error:
+        error.close()
+        raise
+    with response:
         # An answer that announces its own size is refused without reading a
         # byte of it. The bounded read below is still the real guard — a
         # `Content-Length` can lie, and a chunked reply declares nothing — but

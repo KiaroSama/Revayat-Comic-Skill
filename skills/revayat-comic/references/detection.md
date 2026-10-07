@@ -226,8 +226,9 @@ such a book, try in this order:
 1. `--balloon-min-solidity 0.30` — the usual fix. A hairline-outlined balloon
    still reads as blobby, just less so.
 2. `--ink-min 0.008` — thin lettering holds less ink than the default assumes.
-3. Downsample the pages before importing. If the extra pixels came from
-   upsampling they carry no more detail, and they cost detection accuracy.
+3. Inspect a separately identified reading derivative and correct missed
+   regions through the worksheet. Keep the immutable imported page at native
+   resolution; never downsample the primary input to bypass detection limits.
 
 `tests/test_resolution.py` pins both the working case and this limit across four
 page sizes, so neither can move silently. The weekly

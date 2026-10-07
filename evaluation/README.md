@@ -22,6 +22,16 @@ python evaluation/build_pages.py --out evaluation/pages
 python evaluation/score.py --answers my-answers.json
 ```
 
+Custom cases are validated as a complete set before drawing or scoring: unique
+safe ASCII IDs unique even under case-insensitive filenames (Windows device
+names are refused), string source/language/context when supplied, and finite
+balloon fractions in (0, 1]. Drawing requires source/language and a usable
+balloon of at least two pixels per side. Optional null unit counts and missing
+preservation checks remain unmeasured; subpixel fit is unmeasured rather than a
+crash. Invalid records refuse before creating output pages. Answers must be an
+object of strings. Unknown answer keys are refused before scoring so a typo
+cannot silently make a submitted answer disappear.
+
 `--answers` is `{"case-id": "the Persian"}`. `--json` prints the report and returns the same status the text form does; `--complete` additionally fails when a case has no answer, so an evaluation cannot pass by leaving the hard ones out.
 
 Give the translator both `pages/<id>.png` and `pages/<id>.input.json`. The

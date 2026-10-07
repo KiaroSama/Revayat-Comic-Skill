@@ -23,11 +23,13 @@ have a `.done.txt`.
 Two things to watch for:
 
 - **`refused: stale-worksheets`, or `stale_worksheets` in a merge report.**
-  Regions moved after those pages were translated, so their ids no longer point
-  at the same balloons. Re-translate those pages. Do not pass `--force` unless
-  you have checked that the regions really did not move.
-- **`overflow` from a previous typeset run.** Those translations are too long
-  for their balloons. Shorten them in the worksheet, then re-run merge, falint
-  and typeset.
+  The reply cannot prove the current mapping. Preserve its accepted Persian,
+  inspect the current overview and sheets, correct only affected mappings, then
+  use `worksheet reconcile --pages <reviewed-pages>` before merge as described
+  in `references/recovery.md`. Stable IDs alone do not prove unchanged geometry.
+- **`overflow` from a previous typeset run.** Reflow the complete translation
+  first. Retain full meaning in `fa_full` if a reviewed shorter display is needed;
+  review the current source/full/display pair and keep the agreed font floor.
+  Re-run merge, falint, typeset and QA after the correction.
 
 Tell me where it had got to before you carry on.

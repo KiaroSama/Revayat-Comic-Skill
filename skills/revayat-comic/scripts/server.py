@@ -284,7 +284,8 @@ def _doctor() -> dict[str, Any]:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     report = module.doctor()
-    return {"ok": bool(report.get("ready")), "stage": DOCTOR, "exit": 0,
+    ready = bool(report.get("ready"))
+    return {"ok": ready, "stage": DOCTOR, "exit": 0 if ready else 1,
             "report": report}
 
 
@@ -397,7 +398,10 @@ def handle(message: dict[str, Any]) -> dict[str, Any] | None:
             return _error(request_id, -32602,
                           f"arguments must be an object, not a "
                           f"{type(arguments).__name__}")
-        outcome = run(str(params.get("name") or ""), arguments.get("args"))
+        name = params.get("name")
+        if not isinstance(name, str) or name not in {f"revayat_{stage}" for stage in (*STAGES, DOCTOR)}:
+            return _error(request_id, -32602, "unknown tool name")
+        outcome = run(name, arguments.get("args"))
         return _result(request_id, {
             "content": [{"type": "text", "text": ir.dumps(outcome)}],
             "isError": not outcome.get("ok", False),

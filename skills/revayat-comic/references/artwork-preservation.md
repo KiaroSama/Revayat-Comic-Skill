@@ -81,10 +81,11 @@ text mask alone would be too small.
 So there are two authorised areas, and the union of them is what QA checks:
 
 - `masks/pNNNN/union.png` — the cleaning mask, the glyph shapes
-- `masks/pNNNN/writable.png` — that, plus the boxes actually painted by the
-  typesetter, written at typeset time
+- `masks/pNNNN/writable.png` — that, plus independently approved balloon
+  interiors or free-lettering mask boxes, constructed before typesetting
 
-`writable.png` records what was *actually drawn*, not what might have been.
+`writable.png` records permission derived from approved geometry, never from
+whatever ink the renderer happened to paint. Drawing cannot enlarge authority.
 
 **Each region is bounded by its own area, not by that union.** The union is
 what QA measures the finished page against; it is not a permission the
@@ -201,8 +202,9 @@ a coherent area and can redraw what was under the lettering. Balloons are
 untouched by the flag — a solid mask over a balloon would take its outline with
 it, which is the defect the interior clip exists to prevent.
 
-**This mode only works with `--external`.** The choice is recorded in the
-document, and `clean` refuses to run its own cleaners against it: painting a
+**This mode requires `--external` or a working `--provider`.** The choice is
+recorded in the document, and `clean` refuses its deterministic fallback for
+unrepaired solid patches: painting a
 solid patch flat, or handing it to Telea, blanks a rectangle out of the drawing.
 Measured with Telea standing in for a model, it erased the speed lines around a
 `BUMP` and left a soft grey blob — worse than the glyph mask, and a fair picture

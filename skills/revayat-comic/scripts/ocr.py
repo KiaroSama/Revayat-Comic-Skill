@@ -69,12 +69,16 @@ def _crop_path(root: Path, page: dict[str, Any], region: dict[str, Any],
     # and the engine read the old picture of a different part of the page.
     where = crop_identity(page, region)
     target = root / "ocr" / page["id"] / f"{region['id']}-{where}.png"
-    if not target.exists():
-        crop = crops._crop_for(page_image, region,
-                               (page["width"], page["height"]))
-        import masks as mask_tools
+    crop = crops._crop_for(page_image, region,
+                           (page["width"], page["height"]))
+    if crop is None:
+        raise ValueError("the current OCR crop has no usable pixels")
+    import masks as mask_tools
 
-        ir.write_bytes(target, mask_tools._encode_png(crop))
+    payload = mask_tools._encode_png(crop)
+    if (not target.is_file()
+            or ir.sha256_file(target) != ir.sha256_bytes(payload)):
+        ir.write_bytes(target, payload)
     return target
 
 @ir.mutating
@@ -132,8 +136,8 @@ def read_document(
             # the picture, not the picture: change how the cropper pads or what
             # it draws and every region resumes against a reading of an image
             # that no longer exists. Making it costs a local encode, not a
-            # call, and the file is named for its geometry so a second run
-            # reuses it.
+            # call. The geometry-named cache is refreshed from the current
+            # renderer before its bytes participate in the resume decision.
             crop = _crop_path(root, page, region, page_image)
             identity = providers.request_identity(
                 crop=ir.sha256_file(crop), provider=provider,

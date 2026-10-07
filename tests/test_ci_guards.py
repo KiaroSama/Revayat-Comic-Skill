@@ -98,14 +98,14 @@ def test_the_floors_are_tested_as_well_as_the_latest():
     assert "minimum-dependencies:" in workflow
     requirements = (ROOT / "skills" / "revayat-comic"
                     / "requirements.txt").read_text(encoding="utf-8")
-    floors = {line.split(">=")[0].strip()
-              for line in requirements.splitlines()
-              if ">=" in line and not line.strip().startswith("#")}
+    from test_ci_evidence_contracts import runtime_floors, floor_mismatches
+    floors = runtime_floors(requirements)
     job = workflow[workflow.index("minimum-dependencies:"):]
     job = job[:job.index("  pipeline:")]
     for package in ("pillow", "numpy", "opencv-python-headless"):
         assert package in floors, f"{package} lost its floor in requirements"
         assert package in job, f"the floors job does not install {package}"
+    assert not floor_mismatches(requirements, job), "declared runtime floors and CI pins diverged"
 
 
 def test_both_shaping_paths_are_exercised():
@@ -176,21 +176,15 @@ def test_every_allowed_skip_names_a_suite_that_exists(check_skips):
 
 
 def test_no_workflow_deselects_part_of_the_suite():
-    """The guard the sibling project learned the hard way: its first version
-    matched `-m` anywhere on the line and called `python -m pytest` a
-    deselection, so it fired on every job and proved nothing. Anchored after
-    the word `pytest`."""
-    import re
-
-    for workflow in (ROOT / ".github" / "workflows").glob("*.yml"):
-        text = workflow.read_text(encoding="utf-8")
-        for line in text.splitlines():
-            if "pytest" not in line:
-                continue
-            after = line.split("pytest", 1)[1]
-            assert not re.search(r"(?:^|\s)-m\s", after), (workflow.name, line)
-            assert "--deselect" not in after, (workflow.name, line)
-            assert "-k " not in after, (workflow.name, line)
+    """Both full-suite jobs must discover tests; integration selects readers."""
+    from test_ci_evidence_contracts import full_suite_problem
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    for name, next_job in (("test", "minimum-dependencies"),
+                           ("minimum-dependencies", "pipeline")):
+        job = workflow.split(f"  {name}:", 1)[1].split(f"  {next_job}:", 1)[0]
+        assert full_suite_problem(job) is None, name
+    integration = (ROOT / ".github/workflows/integration.yml").read_text(encoding="utf-8")
+    assert "python -m pytest tests/test_readers.py" in integration
 
 
 def test_the_floors_job_pins_exact_versions_not_patch_series():

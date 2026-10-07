@@ -1,5 +1,10 @@
 # Round 13 — safe installation and preservation of owner instructions
 
+> Historical authoring work order. [PR11](https://github.com/KiaroSama/Revayat-Comic-Skill/pull/11)
+> merged on 2026-10-04 at `6d1a49d2c429c334b75d1caed4a394e93eb1891c`.
+> Open/draft, branch and author-only instructions below describe its earlier
+> state; they are retained as evidence, not current execution instructions.
+
 **First fully obey the owner's actual Rules, AGENTS.md, CLAUDE.md, CONTEXT.md, nested instructions and installed hooks. Use the owner-configured Spec Kit chain and guarded runner. Never bypass a hook, weaken a test, suppress a failure or discard another writer's work merely to declare completion. Keep private Rules, `.ai/`, `.specify/` and `specs/` material ignored and out of public commits and attachments.**
 
 ## Scope, publication and authority

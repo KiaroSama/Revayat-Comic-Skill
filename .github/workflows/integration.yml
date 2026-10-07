@@ -1,13 +1,8 @@
 name: Optional toolchain integration
 
-# The unit tier on every push installs no binaries and reads no real scan: it
-# tests the decisions, which is the part with consequences and the part that can
-# be checked in seconds. This workflow is the other half — the two things that
-# need something extra to prove:
-#
-#   * CBR, which needs rarfile plus an unrar backend on PATH
-#   * a full 300-dpi page, which is slow enough that running it per commit buys
-#     nothing the 1000x1500 fixture does not already cover
+# Linux push CI already installs a RAR reader and exercises the retained genuine
+# RAR fixture. This weekly tier separately retains reader evidence and processes
+# a full 300-dpi chapter, which does not belong on every push.
 #
 # Kept off the push path on purpose. Apt and a third-party archive backend are
 # the least stable things in this repository's CI, and a flake in either must
@@ -36,7 +31,7 @@ jobs:
 
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.13"
+          python-version: "3.14"
 
       - name: Install the archive toolchain
         run: |
@@ -51,6 +46,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r skills/revayat-comic/requirements.txt
           python -m pip install rarfile
+          python -m pip install -r tests/requirements.txt
 
       - name: The backend is actually here
         # Without this the CBR test would skip itself and the job would pass
@@ -67,44 +63,24 @@ jobs:
           PY
 
       - name: The CBR paths this project owns
-        # NOT a real RAR round-trip, and the reason is worth stating rather than
-        # working around: there is no free RAR *writer*. RAR compression is
-        # proprietary and libarchive is read-only for it, so `bsdtar -a -c -f
-        # x.cbr` writes something that is not a RAR at all — measured, it made
-        # rarfile raise NotRarFile. Fabricating a fixture would test the
-        # fabrication.
-        #
-        # What is covered is the code this repository actually wrote: routing,
-        # and the two failure paths a user hits. A genuine RAR round-trip stays
-        # untested, and `.ai/TESTING_NOTES.md` says so.
+        # Run the complete reader file ONCE, including the genuine RAR fixture,
+        # routing and failure cases; inspect that same machine-readable report.
         env:
           PYTHONIOENCODING: utf-8
-        # `-rs` prints skip reasons, so a CBR test that quietly opted out is
-        # visible rather than counted as coverage. This runs the real test file
-        # instead of restating its assertions inline: the unit tier skips these
-        # because rarfile is not a required dependency, and this is the only
-        # place they execute.
-        run: |
-          python -m pip install pytest pytest-timeout
-          python -m pytest tests/test_readers.py -q -rs --timeout=120
+        run: python -m pytest tests/test_readers.py -q -rs --timeout=120 --junitxml=junit-cbr.xml
 
-      - name: The CBR tests did not all skip
-        run: |
-          python - <<'PY'
-          import subprocess, sys
+      - name: The retained CBR evidence has no unexpected skips
+        if: always()
+        run: python .github/check_skips.py junit-cbr.xml
 
-          run = subprocess.run(
-              [sys.executable, "-m", "pytest", "tests/test_readers.py",
-               "-q", "-rs", "--timeout=120", "-k", "cbr or rarfile"],
-              capture_output=True, text=True,
-          )
-          print(run.stdout[-2000:])
-          assert run.returncode == 0, "the CBR tests failed"
-          assert " skipped" not in run.stdout.splitlines()[-1], (
-              "a CBR test skipped in the tier that exists to run it"
-          )
-          print("ok: the CBR tests ran here rather than skipping")
-          PY
+      - name: Keep the CBR evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: integration-cbr-evidence
+          path: junit-cbr.xml
+          if-no-files-found: error
+          retention-days: 14
 
   full_resolution:
     name: a whole chapter at 300 dpi
@@ -115,7 +91,7 @@ jobs:
 
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.13"
+          python-version: "3.14"
 
       - name: Install a Persian-capable font
         run: |

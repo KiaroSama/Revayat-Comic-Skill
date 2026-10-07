@@ -53,14 +53,16 @@ ALLOWED: list[Allowed] = [
         node=r"test_readers.*::test_.*(?:cbr|rar)",
         message=r"\brarfile\b|\bunrar\b|\bbsdtar\b|RAR",
         runners={"Windows", "macOS"},
+        jobs=CJK_JOBS,
         why="no RAR backend on this runner; Linux installs one and must not skip",
     ),
     Allowed(
         node=r"test_(?:readers|export_and_glossary|package_identity|resolution)"
              r".*::test_.*",
         message=r"\bpymupdf\b|\bPyMuPDF\b",
-        why="PDF support is optional for users, so the test states its "
-            "prerequisite — but only these suites may state it",
+        jobs={"minimal-runtime"},
+        why="PDF may be absent only in an explicitly minimal runtime job; "
+            "the main, floor and CBR jobs install it",
     ),
     Allowed(
         node=r"test_japanese.*::test_.*",
@@ -71,16 +73,19 @@ ALLOWED: list[Allowed] = [
             "these jobs and a skip there is a broken runner, not a limit",
     ),
     Allowed(
-        node=r"test_(?:typeset|lettering|ink_envelope).*::test_.*",
+        node=r"test_typeset::test_raqm_shapes_persian_and_agrees_with_the_fallback$",
         message=r"no RAQM|\braqm\b",
-        why="Pillow may ship a wheel without libraqm; the `raqm` step in the "
-            "`tests` job asserts it is present on Linux, so a skip here can "
-            "only happen where that assertion does not run",
+        runners={"Windows", "macOS"},
+        jobs=CJK_JOBS,
+        why="this exact real-shaper control requires FriBiDi at runtime; "
+            "Linux asserts RAQM, Windows/macOS may lack the library",
     ),
     Allowed(
         node=r"test_(?:typeset|lettering|typefont).*::test_.*",
         message=r"arabic_reshaper|python-bidi|\bbidi\b",
-        why="the shaping fallback's own dependencies are optional",
+        jobs={"minimal-runtime"},
+        why="fallback packages may be absent only in an explicitly minimal "
+            "runtime job, never in jobs installing the runtime manifest",
     ),
     Allowed(
         node=r"test_evaluation.*::test_.*",
@@ -107,6 +112,8 @@ ALLOWED: list[Allowed] = [
 
 def offenders(path: Path, runner: str, job: str) -> list[tuple[str, str]]:
     root = ElementTree.parse(path).getroot()
+    if root.tag not in {"testsuites", "testsuite"} or not list(root.iter("testcase")):
+        raise ValueError("JUnit evidence must contain actual test cases")
     bad: list[tuple[str, str]] = []
     for case in root.iter("testcase"):
         for skipped in case.findall("skipped"):
@@ -138,9 +145,21 @@ def main(argv: list[str]) -> int:
 
     runner = os.environ.get("RUNNER_OS", "unknown")
     job = os.environ.get("GITHUB_JOB", "unknown")
-    bad = offenders(path, runner, job)
-    total = sum(len(case.findall("skipped"))
-                for case in ElementTree.parse(path).getroot().iter("testcase"))
+    try:
+        bad = offenders(path, runner, job)
+        cases = list(ElementTree.parse(path).getroot().iter("testcase"))
+    except (OSError, ValueError, ElementTree.ParseError) as error:
+        print(f"::error::invalid JUnit evidence: {error}")
+        return 1
+    if job == "cbr":
+        real_rar = [case for case in cases
+                    if case.get("classname", "").endswith("test_readers")
+                    and case.get("name") == "test_a_real_rar_round_trips"]
+        if len(real_rar) != 1 or any(real_rar[0].find(tag) is not None
+                                    for tag in ("skipped", "failure", "error")):
+            print("::error::CBR evidence must contain one passing real RAR round-trip")
+            return 1
+    total = sum(len(case.findall("skipped")) for case in cases)
     print(f"{total} skip(s) on {runner} in job {job}; "
           f"{len(bad)} not on the allowlist")
     for name, message in bad:

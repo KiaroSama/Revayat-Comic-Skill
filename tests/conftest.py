@@ -57,45 +57,7 @@ import adapters  # noqa: E402 - the scripts directory is on the path above
 # child's stdout encoding, whether the process exits when the pipe closes.
 # --------------------------------------------------------------------------- #
 
-class _StdioClient:
-    """The smallest MCP client that is really a client: a subprocess, two
-    pipes, newline-delimited JSON-RPC, and no shared memory with the server."""
-
-    def __init__(self, argv):
-        import subprocess
-
-        self.process = subprocess.Popen(
-            argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, text=True, encoding="utf-8", bufsize=1)
-        self._id = 0
-
-    def request(self, method, **params):
-        self._id += 1
-        self.process.stdin.write(json.dumps(
-            {"jsonrpc": "2.0", "id": self._id, "method": method,
-             "params": params}) + "\n")
-        self.process.stdin.flush()
-        line = self.process.stdout.readline()
-        assert line, "the server closed the pipe without answering"
-        return json.loads(line)
-
-    def raw(self, line: str):
-        """One line exactly as written, so a test can send what no client
-        library would let it send."""
-        self.process.stdin.write(line + "\n")
-        self.process.stdin.flush()
-        answer = self.process.stdout.readline()
-        assert answer, "the server closed the pipe without answering"
-        return json.loads(answer)
-
-    def notify(self, method, **params):
-        self.process.stdin.write(json.dumps(
-            {"jsonrpc": "2.0", "method": method, "params": params}) + "\n")
-        self.process.stdin.flush()
-
-    def close(self, timeout=20):
-        self.process.stdin.close()
-        return self.process.wait(timeout=timeout)
+from stdio_client import StdioClient as _StdioClient  # noqa: E402
 
 
 @pytest.fixture
@@ -107,9 +69,7 @@ def stdio_client():
     try:
         yield client
     finally:
-        if client.process.poll() is None:
-            client.process.kill()
-            client.process.wait(timeout=10)
+        client.close()
 
 
 # --------------------------------------------------------------------------- #

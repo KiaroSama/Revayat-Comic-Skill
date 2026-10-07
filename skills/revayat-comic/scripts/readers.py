@@ -86,20 +86,20 @@ MAX_PAGES = 2_000
 #: Most bytes an archive may expand to in total. A 400-page volume at 4 MB a
 #: page is 1.6 GB, which is the largest genuine import there is; 2 GB clears it
 #: and is still inside what a desktop process should ever be asked to write.
-MAX_TOTAL_BYTES = 2 * 1024 ** 3
+from pageimages import MAX_TOTAL_BYTES  # noqa: E402, F401 - shared input budget
 
 #: Most bytes a single member may expand to. A 300-DPI page scan is single-digit
 #: megabytes, and even an uncompressed 600-DPI double spread is about 200 MB, so
 #: half a gigabyte is already a hundred pages in one entry. Without this a 6 GB
 #: member passed: the running total only fails once it crosses the ceiling, and
 #: the first entry never does.
-MAX_MEMBER_BYTES = 512 * 1024 ** 2
+from pageimages import MAX_MEMBER_BYTES  # noqa: E402, F401 - shared input budget
 
 #: Most pixels one page may decode or render to. A 600-DPI A4 double-page spread
 #: is 9920 x 7016 — about 70 megapixels, and the largest scan anyone has. At 80
 #: the guard clears that and still refuses the 66-byte PNG whose header declares
 #: 60000 x 60000 and costs 10 GB to decode.
-MAX_PAGE_PIXELS = 80_000_000
+from pageimages import MAX_PAGE_PIXELS  # noqa: E402, F401 - shared decode budget
 
 #: How far one member may expand relative to its stored size. Real image formats
 #: are already compressed, so a large ratio means the payload is not a page.
@@ -462,18 +462,15 @@ def _from_directory(path: Path, pages_dir: Path) -> list[Path]:
     if not candidates:
         raise ValueError(f"No page images in {path}")
     _check_page_count(path.name, len(candidates))
-    written: list[Path] = []
-    for index, source in enumerate(candidates):
-        target = pages_dir / f"{ir.page_id_for(index)}{source.suffix.lower()}"
-        shutil.copyfile(source, target)
-        written.append(target)
-    return written
+    from pageimages import copy_loose_images
+    return copy_loose_images(candidates, pages_dir, member_limit=MAX_MEMBER_BYTES,
+                             total_limit=MAX_TOTAL_BYTES)
 
 
 def _from_image(path: Path, pages_dir: Path) -> list[Path]:
-    target = pages_dir / f"{ir.page_id_for(0)}{path.suffix.lower()}"
-    shutil.copyfile(path, target)
-    return [target]
+    from pageimages import copy_loose_images
+    return copy_loose_images([path], pages_dir, member_limit=MAX_MEMBER_BYTES,
+                             total_limit=MAX_TOTAL_BYTES)
 
 
 def detect_kind(path: Path) -> str:

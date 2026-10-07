@@ -21,13 +21,15 @@ under their own names and are listed in `cases.json` with a `page` field.
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent / "skills" / "revayat-comic" / "scripts"))
 import pageir as ir  # noqa: E402
+from score import load_cases  # noqa: E402
+from inputs import validate_cases  # noqa: E402
 
 WIDTH, HEIGHT = 1000, 1500
 INK = (20, 20, 20)
@@ -95,9 +97,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cases", default=str(HERE / "cases.json"))
     args = parser.parse_args(argv)
 
+    cases = validate_cases(load_cases(Path(args.cases)), drawing=True)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    cases = json.loads(Path(args.cases).read_text(encoding="utf-8"))["cases"]
     for case in cases:
         draw_case(case).save(out / f"{case['id']}.png")
         task = {key: case[key] for key in

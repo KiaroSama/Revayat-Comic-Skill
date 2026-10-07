@@ -142,13 +142,16 @@ When a translation will not fit at `--min-size`, the region is reported as
 - letting it spill draws Persian over the artwork
 - truncating loses what the character said
 
-The fix is a shorter translation that still says everything. In order:
+Treat overflow as layout first, without lowering the agreed size floor:
 
-1. Re-read the balloon. Persian usually has a tighter way to say it.
-2. Drop filler the original did not need in Persian.
-3. If the balloon genuinely holds a paragraph, split it across the line breaks
-   the original used — a `\n` in `fa:` is honoured.
-4. Only then consider `--min-size 11` for that chapter, and look at the result.
+1. Reflow the complete Persian and use the original's meaningful line breaks;
+   a `\n` in `fa:` is honoured.
+2. Re-read the source and choose a tighter complete rendering without dropping
+   meaning, register or plot-relevant detail.
+3. If a shorter displayed variant is needed, retain the complete rendering in
+   `fa_full` and review the current source/full/display pair before approval.
+4. Re-run merge, typography, typesetting and QA. If it still cannot fit, keep
+   the region under review rather than shrinking below the floor or truncating.
 
 ## Colour and stroke
 
