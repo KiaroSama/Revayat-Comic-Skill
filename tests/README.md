@@ -23,7 +23,8 @@ Run `python -m pytest tests -q --timeout=300 --junitxml=junit.xml`, followed by
 `python tests/e2e_pipeline.py`. Use the project's guarded runner where installed.
 On a restricted machine, give pytest a fresh `--basetemp` whose parent exists
 and is writable. The CI matrix installs its own fonts and runs the complete suite
-on each supported OS/Python combination and on the literal dependency floors.
+on Linux, macOS and Windows with Python 3.10, 3.13 and 3.14, plus a separate
+Python 3.10 lane pinned to the literal runtime dependency floors.
 
 `test_publication_faults.py` uses 48x64 generated pages to inject failures on
 both sides of each journal, backup, promotion and metadata boundary. It also kills

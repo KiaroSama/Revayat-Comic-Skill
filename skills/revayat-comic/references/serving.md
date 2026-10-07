@@ -38,7 +38,10 @@ exception: a missing dependency, a bad path, an unknown flag and a non-zero exit
 all come back with `ok: false` and a reason. Over MCP the same object is the
 text of the tool result and `isError` mirrors `ok`. An unknown MCP tool name
 is instead a JSON-RPC invalid-params error (`-32602`), not an execution result;
-the same stdio session can still handle the next request.
+the same stdio session can still handle the next request. Use the exact advertised
+names (`revayat_import`, not the CLI's bare `import`). An unready doctor also
+returns `ok: false` and `exit: 1`, even when it successfully produced its diagnostic
+report; readiness, not printing a report, determines success.
 
 **Stdout is captured for two reasons at once.** It is how a stage returns its
 report, and on the stdio transport it is also the JSON-RPC channel — a stage

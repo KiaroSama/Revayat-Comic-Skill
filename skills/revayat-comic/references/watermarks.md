@@ -90,7 +90,9 @@ are genuinely two marks.
 
 `--pages p0001,p0002` limits it. Pages the box does not fit — a double spread, a
 colour insert at another size — are listed in `refused` rather than marked with
-a sliver at the edge.
+a sliver at the edge. If any requested page is refused, the command exits with
+status 1; successful markings on other pages remain in the report and document.
+Inspect both the successful entries and `refused` before retrying corrected boxes.
 
 Two guards worth knowing about, because they will occasionally refuse a box you
 meant: one under `4×4` is treated as a dropped digit, and one covering more than
