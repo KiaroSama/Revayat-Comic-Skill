@@ -139,6 +139,7 @@ def test_darwin_permission_error_requires_no_live_owned_group(monkeypatch, membe
         raise PermissionError("controlled group permission error")
     monkeypatch.setattr(process_support.sys, "platform", "darwin")
     monkeypatch.setattr(process_support.os, "killpg", denied, raising=False)
+    monkeypatch.setattr(process_support.signal, "SIGKILL", 9, raising=False)
     monkeypatch.setattr(process_support.subprocess, "run",
                         lambda *args, **kwargs: SimpleNamespace(stdout=members))
     process = SimpleNamespace(pid=123, poll=lambda: 0,
