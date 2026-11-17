@@ -324,8 +324,15 @@ jobs:
             mkdir -p "$target/$dir"
           done
           bash install/install.sh --scope project --path "$target" --agent all --force
-          found=$(find "$target" -name SKILL.md | wc -l | tr -d ' ')
-          test "$found" -eq 8 || { echo "expected 8 skill copies, found $found"; exit 1; }
+          for dir in .claude .kiro .codex .cursor .cline .hermes .opencode .agents; do
+            root="$target/$dir/skills/revayat-comic"
+            test -f "$root/SKILL.md" || { echo "Missing Revayat Comic in $dir"; exit 1; }
+            for guide in humanizer great-russian persian; do
+              test -f "$root/references/voice/$guide/SKILL.md" || {
+                echo "Missing $guide guide in $dir"; exit 1;
+              }
+            done
+          done
           test -f "$target/AGENTS.md"
           # Re-running must replace the pointer section, never stack copies.
           bash install/install.sh --scope project --path "$target" --agent opencode --force
@@ -350,8 +357,17 @@ jobs:
             New-Item -ItemType Directory -Path (Join-Path $target $d) -Force | Out-Null
           }
           & ./install/install.ps1 -Agent all -Scope project -Path $target -Force | Out-Null
-          $found = @(Get-ChildItem -Path $target -Recurse -Filter SKILL.md).Count
-          if ($found -ne 8) { throw "expected 8 skill copies, found $found" }
+          foreach ($dir in '.claude','.kiro','.codex','.cursor','.cline','.hermes','.opencode','.agents') {
+            $root = Join-Path $target "$dir/skills/revayat-comic"
+            if (-not (Test-Path -LiteralPath (Join-Path $root 'SKILL.md') -PathType Leaf)) {
+              throw "Missing Revayat Comic in $dir"
+            }
+            foreach ($guide in 'humanizer','great-russian','persian') {
+              if (-not (Test-Path -LiteralPath (Join-Path $root "references/voice/$guide/SKILL.md") -PathType Leaf)) {
+                throw "Missing $guide guide in $dir"
+              }
+            }
+          }
           if (-not (Test-Path (Join-Path $target 'AGENTS.md'))) { throw 'no AGENTS.md pointer' }
           & ./install/install.ps1 -Agent opencode -Scope project -Path $target -Force | Out-Null
           $marks = (Select-String -Path (Join-Path $target 'AGENTS.md') -Pattern 'BEGIN revayat-comic').Count

@@ -241,7 +241,13 @@ def test_linked_files_are_refused_without_writing_through(core, layout, tmp_path
 def test_backups_are_outside_skill_discovery_directories(core, layout):
     call(core, layout)
     for agent in (".codex", ".opencode"):
-        assert len(list((layout[1] / agent / "skills").rglob("SKILL.md"))) == 1
+        skills = layout[1] / agent / "skills"
+        assert {path.relative_to(skills).as_posix() for path in skills.rglob("SKILL.md")} == {
+            "revayat-comic/SKILL.md",
+            "revayat-comic/references/voice/great-russian/SKILL.md",
+            "revayat-comic/references/voice/humanizer/SKILL.md",
+            "revayat-comic/references/voice/persian/SKILL.md",
+        }
 
 
 def test_bom_and_balanced_marker_preserve_all_outside_content(core):
