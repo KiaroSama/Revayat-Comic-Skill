@@ -4,23 +4,19 @@
 
 <div align="center">
 
-[![CI](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/ci.yml)
-[![CodeQL روی main](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/codeql.yml)
-[![بررسی وابستگی‌ها](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/dependency-audit.yml/badge.svg?branch=main)](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/dependency-audit.yml)
-[![بازبینی وابستگی‌های PR](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/dependency-review.yml/badge.svg?event=pull_request)](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/dependency-review.yml)
-[![آزمون ابزارهای اختیاری](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/integration.yml/badge.svg?branch=main)](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/integration.yml)
-[![ثبت شواهد منبع PR](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/source-evidence.yml/badge.svg?event=pull_request)](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/source-evidence.yml)
-
-[![مجوز GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue)](LICENSE)
-[![نسخهٔ 1.0.0](https://img.shields.io/badge/Version-1.0.0-blue)](.claude-plugin/plugin.json)
-[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue)](skills/revayat-comic/requirements.txt)
-[![ویندوز، لینوکس و مک](https://img.shields.io/badge/Platforms-Windows%20%7C%20Linux%20%7C%20macOS-4c1)](.github/workflows/ci.yml)
-[![مستندات انگلیسی و فارسی](https://img.shields.io/badge/Docs-English%20%7C%20Persian-8a2be2)](README.md)
-[![Pillow](https://img.shields.io/badge/Built%20with-Pillow-007b83)](skills/revayat-comic/requirements.txt)
-
-[![NumPy](https://img.shields.io/badge/Built%20with-NumPy-007b83)](skills/revayat-comic/requirements.txt)
-[![OpenCV](https://img.shields.io/badge/Built%20with-OpenCV-007b83)](skills/revayat-comic/requirements.txt)
-[![PyMuPDF](https://img.shields.io/badge/Built%20with-PyMuPDF-007b83)](skills/revayat-comic/requirements.txt)
+[![آزمون‌های پروژه دستی اجرا می‌شوند](https://img.shields.io/badge/CI-manual-2563eb)](.github/workflows/ci.yml)
+[![گردش‌کار CodeQL](https://img.shields.io/badge/Security-CodeQL-b45309)](.github/workflows/codeql.yml)
+[![گردش‌کار Gitleaks](https://img.shields.io/badge/Secret%20scan-Gitleaks-9333ea)](.github/workflows/gitleaks.yml)
+[![مجوز GPL نسخهٔ ۳ یا بالاتر](https://img.shields.io/badge/License-GPL%203%2B-16a34a)](LICENSE)
+[![نسخهٔ 1.1.0 افزونه](https://img.shields.io/badge/Plugin-1.1.0-0369a1)](.claude-plugin/plugin.json)
+[![پایتون 3.13.15 در آزمون محلی](https://img.shields.io/badge/Python%203.13.15-tested%20locally-8b5cf6)](tests/README.md)
+[![اجرا روی ویندوز، لینوکس و مک](https://img.shields.io/badge/Platforms-Windows%20%7C%20Linux%20%7C%20macOS-0891b2)](.github/workflows/ci.yml)
+[![نصب به‌صورت افزونه یا نسخهٔ مستقل](https://img.shields.io/badge/Install-plugin%20%7C%20standalone-0f766e)](#نصب)
+[![مستندات فارسی و انگلیسی](https://img.shields.io/badge/Docs-English%20%7C%20Persian-7c3aed)](README.md)
+[![حجم فایل‌های منبع حدود ۲٫۵ مگابایت، بدون خروجی‌های محلی](https://img.shields.io/badge/Source%20tree-2.5%20MB-ca8a04)](#توسعه)
+[![ترسیم و ترکیب تصویر صفحه با Pillow](https://img.shields.io/badge/Imaging-Pillow-c2410c)](skills/revayat-comic/requirements.txt)
+[![پردازش صفحه‌های PDF با PyMuPDF](https://img.shields.io/badge/PDF-PyMuPDF-475569)](skills/revayat-comic/requirements.txt)
+[![سه راهنمای لحن همراه بسته](https://img.shields.io/badge/Voice%20guides-3-be123c)](skills/revayat-comic/references/voice/index.md)
 [![Support donations](https://img.shields.io/badge/Support-donations-d04a9a)](#donate)
 
 </div>
@@ -134,10 +130,19 @@ powershell -ExecutionPolicy Bypass -File .\install\install.ps1
 
 ```
 /plugin marketplace add KiaroSama/Revayat-Comic-Skill
-/plugin install revayat-comic@KiaroSama/Revayat-Comic-Skill
+/plugin install revayat-comic@revayat-comic-skill
 ```
 
 </div>
+
+### مهارت‌های لحن همراه بسته
+
+روایت کمیک نسخهٔ نهایی را به فارسی تحویل می‌دهد. حتی اگر کمیک مبدأ انگلیسی
+یا روسی باشد، برای ترجمهٔ فارسی از `persian` استفاده می‌کند. برای متنی که به
+انگلیسی یا روسی نوشته می‌شود، به‌ترتیب `humanizer` یا `great-russian` را
+به کار می‌گیرد. نام این مهارت‌ها در Claude Code با `revayat-comic:` شروع
+می‌شود. نسخهٔ مستقل همان فایل‌ها را بدون نصب جداگانه می‌خواند.
+[راهنمای لحن و منابع](skills/revayat-comic/references/voice/index.md)
 
 ### بررسی نصب
 
@@ -318,11 +323,14 @@ python evaluation/score.py --answers my-answers.json
 
 `tests/e2e_pipeline.py` تمام مراحل را از طریق CLI واقعی روی یک فصل ساختگی اجرا می‌کند، تا شکستگی در dispatcher یا نام یک آرگومان یا یک فیلد گزارش، حتی وقتی تست‌های هر ماژول سبزند، گرفته شود. CI آن را روی لینوکس، مک و ویندوز اجرا می‌کند.
 
-مجموعهٔ اصلیِ لینوکس، CBR را با backend واقعی آرشیو آزمایش می‌کند. لایهٔ
-هفتگیِ یکپارچه‌سازی دوباره این backend و یک فصل کامل در A4/300dpi را بررسی
-می‌کند. کاربران ترجمه فقط requirements اسکیل را نصب می‌کنند؛ توسعه‌دهندگان
-`tests/requirements.txt` را هم برای pytest، timeout، Ruff و ابزار زیرمجموعهٔ قلم
-نصب می‌کنند.
+آزمون اصلی لینوکس، CBR را با ابزار واقعی آرشیو بررسی می‌کند. آزمون جداگانهٔ
+یکپارچه‌سازی همان ابزار و پردازش یک فصل کامل را در قطع A4 با وضوح ۳۰۰ dpi
+می‌سنجد. برای ترجمه، وابستگی‌های خود مهارت کافی است. برای توسعه، ابزارهای
+آزمون و قلم را از `tests/requirements.txt` هم نصب کنید.
+
+در GitHub Actions، سه گردش‌کار `CI`، `Optional toolchain integration` و
+`Source evidence` را دستی روی همان نسخه‌ای اجرا کنید که می‌خواهید بررسی
+کنید. زمان‌بندی اسکن‌های امنیتی و بازبینی وابستگی‌های درخواست ادغام تغییر نکرده است.
 
 ## سپاس
 

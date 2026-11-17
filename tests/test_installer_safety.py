@@ -134,6 +134,11 @@ def test_only_manifest_files_ship_not_runtime_caches_or_local_outputs(fixture):
     target = project / ".codex/skills/revayat-comic"
     for folder in ("logs", "venv", "__pycache__", "private-reading-copies"):
         assert not (target / folder).exists()
+    voice = target / "references/voice"
+    assert (voice / "index.md").is_file()
+    for skill in ("persian", "humanizer", "great-russian"):
+        assert (voice / skill / "SKILL.md").is_file()
+        assert (voice / skill / "LICENSE").is_file()
 
 
 def test_manifest_covers_all_tracked_skill_files():

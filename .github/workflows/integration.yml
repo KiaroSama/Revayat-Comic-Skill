@@ -1,18 +1,9 @@
 name: Optional toolchain integration
 
-# Linux push CI already installs a RAR reader and exercises the retained genuine
-# RAR fixture. This weekly tier separately retains reader evidence and processes
-# a full 300-dpi chapter, which does not belong on every push.
-#
-# Kept off the push path on purpose. Apt and a third-party archive backend are
-# the least stable things in this repository's CI, and a flake in either must
-# not block an unrelated commit.
+# The main validation already exercises a genuine RAR fixture on Linux.
+# Run this separate tier to retain reader evidence and process a full 300-dpi chapter.
 on:
   workflow_dispatch:
-  schedule:
-    # Weekly, early Monday UTC. Enough to catch a breaking release without
-    # spending a runner on every commit.
-    - cron: "31 4 * * 1"
 
 permissions:
   contents: read

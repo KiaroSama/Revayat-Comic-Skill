@@ -1,26 +1,19 @@
 version: 2
 updates:
-  # Version updates are disabled here on purpose. requirements.txt states the
-  # *minimum* version each dependency is known to work with, so raising those
-  # floors weekly would narrow the range of environments the skill installs on
-  # without fixing anything. Security updates ignore this limit and still open
-  # pull requests.
+  # Proposals do not change the supported floors until their compatibility is reviewed.
   - package-ecosystem: pip
     directory: /skills/revayat-comic
     schedule:
       interval: weekly
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 1
 
-  # Developer/test tools have their own manifest; keep advisory updates enabled
-  # for it without automatically narrowing tool compatibility floors.
   - package-ecosystem: pip
     directory: /tests
     schedule:
       interval: weekly
-    open-pull-requests-limit: 0
+    open-pull-requests-limit: 1
 
-  # Keep the existing grouped Actions update policy.
-  # a deprecated runner action breaks CI silently otherwise.
+  # Keep Actions proposals grouped.
   - package-ecosystem: github-actions
     directory: /
     schedule:

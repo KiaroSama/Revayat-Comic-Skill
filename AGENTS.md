@@ -131,9 +131,9 @@ code ruff cannot see through.
 generated chapter, so a break in the dispatcher, an argument name or a report
 field shows up even when each module's own tests still pass.
 
-Linux's main suite installs a real RAR backend and exercises CBR. The weekly
-`.github/workflows/integration.yml` tier checks that backend and a whole four-page
-chapter at A4/300 dpi. Developer test/lint/font-subset dependencies live in
+Linux's main suite installs a real RAR backend and exercises CBR. Run
+`.github/workflows/integration.yml` manually to check that backend and a whole
+four-page chapter at A4/300 dpi. Developer test/lint/font-subset dependencies live in
 `tests/requirements.txt`, separate from the standalone skill's runtime manifest.
 
 Fixtures are drawn with plain shapes rather than real Japanese, deliberately:
@@ -161,7 +161,9 @@ skill rule, not merely a coding-agent logging rule. Keep
 `skills/revayat-comic/references/translation-log.md` and the skill's startup and
 delivery gates aligned. CLI diagnostic logs alone do not fulfill this rule.
 
-Keep the three plugin manifests at the same `version` — CI enforces it.
+Keep the three plugin manifests and the marketplace entry at the same `version`.
+The [voice guide index](skills/revayat-comic/references/voice/index.md) records the
+pinned sources and the output-language rule for the three bundled guides.
 
 Every tracked text file must be UTF-8; CI enforces that too.
 
