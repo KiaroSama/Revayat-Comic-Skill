@@ -1,27 +1,34 @@
-# --- Local-only agent / tooling state ---
 /.ai/
+/.specify/
+/specs/
+/secrets.md
+/explain-AI.md
+/reference.md
+/CLAUDE.md
+/AGENTS.md
 /.agents/
 /.claude/
 /.kiro/
 /.codex/
 /.cursor/
 /.cline/
-/CLAUDE.local.md
 /graphify-out/
 /.codebase-memory/
-# Advisor output: audit findings and executor handoff plans. Working notes
-# about this repository rather than part of the skill anyone installs.
 /plans/
 .ignoreme
 **/.ignoreme
 
-# --- Secrets and private notes ---
-/secrets.md
-/explain-AI.md
-/reference.md
+# --- Additional local-only tooling state ---
+/CLAUDE.local.md
+
+# --- Secrets ---
 .env
 .env.*
 !.env.example
+*.pem
+*.key
+*.pfx
+*.p12
 
 # --- Python ---
 __pycache__/
@@ -32,9 +39,30 @@ venv/
 /.*-venv/
 /.uv-cache/
 *.egg-info/
+*.so
+build/
+dist/
+.eggs/
 .pytest_cache/
+.mypy_cache/
 .ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.hypothesis/
+.ipynb_checkpoints/
+__pypackages__/
+
+# --- Local logs and temporary files ---
 logs/
+*.log
+*.tmp
+*.bak
+tmp/
+temp/
 
 # --- Revayat Comic working directories and outputs ---
 *_revayat-comic/
@@ -74,9 +102,7 @@ logs/
 .DS_Store
 Thumbs.db
 
-# Hook Maker: local/private files (auto-managed)
-/CLAUDE.md
-/AGENTS.md
+# Local environment variants
 /.env
 /.env.*
 !/.env.example
@@ -103,6 +129,3 @@ junit*.xml
 resolved-versions.txt
 floor-versions.txt
 /evaluation/pages/
-
-/.specify/
-/specs/

@@ -166,9 +166,12 @@ script's.** For each `$WORK/worksheets/pNNNN.txt`, write
 
 **One page at a time, merged before the next one starts.** This is the default
 and it is the only order that keeps the guarantee below true.
-For stilted Persian, drifting register or ambiguous short replies, read
-`references/persian-review.md`: Persian-only speakability, then source comparison,
-with suggestions accepted through the existing worksheet flow.
+Read `references/voice/index.md` before drafting or reviewing prose. Choose
+by the language you are writing: use the Persian guide for translated dialogue,
+even when the source is English or Russian. For stilted Persian, drifting
+register or ambiguous short replies, follow `references/persian-review.md`:
+read the Persian aloud, then compare it with the source. Accept suggestions
+through the existing worksheet flow.
 
 A page's context is the pages before it — the dialogue they settled, the register
 each character was given, the names that were locked. On a fresh chapter none of
