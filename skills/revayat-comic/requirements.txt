@@ -25,7 +25,7 @@ pymupdf>=1.24.3
 # Persian shaping fallback. Pillow wheels normally ship RAQM, which does this
 # properly through HarfBuzz and FriBidi; these two are only used when it does
 # not, and `doctor` says which path is in effect.
-arabic-reshaper>=3.0
+arabic-reshaper>=3.1.0
 python-bidi>=0.4
 
 # The hosted adapters in scripts/adapters.py need NO package at all — they are
