@@ -1,22 +1,22 @@
 <div dir="rtl">
 
-# روایت کمیک — Revayat Comic
+<h1 align="center">روایت کمیک — Revayat Comic</h1>
 
 <div align="center">
 
 [![آزمون‌های پروژه دستی اجرا می‌شوند](https://img.shields.io/badge/CI-manual-2563eb)](.github/workflows/ci.yml)
-[![گردش‌کار CodeQL](https://img.shields.io/badge/Security-CodeQL-b45309)](.github/workflows/codeql.yml)
-[![گردش‌کار Gitleaks](https://img.shields.io/badge/Secret%20scan-Gitleaks-9333ea)](.github/workflows/gitleaks.yml)
-[![مجوز GPL نسخهٔ ۳ یا بالاتر](https://img.shields.io/badge/License-GPL%203%2B-16a34a)](LICENSE)
-[![نسخهٔ 1.1.0 افزونه](https://img.shields.io/badge/Plugin-1.1.0-0369a1)](.claude-plugin/plugin.json)
-[![پایتون 3.13.15 در آزمون محلی](https://img.shields.io/badge/Python%203.13.15-tested%20locally-8b5cf6)](tests/README.md)
-[![اجرا روی ویندوز، لینوکس و مک](https://img.shields.io/badge/Platforms-Windows%20%7C%20Linux%20%7C%20macOS-0891b2)](.github/workflows/ci.yml)
-[![نصب به‌صورت افزونه یا نسخهٔ مستقل](https://img.shields.io/badge/Install-plugin%20%7C%20standalone-0f766e)](#نصب)
-[![مستندات فارسی و انگلیسی](https://img.shields.io/badge/Docs-English%20%7C%20Persian-7c3aed)](README.md)
-[![حجم فایل‌های منبع حدود ۲٫۵ مگابایت، بدون خروجی‌های محلی](https://img.shields.io/badge/Source%20tree-2.5%20MB-ca8a04)](#توسعه)
-[![ترسیم و ترکیب تصویر صفحه با Pillow](https://img.shields.io/badge/Imaging-Pillow-c2410c)](skills/revayat-comic/requirements.txt)
-[![پردازش صفحه‌های PDF با PyMuPDF](https://img.shields.io/badge/PDF-PyMuPDF-475569)](skills/revayat-comic/requirements.txt)
-[![سه راهنمای لحن همراه بسته](https://img.shields.io/badge/Voice%20guides-3-be123c)](skills/revayat-comic/references/voice/index.md)
+[![گردش‌کار CodeQL](https://img.shields.io/badge/security-CodeQL-b45309)](.github/workflows/codeql.yml)
+[![گردش‌کار Gitleaks](https://img.shields.io/badge/secret%20scan-Gitleaks-9333ea)](.github/workflows/gitleaks.yml)
+[![مجوز GPL نسخهٔ ۳ یا بالاتر](https://img.shields.io/badge/license-GPL%203%2B-16a34a)](LICENSE)
+[![نسخهٔ 1.1.0 افزونه](https://img.shields.io/badge/plugin-1.1.0-0369a1)](.claude-plugin/plugin.json)
+[![پایتون 3.13.15 در آزمون محلی](https://img.shields.io/badge/python-3.13.15-8b5cf6)](tests/README.md)
+[![اجرا روی ویندوز، لینوکس و مک](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-0891b2)](.github/workflows/ci.yml)
+[![نصب به‌صورت افزونه یا نسخهٔ مستقل](https://img.shields.io/badge/install-plugin%20%7C%20standalone-0f766e)](#نصب)
+[![مستندات فارسی و انگلیسی](https://img.shields.io/badge/docs-English%20%7C%20Persian-7c3aed)](README.md)
+[![حجم درخت منتشرشده (git archive از HEAD) حدود ۲٫۷ مگابایت است](https://img.shields.io/badge/repo%20size-2.7%20MB-ca8a04)](#توسعه)
+[![ترسیم و ترکیب تصویر صفحه با Pillow](https://img.shields.io/badge/built%20with-Pillow-c2410c)](skills/revayat-comic/requirements.txt)
+[![پردازش صفحه‌های PDF با PyMuPDF](https://img.shields.io/badge/pdf-PyMuPDF-475569)](skills/revayat-comic/requirements.txt)
+[![سه راهنمای لحن همراه بسته](https://img.shields.io/badge/voice%20guides-3-be123c)](skills/revayat-comic/references/voice/index.md)
 [![Support donations](https://img.shields.io/badge/Support-donations-d04a9a)](#donate)
 
 </div>

@@ -172,7 +172,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install --only-binary=:all: \
             "pillow==10.0.0" "numpy==1.24.0" "opencv-python-headless==4.8.1.78" \
-            "pymupdf==1.24.3" "arabic-reshaper==3.0.0" "python-bidi==0.4.0" \
+            "pymupdf==1.24.3" "arabic-reshaper==3.1.0" "python-bidi==0.4.0" \
             rarfile
           python -m pip install -r tests/requirements.txt
           python -m pip list --format=freeze > floor-versions.txt
