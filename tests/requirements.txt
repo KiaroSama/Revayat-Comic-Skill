@@ -2,7 +2,7 @@
 # These tool floors are not the runtime compatibility minima tested by CI.
 pytest>=9.2.0
 pytest-timeout>=2.3
-ruff>=0.16                    # the lint gate; see ruff.toml for the rules
+ruff>=0.17.5                    # the lint gate; see ruff.toml for the rules
 
 # Font subsets are generated only while testing; no font is committed or shipped.
 fonttools>=4.60
