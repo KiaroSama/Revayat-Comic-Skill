@@ -251,7 +251,7 @@ def _measure(draw, text: str, font, shaper: Shaper,
 BODY_WIDTH = 0.5
 
 
-def _body(widths: Sequence[int]) -> tuple[int, int]:
+def _body(widths: Sequence[int], *, reference: int | None = None) -> tuple[int, int]:
     """``(first row, height)`` of the part of the shape text can actually go in.
 
     A speech balloon is not its bounding box: it has a **tail**, and the tail can
@@ -266,7 +266,8 @@ def _body(widths: Sequence[int]) -> tuple[int, int]:
     """
     if not widths:
         return 0, 0
-    threshold = max(widths) * BODY_WIDTH
+    ref = max(widths) if reference is None else reference
+    threshold = ref * BODY_WIDTH
     best_start = best_length = run_start = run_length = 0
     for index, width in enumerate(widths):
         if width >= threshold:
@@ -278,6 +279,31 @@ def _body(widths: Sequence[int]) -> tuple[int, int]:
         else:
             run_length = 0
     return best_start, best_length
+
+
+def _candidate_bodies(widths: Sequence[int]) -> list[tuple[int, int]]:
+    """Primary `_body(widths)` plus robust quantile fallbacks when a thin wide
+    edge spike (open margin or twin-balloon bridge) starves the primary band."""
+    if not widths:
+        return []
+    ordered = sorted(widths)
+    n = len(ordered)
+    refs = (
+        ordered[-1],
+        ordered[int(0.85 * (n - 1))],
+        ordered[int(0.75 * (n - 1))],
+        ordered[n // 2],
+    )
+    seen: set[tuple[int, int]] = set()
+    bodies: list[tuple[int, int]] = []
+    for ref in refs:
+        if ref <= 0:
+            continue
+        band = _body(widths, reference=ref)
+        if band[1] > 0 and band not in seen:
+            seen.add(band)
+            bodies.append(band)
+    return bodies
 
 
 def _wrap(draw, paragraphs: Sequence[Sequence[str]], font, shaper: Shaper,
@@ -358,81 +384,82 @@ def fit_region(
     if not any(paragraphs):
         return None
 
-    body_top, body_height = _body(widths)
-    if body_height <= 0:
+    bodies = _candidate_bodies(widths)
+    if not bodies:
         return None
 
-    for size in range(int(max_size), int(min_size) - 1, -1):
-        font = ImageFont.truetype(str(font_path), size, layout_engine=shaper.layout)
-        # What this size will really cost once everything the renderer adds is
-        # on it — which depends on WHICH renderer, and for a styled effect on
-        # the style it measured. `envelope` is that renderer answering for
-        # itself; the booleans are the generic answer for callers that have no
-        # style to consult.
-        stroke_px = (int(envelope(size)) if envelope is not None
-                     else envelope_for(size, outline=outline, styled=styled))
-        probe = " ".join(token for paragraph in paragraphs for token in paragraph)
-        step = max(1, int(round(size * LINE_SPACING)),
-                   _measure(draw, probe, font, shaper, stroke_px)[1])
+    for body_top, body_height in bodies:
+        for size in range(int(max_size), int(min_size) - 1, -1):
+            font = ImageFont.truetype(str(font_path), size, layout_engine=shaper.layout)
+            # What this size will really cost once everything the renderer adds is
+            # on it — which depends on WHICH renderer, and for a styled effect on
+            # the style it measured. `envelope` is that renderer answering for
+            # itself; the booleans are the generic answer for callers that have no
+            # style to consult.
+            stroke_px = (int(envelope(size)) if envelope is not None
+                         else envelope_for(size, outline=outline, styled=styled))
+            probe = " ".join(token for paragraph in paragraphs for token in paragraph)
+            step = max(1, int(round(size * LINE_SPACING)),
+                       _measure(draw, probe, font, shaper, stroke_px)[1])
 
-        placement: list[int] | None = None
-        lines: list[str] | None = None
-        # The block's vertical position depends on how many lines it has, and
-        # the number of lines depends on how wide each one is allowed to be,
-        # which depends on the position. Two or three passes settle it.
-        count = 1
-        for _ in range(4):
-            block = count * step
-            if block > body_height:
-                lines = None
-                break
-            offset = body_top + (body_height - block) // 2
+            placement: list[int] | None = None
+            lines: list[str] | None = None
+            # The block's vertical position depends on how many lines it has, and
+            # the number of lines depends on how wide each one is allowed to be,
+            # which depends on the position. Two or three passes settle it.
+            count = 1
+            for _ in range(4):
+                block = count * step
+                if block > body_height:
+                    lines = None
+                    break
+                offset = body_top + (body_height - block) // 2
 
-            def width_for_line(index: int, offset=offset, step=step) -> int:
+                def width_for_line(index: int, offset=offset, step=step) -> int:
+                    start = offset + index * step
+                    return span(start, start + step)[1]
+
+                lines = _wrap(draw, paragraphs, font, shaper, width_for_line,
+                              stroke_px)
+                if lines is None:
+                    break
+                if len(lines) == count:
+                    placement = [offset, step]
+                    break
+                count = len(lines)
+            if lines is None or placement is None:
+                continue
+
+            offset, step = placement
+            rendered: list[dict[str, Any]] = []
+            overflow = False
+            for index, line in enumerate(lines):
                 start = offset + index * step
-                return span(start, start + step)[1]
+                band_left, available = span(start, start + step)
+                if available <= 0:
+                    overflow = True
+                    break
+                box = _anchored_box(draw, line, font, shaper, stroke_px)
+                text_width, text_height = box[2] - box[0], box[3] - box[1]
+                if text_width > available or text_height > step:
+                    overflow = True
+                    break
+                # Center the INK, then derive Pillow's anchor. Its font-metric
+                # middle is not the midpoint of this particular string's marks.
+                anchor_x = left + band_left + (available - text_width) // 2 - box[0]
+                anchor_y = top + start + (step - text_height) // 2 - box[1]
+                rendered.append({
+                    "text": line,
+                    "x": float(anchor_x),
+                    "y": float(anchor_y),
+                })
+            if overflow or not rendered:
+                continue
 
-            lines = _wrap(draw, paragraphs, font, shaper, width_for_line,
-                          stroke_px)
-            if lines is None:
-                break
-            if len(lines) == count:
-                placement = [offset, step]
-                break
-            count = len(lines)
-        if lines is None or placement is None:
-            continue
-
-        offset, step = placement
-        rendered: list[dict[str, Any]] = []
-        overflow = False
-        for index, line in enumerate(lines):
-            start = offset + index * step
-            band_left, available = span(start, start + step)
-            if available <= 0:
-                overflow = True
-                break
-            box = _anchored_box(draw, line, font, shaper, stroke_px)
-            text_width, text_height = box[2] - box[0], box[3] - box[1]
-            if text_width > available or text_height > step:
-                overflow = True
-                break
-            # Center the INK, then derive Pillow's anchor. Its font-metric
-            # middle is not the midpoint of this particular string's marks.
-            anchor_x = left + band_left + (available - text_width) // 2 - box[0]
-            anchor_y = top + start + (step - text_height) // 2 - box[1]
-            rendered.append({
-                "text": line,
-                "x": float(anchor_x),
-                "y": float(anchor_y),
-            })
-        if overflow or not rendered:
-            continue
-
-        return {
-            "size": size,
-            "lines": rendered,
-            "line_count": len(rendered),
-            "font": font_path.name,
-        }
+            return {
+                "size": size,
+                "lines": rendered,
+                "line_count": len(rendered),
+                "font": font_path.name,
+            }
     return None

@@ -1,27 +1,28 @@
 <div dir="rtl">
 
-<h1 align="center">روایت کمیک — Revayat Comic</h1>
-
 <div align="center">
 
-[![آزمون‌های پروژه دستی اجرا می‌شوند](https://img.shields.io/badge/CI-manual-2563eb)](.github/workflows/ci.yml)
-[![گردش‌کار CodeQL](https://img.shields.io/badge/security-CodeQL-b45309)](.github/workflows/codeql.yml)
-[![گردش‌کار Gitleaks](https://img.shields.io/badge/secret%20scan-Gitleaks-9333ea)](.github/workflows/gitleaks.yml)
-[![مجوز GPL نسخهٔ ۳ یا بالاتر](https://img.shields.io/badge/license-GPL%203%2B-16a34a)](LICENSE)
-[![نسخهٔ 1.1.0 افزونه](https://img.shields.io/badge/plugin-1.1.0-0369a1)](.claude-plugin/plugin.json)
-[![پایتون 3.13.15 در آزمون محلی](https://img.shields.io/badge/python-3.13.15-8b5cf6)](tests/README.md)
+# روایت کمیک (Revayat Comic)
+
+**ترجمهٔ مانگا، مانهوا، مانهوای چینی و کمیک به فارسی، و تحویل CBZ یا PDF با اثبات دست‌نخوردگی نقاشی صفحه.**
+
+[![گردش‌کار CI در GitHub Actions با اجرای دستی](https://img.shields.io/badge/CI-GitHub%20Actions-16a34a)](.github/workflows/ci.yml)
+[![مجوز GPL نسخهٔ ۳ یا بالاتر](https://img.shields.io/badge/license-GPL--3.0--or--later-2563eb)](LICENSE)
+[![نسخهٔ 1.1.0 افزونه در پنج قالب مانیفست](https://img.shields.io/badge/plugin-v1.1.0-ea580c)](plugin.json)
+[![مجموعهٔ آزمون خودکار pytest در ماتریس CI](https://img.shields.io/badge/tests-pytest%20suite-0d9488)](tests/README.md)
+[![پایتون 3.13.15 در آزمون محلی، حداقل پایتون 3.12 یا بالاتر](https://img.shields.io/badge/Python-3.13.15-8b5cf6)](skills/revayat-comic/requirements.txt)
 [![اجرا روی ویندوز، لینوکس و مک](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-0891b2)](.github/workflows/ci.yml)
-[![نصب به‌صورت افزونه یا نسخهٔ مستقل](https://img.shields.io/badge/install-plugin%20%7C%20standalone-0f766e)](#نصب)
-[![مستندات فارسی و انگلیسی](https://img.shields.io/badge/docs-English%20%7C%20Persian-7c3aed)](README.md)
-[![حجم درخت منتشرشده (git archive از HEAD) حدود ۲٫۷ مگابایت است](https://img.shields.io/badge/repo%20size-2.7%20MB-ca8a04)](#توسعه)
-[![ترسیم و ترکیب تصویر صفحه با Pillow](https://img.shields.io/badge/built%20with-Pillow-c2410c)](skills/revayat-comic/requirements.txt)
-[![پردازش صفحه‌های PDF با PyMuPDF](https://img.shields.io/badge/pdf-PyMuPDF-475569)](skills/revayat-comic/requirements.txt)
-[![سه راهنمای لحن همراه بسته](https://img.shields.io/badge/voice%20guides-3-be123c)](skills/revayat-comic/references/voice/index.md)
+[![نصب با پنج قالب افزونه یا اسکریپت مستقل](https://img.shields.io/badge/install-5%20plugins%20%7C%20standalone-4f46e5)](#نصب)
+[![مستندات فارسی و انگلیسی](https://img.shields.io/badge/docs-English%20%7C%20Persian-0284c7)](README.md)
+[![حجم درخت منتشرشده با git archive حدود ۲٫۶ مگابایت است](https://img.shields.io/badge/repo%20size-2.6%20MB-ca8a04)](#توسعه)
+[![ترسیم و ترکیب تصویر صفحه با Pillow](https://img.shields.io/badge/built%20with-Pillow-15803d)](skills/revayat-comic/requirements.txt)
+[![ورودی و خروجی PDF با PyMuPDF](https://img.shields.io/badge/pdf-PyMuPDF-b45309)](skills/revayat-comic/requirements.txt)
+[![تشخیص حباب، ماسک و ترمیم با OpenCV](https://img.shields.io/badge/vision-OpenCV-334155)](skills/revayat-comic/requirements.txt)
+[![سه راهنمای لحن با مجوز MIT برای فارسی، انگلیسی و روسی](https://img.shields.io/badge/voice%20guides-3%20bundled-7c3aed)](skills/revayat-comic/references/voice/index.md)
+[![تحلیل ایستای CodeQL و اسکن راز Gitleaks](https://img.shields.io/badge/security-CodeQL%20%7C%20Gitleaks-c2410c)](.github/workflows/codeql.yml)
 [![Support donations](https://img.shields.io/badge/Support-donations-d04a9a)](#donate)
 
 </div>
-
-**ترجمهٔ مانگا، مانهوا، مانهوای چینی و کمیک به فارسی — و تحویل یک CBZ یا PDF که دست‌نخوردگیِ هنرِ صفحه در آن اثبات شده باشد.**
 
 یک Agent Skill برای Claude Code، Claude Desktop، Codex، Antigravity، Hermes، OpenCode، Kiro، Cursor، Cline و هر ایجنت کدنویسی دیگری که بتواند یک `SKILL.md` را بخواند. کارهایی را انجام می‌دهد که ترجمهٔ کمیک را واقعاً سخت می‌کنند: پیدا کردن حبابِ گفت‌وگو در حد پیکسل، پاک کردن متن اصلی بدون آسیب زدن به نقاشی، و حروف‌چینیِ فارسیِ راست‌به‌چپی که باید درست باشد، نه تقریباً درست.
 
@@ -91,12 +92,9 @@ Docx یا PDF Processing Pro لازم نیست. اصلاحات Word باید ا�
 
 ## نصب
 
-**پایتون ۳٫۱۰ یا بالاتر.** اسکریپت‌ها همه‌جا از اتحادهای نوعِ `X | Y` استفاده
-می‌کنند، پس روی ۳٫۹ به‌جای پیامی مفید یک خطای نحوی در لحظهٔ import می‌گیرید. CI
-نسخه‌های ۳٫۱۰، ۳٫۱۳ و ۳٫۱۴ را روی لینوکس، مک و ویندوز آزمایش می‌کند. پشتیبانی امنیتی
-پایتون ۳٫۱۰ در ۲۰۲۶-۱۰-۰۱ پایان یافته است؛ این نسخه فقط کفِ سازگاریِ آزمایش‌شده
-می‌ماند، نه نسخهٔ توصیه‌شده برای امنیت. از پایتونِ تحت پشتیبانی استفاده کنید.
-افزایش کف به تصمیم صریح دربارهٔ سازگاری و هماهنگی تست‌ها و مستندات نیاز دارد.
+**پایتون ۳٫۱۲ یا بالاتر.** نسخهٔ NumPy 2.5+ و کف وابستگی‌های اجرا به پایتون
+۳٫۱۲ یا بالاتر نیاز دارند. CI نسخه‌های ۳٫۱۲، ۳٫۱۳ و ۳٫۱۴ را روی لینوکس، مک و
+ویندوز، همراه با خط آزمون کف دقیق وابستگی‌ها روی پایتون ۳٫۱۲ بررسی می‌کند.
 
 <div dir="ltr">
 
@@ -124,7 +122,14 @@ powershell -ExecutionPolicy Bypass -File .\install\install.ps1
 
 به‌صورت پیش‌فرض در هر ایجنتی که پیدا کند نصب می‌شود — Claude Code، Kiro، Codex، Cursor، Cline، Hermes، OpenCode و Antigravity. دو مورد آخر یک اشاره‌گر در `AGENTS.md` هم می‌گیرند، چون اینستراکشن‌ها را این‌طور پیدا می‌کنند. با `--agent claude` فقط یکی نصب می‌شود و با `--scope project --path <dir>` فقط در یک پروژه. هر دو نصب‌کننده روی لینوکس، مک و ویندوز رفتار یکسانی دارند.
 
-### به‌عنوان پلاگین Claude Code
+### به‌عنوان پلاگین (پنج قالب پشتیبانی‌شده)
+
+مخزن مانیفست‌های همگام را برای پنج اکوسیستم افزونه عرضه می‌کند: Agent Plugins
+1.0.0 (`plugin.json` و `.agents/plugins/marketplace.json`)، Claude Code
+(`.claude-plugin/`)، Codex (`.codex-plugin/`)، Cursor (`.cursor-plugin/`) و
+Antigravity (`.antigravity-plugin/`).
+
+در Claude Code:
 
 <div dir="ltr">
 
@@ -310,9 +315,9 @@ python evaluation/score.py --answers my-answers.json
 
 </div>
 
-پایتون ۳٫۱۰ یا بالاتر. لینتر مجموعهٔ کوچکی از قواعد را اجرا می‌کند — نامِ
+پایتون ۳٫۱۲ یا بالاتر. لینتر مجموعهٔ کوچکی از قواعد را اجرا می‌کند (نامِ
 تعریف‌نشده، importِ بلااستفاده، نامی که با import دوم سایه می‌افتد، و متغیری که
-مقدار می‌گیرد و هرگز خوانده نمی‌شود؛ نه سبکِ نگارش. `ruff.toml` می‌گوید چه چیزی
+مقدار می‌گیرد و هرگز خوانده نمی‌شود) و به سبک نگارش کاری ندارد. `ruff.toml` می‌گوید چه چیزی
 خاموش است و چرا. وابستگی‌ها هم هفتگی با
 `.github/workflows/dependency-audit.yml` مقابلِ پایگاهِ هشدارهای امنیتی بررسی
 می‌شوند.

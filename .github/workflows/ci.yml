@@ -21,7 +21,7 @@ jobs:
         # All three platforms people actually run this on, at the oldest and
         # newest supported interpreters.
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python: ["3.10", "3.13", "3.14"]
+        python: ["3.12", "3.13", "3.14"]
 
     steps:
       - uses: actions/checkout@v7
@@ -150,7 +150,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.10"
+          python-version: "3.12"
 
       # The same fonts and RAR reader the main test job installs: this job
       # runs the whole suite, so a skip here is the same loss of coverage it is
@@ -171,7 +171,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install --only-binary=:all: \
-            "pillow==10.0.0" "numpy==1.24.0" "opencv-python-headless==4.8.1.78" \
+            "pillow==10.0.0" "numpy==2.5.5" "opencv-python-headless==4.10.0.84" \
             "pymupdf==1.24.3" "arabic-reshaper==3.1.0" "python-bidi==0.4.0" \
             rarfile
           python -m pip install -r tests/requirements.txt
@@ -413,8 +413,8 @@ jobs:
           python - <<'PY'
           import json, pathlib
 
-          manifests = sorted(pathlib.Path(".").glob("*-plugin/plugin.json"))
-          assert manifests, "no plugin manifests found"
+          manifests = [pathlib.Path("plugin.json")] + sorted(pathlib.Path(".").glob("*-plugin/plugin.json"))
+          assert len(manifests) == 5, f"expected 5 plugin manifests, found {manifests}"
           versions = set()
           for path in manifests:
               data = json.loads(path.read_text(encoding="utf-8"))
@@ -423,12 +423,19 @@ jobs:
               versions.add(data["version"])
               print(f"ok {path} -> {data['name']} {data['version']}")
 
-          market = json.loads(
-              pathlib.Path(".claude-plugin/marketplace.json").read_text(encoding="utf-8")
-          )
-          versions.add(market["plugins"][0]["version"])
+          for mp in (
+              pathlib.Path(".agents/plugins/marketplace.json"),
+              pathlib.Path(".claude-plugin/marketplace.json"),
+              pathlib.Path(".cursor-plugin/marketplace.json"),
+          ):
+              market = json.loads(mp.read_text(encoding="utf-8"))
+              assert market["plugins"][0]["name"] == "revayat-comic", f"{mp}: unexpected plugin name"
+              if "version" in market["plugins"][0]:
+                  versions.add(market["plugins"][0]["version"])
+              print(f"ok {mp}")
+
           assert len(versions) == 1, f"plugin versions disagree: {versions}"
-          print("ok marketplace.json, all manifests at", versions.pop())
+          print("ok all 5 plugin manifests and 3 marketplaces at", versions.pop())
           PY
 
       - name: Every tracked text file is valid UTF-8

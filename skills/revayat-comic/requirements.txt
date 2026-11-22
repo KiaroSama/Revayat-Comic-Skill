@@ -1,19 +1,13 @@
-# Python 3.10 or newer. The scripts use `X | Y` type unions throughout, which
-# is a syntax error before 3.10 — on 3.9 you get a traceback from the import,
-# not a helpful message. CI tests the oldest and newest supported interpreters.
-#
-# Python 3.10 is now end-of-life (last release 3.10.22, 2026-10-01).
-# It remains a tested compatibility floor for users on an existing system Python,
-# not a security-supported runtime recommendation. Prefer a maintained Python;
-# raising the floor needs an explicit compatibility decision and CI/doc updates.
+# Python 3.12 or newer. NumPy 2.5+ requires Python 3.12+, and the scripts use
+# modern Python typing throughout. CI tests 3.12, 3.13 and 3.14 across Linux,
+# macOS and Windows, plus a Python 3.12 lane pinned to the literal minima below.
 
 # Core — required for every run.
 pillow>=10.0                  # page IO, and the Persian text renderer
 numpy>=2.5.5                   # every pixel measurement
-# 4.8.1, not 4.8: 4.8.0.74 is YANKED on PyPI, and a floor nobody should install
-# is not a floor. Found by pinning the literal minimum in CI rather than the
-# `==4.8.*` patch series, which resolves past it.
-opencv-python-headless>=4.8.1 # balloon detection, masks, inpainting
+# 4.10.0.84 is the first opencv-python-headless wheel built against the NumPy 2
+# ABI for Python 3.12+. Older 4.8/4.9 wheels crash at import under NumPy 2.5+.
+opencv-python-headless>=4.10.0.84 # balloon detection, masks, inpainting
 
 # Strongly recommended. Without it CBZ, CBR and folders still work, but PDF
 # input and PDF export do not.

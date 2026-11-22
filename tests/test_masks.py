@@ -469,3 +469,79 @@ def test_a_font_with_the_same_name_but_different_bytes_is_a_different_render(
     assert typefont.font_identity(first) != typefont.font_identity(second)
     assert typefont.font_identity(first) == typefont.font_identity(first)
     assert typefont.font_identity(first).startswith("F.ttf:")
+
+
+def test_reclassified_free_region_derives_its_balloon(translated):
+    """A speech balloon misdetected as free lettering (`detector='free'`,
+    `balloon=None`) and corrected to `kind='speech'` in the worksheet must
+    derive its enclosing balloon during `mask`, just like a reader-added box."""
+    doc = ir.load_doc(translated)
+    page = doc["pages"][0]
+    victim = next(r for r in page["regions"] if r.get("balloon"))
+    victim["detector"] = "free"
+    victim["balloon"] = None
+    victim["kind"] = "speech"
+    ir.save_doc(doc, translated)
+
+    report = masks.build_document(translated, pages=[page["id"]])
+    after = ir.load_doc(translated)["pages"][0]["regions"]
+    restored = next(r for r in after if r["id"] == victim["id"])
+
+    assert report["balloons_derived"] >= 1
+    assert restored["balloon"] is not None
+
+
+def test_find_balloon_rejects_leaked_component_missing_text_box():
+    """An open-edge balloon that leaks across grey screentone into a much larger
+    white area beside a character makes `balloon_interior` pick the distant lobe
+    and leave the lettering box uncovered; `find_balloon` must reject that leak
+    and return None."""
+    page = np.zeros((500, 500, 3), dtype=np.uint8)
+    # Grey screentone background separating a small left balloon from a larger
+    # right-side white area: in the wider dark search window both merge into one
+    # candidate box, while inside that tighter box Otsu rises above the grey
+    # seam so `balloon_interior` selects only the larger right lobe and misses
+    # the lettering box [45, 180, 40, 60].
+    page[120:300, 35:150] = 175
+    page[170:250, 35:90] = 255
+    page[172:176, 90:100] = 185
+    page[120:300, 100:150] = 255
+
+    assert masks.find_balloon(page, [45, 180, 40, 60], "light", (500, 500)) is None
+
+
+def test_find_balloon_rejects_component_hitting_search_window_edges():
+    """An open-edge balloon touching a white panel background runs into the
+    artificial crop walls of `find_balloon`'s search window and must be
+    rejected rather than returned as a fake window-sized balloon."""
+    page = np.full((600, 600, 3), 255, dtype=np.uint8)
+    # Lettering on an open white background (no closed outline inside the window).
+    page[280:320, 270:330] = 0
+    assert masks.find_balloon(page, [270, 280, 60, 40], "light", (600, 600)) is None
+
+
+def test_colliding_derived_balloons_in_twin_bubble_are_separated():
+    """Two distinct text boxes inside one connected figure-8 double balloon
+    must not keep identical merged balloons that would make typeset print both
+    texts on top of each other."""
+    import cv2
+
+    page = np.zeros((500, 500, 3), dtype=np.uint8)
+    # Connected twin balloon: left lobe (140, 250) and right lobe (280, 250).
+    cv2.ellipse(page, (140, 250), (75, 90), 0, 0, 360, (255, 255, 255), -1)
+    cv2.ellipse(page, (280, 250), (75, 90), 0, 0, 360, (255, 255, 255), -1)
+    r_left = ir.new_region("p0001r001", [105, 220, 65, 60], kind="speech")
+    r_right = ir.new_region("p0001r002", [245, 220, 65, 60], kind="speech")
+    r_left["balloon"] = masks.find_balloon(page, r_left["bbox"], "light", (500, 500))
+    r_right["balloon"] = masks.find_balloon(page, r_right["bbox"], "light", (500, 500))
+    assert r_left["balloon"] is not None and r_right["balloon"] is not None
+
+    masks._clip_colliding_balloons(
+        [r_left, r_right], {"p0001r001", "p0001r002"}, page, (500, 500)
+    )
+    ba = r_left["balloon"] or r_left["bbox"]
+    bb = r_right["balloon"] or r_right["bbox"]
+    assert ir.bbox_iou(ba, bb) == 0.0
+
+
+

@@ -1,8 +1,13 @@
 {
+  "$schema": "https://code.claude.com/schemas/marketplace.json",
   "name": "revayat-comic-skill",
   "description": "Persian comic translation with bundled editorial guides for Persian, English, and Russian.",
+  "metadata": {
+    "description": "Persian comic translation with bundled editorial guides for Persian, English, and Russian."
+  },
   "owner": {
     "name": "Kiaro Sama",
+    "email": "Kiaro.Sama.Dev@gmail.com",
     "url": "https://github.com/KiaroSama"
   },
   "plugins": [
@@ -11,7 +16,28 @@
       "source": "./",
       "description": "Translate manga, manhwa, manhua and Western comics into Persian and produce a finished CBZ or PDF: pixel-accurate balloon detection, source lettering removed without altering the artwork, and real right-to-left Persian typesetting fitted to each balloon.",
       "version": "1.1.0",
-      "license": "GPL-3.0-or-later"
+      "author": {
+        "name": "Kiaro Sama",
+        "email": "Kiaro.Sama.Dev@gmail.com",
+        "url": "https://github.com/KiaroSama"
+      },
+      "homepage": "https://github.com/KiaroSama/Revayat-Comic-Skill",
+      "repository": "https://github.com/KiaroSama/Revayat-Comic-Skill",
+      "license": "GPL-3.0-or-later",
+      "keywords": [
+        "manga",
+        "comics",
+        "manhwa",
+        "manhua",
+        "webtoon",
+        "translation",
+        "persian",
+        "farsi",
+        "rtl",
+        "cbz",
+        "typesetting",
+        "scanlation"
+      ]
     }
   ]
 }

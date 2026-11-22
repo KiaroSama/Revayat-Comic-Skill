@@ -210,7 +210,8 @@ def surviving_ink(original, cleaned, region: dict[str, Any],
                 return 1.0
 
     # Where a letter could have been and the mask did not reach.
-    consider = (interior[y:y + h, x:x + w] > 0) & (mask == 0)
+    in_interior = interior[y:y + h, x:x + w] > 0
+    consider = in_interior & (mask == 0)
     if consider.sum() < 24:
         return 0.0
 
@@ -219,11 +220,13 @@ def surviving_ink(original, cleaned, region: dict[str, Any],
     # The balloon's own colour, read from the cleaned page where it is flat.
     paper = float(np.median(after[consider]))
 
-    was_ink = (np.abs(before - paper) > 60) & consider
-    total = int(was_ink.sum())
+    # Denominator is ALL original ink inside the interior, not only the sliver
+    # outside the mask (which clean is forbidden to touch and always reads 100%).
+    all_ink = (np.abs(before - paper) > 60) & in_interior
+    total = int(all_ink.sum())
     if total < 12:
         return 0.0
-    still = (np.abs(after - paper) > 60) & was_ink
+    still = (np.abs(after - paper) > 60) & all_ink & consider
     return float(int(still.sum()) / total)
 
 

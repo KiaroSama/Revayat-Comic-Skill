@@ -310,6 +310,7 @@ def _balloon_candidates(gray, options: dict[str, float], invert: bool) -> list[d
 
         found.append({
             "bbox": [x, y, w, h],
+            "interior": interior,
             "interior_area": int(interior.sum()),
             "ink_share": round(share, 4),
             "polarity": "dark" if invert else "light",
@@ -325,15 +326,30 @@ def _text_inside(gray, balloon: dict[str, Any], options: dict[str, float]) -> li
     window = gray[y:y + h, x:x + w]
     if balloon["polarity"] == "dark":
         window = 255 - window
-    _, dark = cv2.threshold(window, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 
-    # Drop the outline: it is the ring of ink hugging the balloon border, and
-    # including it makes the text box the balloon box.
-    border = max(1, int(0.05 * min(w, h)))
-    dark[:border, :] = 0
-    dark[-border:, :] = 0
-    dark[:, :border] = 0
-    dark[:, -border:] = 0
+    interior = balloon.get("interior")
+    if interior is not None and interior.shape == window.shape and interior.any():
+        # Threshold and collect glyphs *inside the balloon contour only*, so
+        # faces, hair and screentone in the bounding-box corners cannot leak
+        # into the lettering box or skew Otsu's split.
+        pixels = window[interior]
+        thr, _ = cv2.threshold(
+            pixels.reshape(-1, 1), 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
+        )
+        inset = max(1, min(4, int(0.03 * min(w, h))))
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * inset + 1, 2 * inset + 1))
+        eroded = cv2.erode(interior.astype(np.uint8), kernel) > 0
+        inside = eroded if eroded.any() else interior
+        dark = np.where((window <= thr) & inside, np.uint8(255), np.uint8(0))
+    else:
+        _, dark = cv2.threshold(window, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        # Drop the outline: it is the ring of ink hugging the balloon border, and
+        # including it makes the text box the balloon box.
+        border = max(1, int(0.05 * min(w, h)))
+        dark[:border, :] = 0
+        dark[-border:, :] = 0
+        dark[:, :border] = 0
+        dark[:, -border:] = 0
 
     count, labels, stats = _components(dark, np)
     smaller = min(gray.shape[:2])
