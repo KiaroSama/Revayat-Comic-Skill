@@ -178,6 +178,7 @@ def find_balloon(page_rgb, bbox, polarity: str, page_size: tuple[int, int]):
                 seen[label] = seen.get(label, 0) + 1
 
     cap = MAX_DERIVED_BALLOON * width * height
+    box_area = float(max(1, w * h))
     for label, _votes in sorted(seen.items(), key=lambda item: -item[1]):
         bx, by, bw, bh = (int(stats[label, index]) for index in
                           (cv2.CC_STAT_LEFT, cv2.CC_STAT_TOP,
@@ -186,9 +187,102 @@ def find_balloon(page_rgb, bbox, polarity: str, page_size: tuple[int, int]):
         encloses = (found[0] <= x and found[1] <= y
                     and found[0] + found[2] >= x + w
                     and found[1] + found[3] >= y + h)
-        if encloses and bw * bh <= cap:
+        if not (encloses and bw * bh <= cap):
+            continue
+        # Reject components that leaked into the surrounding panel background
+        # and only stopped at the artificial search-window crop walls (when the
+        # text box is large enough that the search window can enclose a balloon).
+        crop_hits = (
+            (bx == 0 and wx > 0)
+            + (by == 0 and wy > 0)
+            + (bx + bw == ww and wx + ww < width)
+            + (by + bh == wh and wy + wh < height)
+        )
+        if crop_hits >= 2 and min(w, h) >= 36:
+            continue
+        # Reject leaked background components whose `balloon_interior` picks a
+        # different lobe and barely covers the lettering box itself.
+        interior = balloon_interior(
+            page_rgb, found, polarity, page_size, inset=OUTLINE_INSET,
+        )
+        if float((interior[y:y + h, x:x + w] > 0).sum()) / box_area >= 0.35:
             return found
     return None
+
+
+def _clip_colliding_balloons(
+    regions: list[dict[str, Any]],
+    derived_ids: set[str],
+    page_rgb,
+    page_size: tuple[int, int],
+) -> None:
+    """Separate derived balloons that merged across a twin-balloon neck.
+
+    When two distinct text boxes live in connected balloons (e.g. a hand-split
+    double balloon), `find_balloon` flood-fills across the neck and returns the
+    same merged union for both, so `typeset` centres both texts on top of each
+    other. Clip each derived balloon to its own side of the midpoint between
+    the two text boxes; if clipping leaves the box uncovered, drop the derived
+    balloon so `typeset` falls back to the region's own box.
+    """
+    originals = {r["id"]: r.get("balloon") for r in regions}
+    for region in regions:
+        if region["id"] not in derived_ids or not originals.get(region["id"]):
+            continue
+        ax, ay, aw, ah = region["bbox"]
+        acx, acy = ax + aw / 2.0, ay + ah / 2.0
+        bx, by, bw, bh = originals[region["id"]]
+        x0, y0, x1, y1 = bx, by, bx + bw, by + bh
+        clipped = False
+        for other in regions:
+            if other["id"] == region["id"]:
+                continue
+            if ir.bbox_iou(region["bbox"], other["bbox"]) >= 0.25:
+                continue
+            other_area = originals.get(other["id"]) or other["bbox"]
+            if (ir.bbox_iou([x0, y0, x1 - x0, y1 - y0], other["bbox"]) == 0.0
+                    and ir.bbox_iou([x0, y0, x1 - x0, y1 - y0], other_area) <= 0.15):
+                continue
+            ox, oy, ow, oh = other["bbox"]
+            ocx, ocy = ox + ow / 2.0, oy + oh / 2.0
+            if abs(ocx - acx) >= abs(ocy - acy):
+                if ocx >= acx:
+                    split = int((ax + aw + ox) / 2.0)
+                    split = max(ax + aw, min(ox, split)) if ax + aw <= ox else int((acx + ocx) / 2.0)
+                    if split < x1:
+                        x1 = split
+                        clipped = True
+                else:
+                    split = int((ox + ow + ax) / 2.0)
+                    split = max(ox + ow, min(ax, split)) if ox + ow <= ax else int((acx + ocx) / 2.0)
+                    if split > x0:
+                        x0 = split
+                        clipped = True
+            else:
+                if ocy >= acy:
+                    split = int((ay + ah + oy) / 2.0)
+                    split = max(ay + ah, min(oy, split)) if ay + ah <= oy else int((acy + ocy) / 2.0)
+                    if split < y1:
+                        y1 = split
+                        clipped = True
+                else:
+                    split = int((oy + oh + ay) / 2.0)
+                    split = max(oy + oh, min(ay, split)) if oy + oh <= ay else int((acy + ocy) / 2.0)
+                    if split > y0:
+                        y0 = split
+                        clipped = True
+        if not clipped:
+            continue
+        if x1 - x0 < max(12, aw) or y1 - y0 < max(12, ah):
+            region["balloon"] = None
+            continue
+        candidate = [x0, y0, x1 - x0, y1 - y0]
+        interior = balloon_interior(
+            page_rgb, candidate, region.get("polarity", "light"),
+            page_size, inset=OUTLINE_INSET,
+        )
+        cov = float((interior[ay:ay + ah, ax:ax + aw] > 0).sum()) / float(max(1, aw * ah))
+        region["balloon"] = candidate if cov >= 0.35 else None
 
 
 def _ink_mask(window, polarity: str):
@@ -346,6 +440,8 @@ def build_document(
         union = np.zeros((page["height"], page["width"]), np.uint8)
 
         skipped = 0
+        editable: list[dict[str, Any]] = []
+        derived_ids: set[str] = set()
         for region in page["regions"]:
             # Authority to change pixels comes from the decisions that stand
             # NOW. A region the reader dropped has no text in it, and one they
@@ -357,14 +453,23 @@ def build_document(
                 region["mask_box"] = None
                 skipped += 1
                 continue
-            # A box the reader drew arrives with no balloon. Find it, so a
-            # hand-split pair of balloons is masked and typeset like any other.
-            if (region.get("detector") == "reader" and not region.get("balloon")
-                    and region["kind"] in BALLOON_KINDS):
+            # A box the reader drew, or a free-lettering detection reclassified
+            # into a balloon kind, arrives with no balloon. Find it, so it is
+            # masked and typeset like any other balloon.
+            if not region.get("balloon") and region["kind"] in BALLOON_KINDS:
                 region["balloon"] = find_balloon(
                     rgb, region["bbox"], region.get("polarity", "light"), size)
-                derived += region["balloon"] is not None
+                if region["balloon"] is not None:
+                    derived_ids.add(region["id"])
+            editable.append(region)
 
+        if derived_ids:
+            _clip_colliding_balloons(editable, derived_ids, rgb, size)
+            derived += sum(
+                1 for r in editable if r["id"] in derived_ids and r.get("balloon")
+            )
+
+        for region in editable:
             mask, box = region_mask(rgb, region, size, grow=grow, pad=pad,
                                     solid_free=solid_free)
             relative = f"masks/{page['id']}/{region['id']}.png"

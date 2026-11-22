@@ -232,3 +232,31 @@ def test_a_region_the_reader_kept_survives_re_detection(detected):
     detect.detect_document(detected)
     after = ir.load_doc(detected)["pages"][0]["regions"][0]
     assert after["id"] == region["id"] and after.get("keep") is True
+
+
+def test_text_inside_ignores_artwork_in_bounding_box_corners_outside_balloon():
+    """Artwork glyphs sitting in the bounding-box corners outside a round
+    balloon's interior must not expand the detected text box past the actual
+    lettering inside the balloon."""
+    import cv2
+
+    page = np.full((700, 700), 255, dtype=np.uint8)
+    # Draw an oval speech balloon centred at (350, 350), radii (110, 120).
+    cv2.ellipse(page, (350, 350), (110, 120), 0, 0, 360, 0, 4)
+    # Draw three small glyph bars near the centre of the balloon.
+    for offset in (-26, -4, 18):
+        page[338:362, 350 + offset:350 + offset + 10] = 0
+    # Draw dark glyph-sized artwork marks in the outer corners of the balloon's
+    # bounding box (well outside the ellipse contour, e.g. hair/eyes in a panel).
+    page[238:258, 248:264] = 0
+    page[440:460, 436:452] = 0
+
+    found = detect._balloon_candidates(page, detect.DEFAULTS, invert=False)
+    assert len(found) == 1
+    box = detect._text_inside(page, found[0], detect.DEFAULTS)
+    assert box is not None
+    x, y, w, h = box
+    # The text box must stay around the centred glyphs, not expand to the outer corners.
+    assert x >= 310 and x + w <= 395, f"text box leaked horizontally into outer artwork: {box}"
+    assert y >= 325 and y + h <= 375, f"text box leaked vertically into outer artwork: {box}"
+

@@ -1,9 +1,9 @@
 # Install, upgrade and recover
 
 The Bash and PowerShell entry points use one standard-library Python bootstrap.
-**Python 3.10 or newer must be available before installation**, not only before
+**Python 3.12 or newer must be available before installation**, not only before
 running the translation pipeline. Use a maintained interpreter where possible;
-3.10 is retained as the project's tested compatibility floor. No third-party
+3.12 is the project's tested compatibility floor. No third-party
 package, network access, model or GPU is needed to copy the skill. The ordinary
 pipeline dependencies are still installed separately from `requirements.txt`.
 

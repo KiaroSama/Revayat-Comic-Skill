@@ -2,7 +2,7 @@
 .SYNOPSIS
 Install the skill with staged promotion, backups and explicit recovery.
 .DESCRIPTION
-Requires Python 3.10+. Set REVAYAT_PYTHON to select its executable.
+Requires Python 3.12+. Set REVAYAT_PYTHON to select its executable.
 The standard-library helper owns validation, transactions and diagnostic logs.
 #>
 [CmdletBinding()]
@@ -36,7 +36,7 @@ if ($requestedPython) {
 $python = $null
 foreach ($candidate in $candidates) {
     try {
-        $probe = & $candidate -c 'import sys; print(sys.version_info.major, sys.version_info.minor); sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>$null
+        $probe = & $candidate -c 'import sys; print(sys.version_info.major, sys.version_info.minor); sys.exit(0 if sys.version_info >= (3, 12) else 1)' 2>$null
         if ($LASTEXITCODE -eq 0 -and ($probe -match '^\d+ \d+$')) {
             $python = $candidate
             break
@@ -49,7 +49,7 @@ foreach ($candidate in $candidates) {
     }
 }
 if (-not $python) {
-    [Console]::Error.WriteLine('{0} [ERROR] [installer] Python 3.10+ is required; set REVAYAT_PYTHON.' -f [DateTime]::UtcNow.ToString('o'))
+    [Console]::Error.WriteLine('{0} [ERROR] [installer] Python 3.12+ is required; set REVAYAT_PYTHON.' -f [DateTime]::UtcNow.ToString('o'))
     exit 1
 }
 $arguments = @('-B', (Join-Path $PSScriptRoot 'safe_install.py'), '--agent', $Agent, '--scope', $Scope, '--path', $Path)

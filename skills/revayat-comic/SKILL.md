@@ -76,8 +76,8 @@ choice beside the output and retain it on resume.
 
 ## Step 1 — Check the tools
 
-Python 3.10 or newer is required; the scripts use `X | Y` type unions
-throughout. Anything older fails at import with a syntax error.
+Python 3.12 or newer is required. Anything older fails dependency resolution
+or import checks.
 
 ```bash
 $PY $SKILL_DIR/scripts/revayat-comic.py doctor

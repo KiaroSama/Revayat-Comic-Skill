@@ -11,9 +11,12 @@ PDF or folder of pages. It ships as three things from one tree:
 
 - a **skill** — `skills/revayat-comic/`, self-contained, copyable into any
   agent's skill directory
-- a **plugin** — `.claude-plugin/`, `.cursor-plugin/`, `.codex-plugin/` plus
-  root `commands/`
-- a **marketplace** — `.claude-plugin/marketplace.json`, so the repo installs
+- a **plugin** — five manifest formats: root `plugin.json` (Agent Plugins
+  1.0.0), `.claude-plugin/`, `.codex-plugin/`, `.cursor-plugin/`, and
+  `.antigravity-plugin/`, plus root `commands/`
+- a **marketplace** — `.agents/plugins/marketplace.json`,
+  `.claude-plugin/marketplace.json`, and `.cursor-plugin/marketplace.json`, so
+  the repo installs directly from GitHub across hosts
   itself
 
 ## Layout

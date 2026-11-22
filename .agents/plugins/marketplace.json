@@ -1,0 +1,20 @@
+{
+  "name": "revayat-comic-skill",
+  "interface": {
+    "displayName": "Revayat Comic"
+  },
+  "plugins": [
+    {
+      "name": "revayat-comic",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/KiaroSama/Revayat-Comic-Skill.git"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "NONE"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

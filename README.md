@@ -1,25 +1,26 @@
-<h1 align="center">Revayat Comic — روایت کمیک</h1>
-
 <div align="center">
 
-[![Project validation starts manually](https://img.shields.io/badge/CI-manual-2563eb)](.github/workflows/ci.yml)
-[![CodeQL workflow](https://img.shields.io/badge/security-CodeQL-b45309)](.github/workflows/codeql.yml)
-[![Gitleaks workflow](https://img.shields.io/badge/secret%20scan-Gitleaks-9333ea)](.github/workflows/gitleaks.yml)
-[![GPL version 3 or later](https://img.shields.io/badge/license-GPL%203%2B-16a34a)](LICENSE)
-[![Plugin version 1.1.0](https://img.shields.io/badge/plugin-1.1.0-0369a1)](.claude-plugin/plugin.json)
-[![Implemented in Python 3.13.15, measured locally](https://img.shields.io/badge/python-3.13.15-8b5cf6)](tests/README.md)
-[![Runs on Windows, Linux and macOS](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-0891b2)](.github/workflows/ci.yml)
-[![Available as a plugin or a standalone copy](https://img.shields.io/badge/install-plugin%20%7C%20standalone-0f766e)](#install)
-[![Documentation in English and Persian](https://img.shields.io/badge/docs-English%20%7C%20Persian-7c3aed)](README.fa.md)
-[![Published tree (git archive of HEAD) is about 2.7 MB](https://img.shields.io/badge/repo%20size-2.7%20MB-ca8a04)](#development)
-[![Pillow draws and composites pages](https://img.shields.io/badge/built%20with-Pillow-c2410c)](skills/revayat-comic/requirements.txt)
-[![PyMuPDF handles PDF pages](https://img.shields.io/badge/pdf-PyMuPDF-475569)](skills/revayat-comic/requirements.txt)
-[![Three bundled voice guides](https://img.shields.io/badge/voice%20guides-3-be123c)](skills/revayat-comic/references/voice/index.md)
+# Revayat Comic (روایت کمیک)
+
+**Translate manga, manhwa, manhua and Western comics into Persian, and get a CBZ or PDF with the artwork provably untouched.**
+
+[![GitHub Actions CI workflow with manual dispatch](https://img.shields.io/badge/CI-GitHub%20Actions-16a34a)](.github/workflows/ci.yml)
+[![GNU General Public License v3.0 or later](https://img.shields.io/badge/license-GPL--3.0--or--later-2563eb)](LICENSE)
+[![Plugin version 1.1.0 across five manifest formats](https://img.shields.io/badge/plugin-v1.1.0-ea580c)](plugin.json)
+[![Automated pytest suite across CI matrices](https://img.shields.io/badge/tests-pytest%20suite-0d9488)](tests/README.md)
+[![Python 3.13.15 measured locally, requires Python 3.12 or newer](https://img.shields.io/badge/Python-3.13.15-8b5cf6)](skills/revayat-comic/requirements.txt)
+[![Runs on Windows, Linux, and macOS](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-0891b2)](.github/workflows/ci.yml)
+[![Install via five plugin formats or standalone scripts](https://img.shields.io/badge/install-5%20plugins%20%7C%20standalone-4f46e5)](#install)
+[![Documentation in English and Persian](https://img.shields.io/badge/docs-English%20%7C%20Persian-0284c7)](README.fa.md)
+[![Published tree measured via git archive of HEAD is 2.6 MB](https://img.shields.io/badge/repo%20size-2.6%20MB-ca8a04)](#development)
+[![Pillow image IO and Persian text rendering](https://img.shields.io/badge/built%20with-Pillow-15803d)](skills/revayat-comic/requirements.txt)
+[![PyMuPDF PDF import and export](https://img.shields.io/badge/pdf-PyMuPDF-b45309)](skills/revayat-comic/requirements.txt)
+[![OpenCV balloon detection, masks, and inpainting](https://img.shields.io/badge/vision-OpenCV-334155)](skills/revayat-comic/requirements.txt)
+[![Three bundled MIT voice guides for Persian, English, and Russian](https://img.shields.io/badge/voice%20guides-3%20bundled-7c3aed)](skills/revayat-comic/references/voice/index.md)
+[![CodeQL static analysis and Gitleaks secret scanning](https://img.shields.io/badge/security-CodeQL%20%7C%20Gitleaks-c2410c)](.github/workflows/codeql.yml)
 [![Support donations](https://img.shields.io/badge/Support-donations-d04a9a)](#donate)
 
 </div>
-
-**Translate manga, manhwa, manhua and Western comics into Persian, and get a CBZ or PDF with the artwork provably untouched.**
 
 An agent skill for Claude Code, Claude Desktop, Codex, Antigravity, Hermes,
 OpenCode, Kiro, Cursor, Cline and any other coding agent that can read a
@@ -50,12 +51,9 @@ than approximately right.
 
 ## Install
 
-**Python 3.10 or newer.** The scripts use `X | Y` type unions throughout, so on
-3.9 the import fails with a syntax error rather than a useful message. CI tests
-3.10, 3.13 and 3.14 on Linux, macOS and Windows. Python 3.10 reached end of life on
-2026-10-01; it remains a tested compatibility floor, not a security-supported
-runtime recommendation. Prefer a maintained Python. Raising the floor needs an
-explicit compatibility decision and matching tests/docs.
+**Python 3.12 or newer.** NumPy 2.5+ and the runtime dependency floors require
+Python 3.12 or newer. CI tests 3.12, 3.13 and 3.14 on Linux, macOS and Windows,
+plus a Python 3.12 lane pinned to the literal runtime dependency minima.
 
 ```bash
 git clone https://github.com/KiaroSama/Revayat-Comic-Skill.git
@@ -79,7 +77,14 @@ Cursor, Cline, Hermes, OpenCode and Antigravity. The last two also get an
 `--agent claude` for one, and `--scope project --path <dir>` for a single
 project. Both installers behave identically on Linux, macOS and Windows.
 
-### As a Claude Code plugin
+### As a plugin (five supported formats)
+
+The repository ships synchronized manifests for five plugin ecosystems: Agent
+Plugins 1.0.0 (`plugin.json` and `.agents/plugins/marketplace.json`), Claude
+Code (`.claude-plugin/`), Codex (`.codex-plugin/`), Cursor (`.cursor-plugin/`),
+and Antigravity (`.antigravity-plugin/`).
+
+In Claude Code:
 
 ```
 /plugin marketplace add KiaroSama/Revayat-Comic-Skill
@@ -370,9 +375,9 @@ python -m ruff check skills/revayat-comic/scripts tests
 python evaluation/score.py --answers my-answers.json
 ```
 
-Python 3.10 or newer. The linter runs a small rule set — undefined names,
-unused imports, shadowed names, dead variables — not style; `ruff.toml` says
-what is off and why. Dependencies are audited weekly against the advisory
+Python 3.12 or newer. The linter runs a small rule set (undefined names,
+unused imports, shadowed names, dead variables) rather than style rules; `ruff.toml`
+explains what is off and why. Dependencies are audited weekly against the advisory
 database by `.github/workflows/dependency-audit.yml`.
 
 The regression suite also needs an explicit DejaVu test face. See
