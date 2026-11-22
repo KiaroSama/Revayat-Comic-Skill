@@ -9,7 +9,7 @@
 
 # Core — required for every run.
 pillow>=10.0                  # page IO, and the Persian text renderer
-numpy>=1.24                   # every pixel measurement
+numpy>=2.5.5                   # every pixel measurement
 # 4.8.1, not 4.8: 4.8.0.74 is YANKED on PyPI, and a floor nobody should install
 # is not a floor. Found by pinning the literal minimum in CI rather than the
 # `==4.8.*` patch series, which resolves past it.
