@@ -166,12 +166,19 @@ script's.** For each `$WORK/worksheets/pNNNN.txt`, write
 
 **One page at a time, merged before the next one starts.** This is the default
 and it is the only order that keeps the guarantee below true.
-Read `references/voice/index.md` before drafting or reviewing prose. Choose
-by the language you are writing: use the Persian guide for translated dialogue,
-even when the source is English or Russian. For stilted Persian, drifting
-register or ambiguous short replies, follow `references/persian-review.md`:
-read the Persian aloud, then compare it with the source. Accept suggestions
-through the existing worksheet flow.
+Read `references/voice/index.md` before drafting or reviewing prose. For comic
+translation, you must use `references/voice/persian/SKILL.md` and its
+`references/register-guide.md`, `references/pitfalls.md`, and `references/ai-tells.md`.
+Write dialogue in natural spoken Persian. Match how each character addresses
+this listener in this scene; keep formal speech where the source calls for it.
+Read lines aloud and compare them with the source. For stilted Persian or
+ambiguous replies, follow `references/persian-review.md`.
+
+Before translating any chapter, look up official character names, pronunciations,
+honorifics, and relationships on the web. Check publisher or creator material and
+licensed editions. Record source URLs, verified facts, unresolved points, and
+agreed Persian forms in `$WORK/glossary.json`. Apply the agreed forms to the
+locked `glossary.entries` in `comic.json` before giving worksheets to readers.
 
 A page's context is the pages before it — the dialogue they settled, the register
 each character was given, the names that were locked. On a fresh chapter none of
@@ -211,6 +218,29 @@ pending work affected by changes. When independence is absent, parallel reading
 preparation/review can help while translation remains sequential.
 
 </details>
+
+### Batch work on independent page ranges or books
+
+Use shards only when page ranges can proceed independently. Finish the chapter
+prep and verify and lock the cast glossary before splitting it. Give one agent
+exclusive ownership of each shard, with any scene context it needs. Keep pages
+ordered inside each shard. Dependent ranges use the sequential workflow above.
+
+```bash
+$PY $SKILL_DIR/scripts/revayat-comic.py batch plan-shards "$WORK" --shards 3 --out "$BATCH"
+$PY $SKILL_DIR/scripts/revayat-comic.py batch merge-shards "$BATCH" --into "$WORK"
+$PY $SKILL_DIR/scripts/revayat-comic.py batch plan-books "$INPUT_DIR" --out "$BOOK_BATCH" --workers 3
+```
+
+Without `--out`, `plan-shards` creates `$WORK/batch`. Read `batch-manifest.json`:
+`workdir` is relative to the batch directory and `pages` is a zero-based,
+half-open range in the original page order. In book mode,
+import each item's `input` from its own `workdir` into a chapter folder there.
+Use at most `workers` agents at once. Agents edit and merge worksheets in their
+own workspace; only the coordinator updates manifest statuses. Finish or retry
+failed shards before merging. Keep the original chapter unchanged while agents
+work and wait for all writers to stop before running `merge-shards`. Then run
+chapter-wide QA and review every final page in original order.
 
 **Lock what you already know before page 1.** If this is chapter 12 of a series
 you have already translated, copy the locked `glossary.entries` from the previous
@@ -307,6 +337,11 @@ assignment/snapshot contract from `references/parallel-workflow.md`:**
 >     there and leave it printed; `keep` leaves it on purpose. Only for marks
 >     the user has the right to remove: `references/watermarks.md`.
 >   - `kind: sfx` / `sign` / `narration` / `thought` when it is misclassified
+>   - `style: bold` / `italic` / `bold-italic` / `outline` / `shadow` / `shout`
+>     (comma-separated combinations such as `bold,outline` are supported) to match
+>     shouts, inner thoughts, titles, or SFX over artwork. The skill ships
+>     official SIL OFL-1.1 **Vazir** fonts (`assets/fonts/Vazir-{Regular,Medium,Bold}.ttf`)
+>     and selects them by default.
 >   - `speaker: <short stable name>` — the same name every time, on every page
 >   - `fa_full: <the full-meaning Persian>` — when `fa:` above is a
 >     shortened variant that had to fit the balloon. Both are kept, and
@@ -340,7 +375,10 @@ assignment/snapshot contract from `references/parallel-workflow.md`:**
 > - **If the overview shows text with no region on it, add one.** Free lettering
 >   is the weak case, and a whole panel is occasionally taken for a balloon and
 >   swallows what is drawn inside it — so a full worksheet is not the same as a
->   full page.
+>   full page. Translate chapter titles, map/diagram callouts, and standalone
+>   English SFX glosses (as `kind: sign` with `style: bold,outline` or `italic`
+>   where appropriate) while leaving drawn Japanese kana SFX art intact unless
+>   requested.
 >
 >   ```
 >   @@ +bump sfx horizontal
@@ -401,13 +439,18 @@ constrains every page after it, through both the worksheet table and the
 already been translated. Carry the locked entries into the next chapter's
 document too.
 
-Then the mechanical Persian pass — safe to run twice:
+Run `$PY $SKILL_DIR/references/voice/persian/scripts/persian_lint.py --check --style`
+on the Persian prose before writing it into a worksheet. Review its suggestions in
+context. Then fix the merged chapter with the comic-aware linter:
 
 ```bash
 $PY $SKILL_DIR/scripts/revayat-comic.py falint fix --doc $WORK/comic.json
 ```
 
-Add `--digits keep` if the comic must keep Latin numerals.
+Add `--digits keep` if the comic must keep Latin numerals. If a Persian sentence
+starts with an English word, put U+2067 (RLI) before the sentence and U+2069
+(PDI) after it. Both linters add only missing isolation; keep pure English and
+Persian-leading sentences unwrapped.
 
 ## Step 8 — Clean the artwork
 
@@ -447,7 +490,11 @@ $PY $SKILL_DIR/scripts/revayat-comic.py clean --doc $WORK/comic.json --provider 
 
 `clean` refuses solid masks with neither `--provider` nor `--external`,
 because painting one flat or inpainting it blanks a rectangle out of the drawing.
-See `references/artwork-preservation.md`.
+See `references/artwork-preservation.md`. Keep every page at its original
+pixel width and height (`W x H`). After a `numera-gen` edit to a cover, table of
+contents, or title page, measure the returned image before using it. If it
+differs, reconcile it without stretching or clipping the artwork; reject it if
+you cannot keep both the composition and the exact original dimensions.
 
 A mark sitting in the **same place on every page** — a corner stamp on all two
 hundred — is one command rather than two hundred worksheet lines:
@@ -492,6 +539,9 @@ $PY $SKILL_DIR/scripts/revayat-comic.py qa check --doc $WORK/comic.json
 | --- | --- | --- |
 | `artwork-modified` | pixels changed outside the authorised mask | do not ship; re-run clean and typeset for that page |
 | `source-text-survived` | the mask missed part of the lettering, so the original script is still on the cleaned page | re-run `mask` with a larger `--grow` for that page, then `clean` |
+| `rendered-text-overlap` | rendered Persian glyphs from two regions collide on the same page | separate the colliding boxes or shorten one translation, then re-run `typeset` |
+| `text-crosses-outline` | rendered Persian ink spilled across a balloon outline or onto screentone | tighten the balloon/region box or shorten the line, then re-run `mask`, `clean`, and `typeset` |
+| `page-dimension-mismatch` | a cleaned or final page has different pixel dimensions than the original page | reconcile the external/generative edit back to exact original `W x H` without stretching, then re-run `clean` and `typeset` |
 | `stale-stage` | a finished stage's result no longer matches what it was made from — an approved line was corrected after the page was rendered, or a stage it depends on has run since | re-run the stage it names, then `qa` |
 | `clean-refused` | `clean` had no repair for this patch and left the original lettering on the page | give it `--external`, a working `--provider`, or re-run `mask --free-lettering glyphs` for that page |
 | `region-not-rendered` | this region has approved Persian and its render is missing or overflowed | run `typeset`; for overflow, reflow before proposing reviewed compression |
@@ -541,6 +591,13 @@ there to be *read*: the other five are all decisions, so report the counts to
 the user rather than only the total.
 
 ## Step 11 — Export and report
+
+Before packaging, open **every** `final/pNNNN.png` and compare it with its
+original. Check white boxes over outlines or hair, leftover English, overlapping
+text, text crossing balloon outlines, and untranslated balloons. Confirm the
+original pixel dimensions on each page. A spot-check or a green automated QA
+report does not count. Repair defects, rerender and recheck affected pages, and
+package only after the full page-by-page audit is complete.
 
 ```bash
 $PY $SKILL_DIR/scripts/revayat-comic.py export --doc $WORK/comic.json \

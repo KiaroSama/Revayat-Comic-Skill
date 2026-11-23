@@ -91,10 +91,11 @@ depends on the panel.
 
 ## Register is most of the job
 
-Comic dialogue is speech, not prose. The commonest failure in a machine
-translation of a manga is not a wrong word — it is a correct word in the wrong
-register, so that a fifteen-year-old shouting at his brother sounds like a
-government notice.
+Use the bundled `voice/persian/SKILL.md` and its `register-guide.md`,
+`pitfalls.md`, and `ai-tells.md` before drafting. Write comic dialogue in natural
+spoken Persian. A teenager yelling at his brother should sound like a teenager
+yelling at his brother. Read the line aloud. Keep a formal register when the
+character would actually use it with that listener.
 
 | The art shows | What it is usually evidence of |
 | --- | --- |
@@ -185,6 +186,12 @@ word.
 
 ## Names and terms
 
+Before translating any chapter, look up official character names, pronunciations,
+honorifics, and relationships on the web. Use publisher or creator material and
+licensed editions where possible. Record the URLs, verified facts, unresolved
+points, and agreed Persian forms in the chapter's `glossary.json`. Carry the
+agreed forms into the locked worksheet glossary before drafting.
+
 The table at the top of the worksheet is binding. Use exactly the Persian it
 gives, every time. If a name is not in the table, choose a rendering, use it
 consistently, and get it into the table for later pages:
@@ -261,6 +268,11 @@ one: absent means nobody has decided, and then the page decides, as above.
   word no rule here can classify. `qa` names each one it finds (`zwnj-review`)
   and changes nothing; settle it in the worksheet with `reviewed: zwnj-review`,
   which records the exact words you looked at.
+- Put U+2067 (RLI) before and U+2069 (PDI) after any Persian sentence starting
+  with an English word, including after opening quotes or brackets. Leave
+  Persian-leading and pure-English sentences unwrapped. Run the bundled
+  `persian_lint.py --check --style` on the drafted Persian, then run `falint fix`
+  on the merged comic. Both check or add the same directional isolation.
 - Do not reverse anything, and do not paste text that already looks right-to-left
   in your editor. Write ordinary Persian in ordinary order.
 - Do not insert an explanation into the dialogue. A character does not explain

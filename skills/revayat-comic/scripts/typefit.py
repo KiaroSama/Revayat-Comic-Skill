@@ -22,12 +22,13 @@ import re
 from pathlib import Path
 from typing import Any, Sequence
 
-import masks as mask_tools
+import hotcore
 import pageir as ir
+from qachecks import BALLOON_TEXT_INSET, balloon_text_interior
 from typefont import Shaper, _numpy, _pil
 
 LINE_SPACING = 1.30
-BALLOON_PADDING = 0.10
+BALLOON_PADDING = BALLOON_TEXT_INSET
 DEFAULT_MAX_SIZE = 64
 DEFAULT_MIN_SIZE = 13
 
@@ -42,29 +43,18 @@ def interior_mask(clean_rgb, region: dict[str, Any], page_size: tuple[int, int])
     """
     np = _numpy()
     width, height = page_size
-    balloon = region.get("balloon")
-
-    if not balloon:
-        # No balloon: the region's own box is all there is, which is right for a
-        # sound effect or a caption drawn straight onto the artwork.
-        canvas = np.zeros((height, width), np.uint8)
-        x, y, w, h = ir.clamp_bbox(region["bbox"], width, height)
-        canvas[y:y + h, x:x + w] = 255
-        return canvas
-
-    return mask_tools.balloon_interior(
-        clean_rgb, balloon, region.get("polarity", "light"), (width, height),
-        inset=BALLOON_PADDING,
-    )
+    enclosed = balloon_text_interior(clean_rgb, region, page_size)
+    if enclosed is not None:
+        return enclosed
+    # Unenclosed lettering stays in its own box.
+    canvas = np.zeros((height, width), np.uint8)
+    x, y, w, h = ir.clamp_bbox(region["bbox"], width, height)
+    canvas[y:y + h, x:x + w] = 255
+    return canvas
 
 
 def _row_widths(mask, np) -> list[int]:
-    """Per row: the widest continuous run of interior.
-
-    Used for ONE question — how wide is the shape at this height — which is
-    what tells a balloon's body from its tail. Placement does not come from
-    here; a line spans many rows, and `_band_span` answers for the band.
-    """
+    """Per row: the widest continuous run of interior."""
     widths: list[int] = []
     for row in mask:
         columns = np.flatnonzero(row)
@@ -79,39 +69,22 @@ def _row_widths(mask, np) -> list[int]:
 
 
 def _band_span(mask, np):
-    """``span(first_row, last_row) -> (left column, width)`` for a band of rows.
-
-    A line of text is one block of ink lying across every row of its band, so
-    the columns it may use are the columns that are interior in **every** one
-    of those rows. That is not what was asked before. Before, the width came
-    from the narrowest row's own longest run and the position came from the
-    middle row's, and on any shape whose rows do not line up — a leaning side,
-    a tail, a hole, a row split into two runs by a balloon's divider — those
-    are different columns. A line was then measured against one span and
-    centred on another, so it could be declared to fit and still be drawn over
-    the outline.
-
-    Keeping only the longest run per row lost the rest of the row as well:
-    a row split in two contributed one run, and which one depended on a pixel.
-    The intersection uses the whole row and never has to choose.
-
-    A prefix sum down the columns makes each band a subtraction, so asking
-    forty times per size stays cheap.
-    """
+    """``span(first_row, last_row) -> (left column, width)`` for a band of rows."""
     height, width = mask.shape
     counts = np.zeros((height + 1, width), np.int32)
-    # `> 0`, because a mask arrives as 0/255 as often as it arrives as booleans
-    # and a sum of 255s compares against nothing useful.
     np.cumsum((mask > 0).astype(np.int32), axis=0, out=counts[1:])
     cache: dict[tuple[int, int], tuple[int, int]] = {}
 
     def span(first: int, last: int) -> tuple[int, int]:
-        first, last = max(0, int(first)), min(height, int(last))
-        if last <= first:
+        clamped_first = max(0, int(first))
+        clamped_last = min(height, int(last))
+        if clamped_last <= clamped_first:
             return 0, 0
-        key = (first, last)
+        key = (clamped_first, clamped_last)
         if key not in cache:
-            shared = np.flatnonzero((counts[last] - counts[first]) == last - first)
+            shared = np.flatnonzero(
+                (counts[clamped_last] - counts[clamped_first]) == clamped_last - clamped_first
+            )
             if shared.size == 0:
                 cache[key] = (0, 0)
             else:
@@ -252,74 +225,37 @@ BODY_WIDTH = 0.5
 
 
 def _body(widths: Sequence[int], *, reference: int | None = None) -> tuple[int, int]:
-    """``(first row, height)`` of the part of the shape text can actually go in.
-
-    A speech balloon is not its bounding box: it has a **tail**, and the tail can
-    be as tall as the balloon. Centring a block of text in the bounding box then
-    lands it in the tail, where every row is a few pixels wide, and the region is
-    reported as overflowing at every size down to the floor — measured on a real
-    page, on a balloon with plenty of room in it.
-
-    So the block is centred on the longest run of rows that are wide enough to
-    be the body. On a shape with no tail every row qualifies and this is the
-    bounding box again.
-    """
-    if not widths:
-        return 0, 0
-    ref = max(widths) if reference is None else reference
-    threshold = ref * BODY_WIDTH
-    best_start = best_length = run_start = run_length = 0
-    for index, width in enumerate(widths):
-        if width >= threshold:
-            if run_length == 0:
-                run_start = index
-            run_length += 1
-            if run_length > best_length:
-                best_start, best_length = run_start, run_length
-        else:
-            run_length = 0
-    return best_start, best_length
+    """``(first row, height)`` of the part of the shape text can actually go in."""
+    ref = -1 if reference is None else int(reference)
+    start, length = hotcore.body_bounds(list(widths), ref, BODY_WIDTH)
+    return int(start), int(length)
 
 
 def _candidate_bodies(widths: Sequence[int]) -> list[tuple[int, int]]:
     """Primary `_body(widths)` plus robust quantile fallbacks when a thin wide
     edge spike (open margin or twin-balloon bridge) starves the primary band."""
-    if not widths:
-        return []
-    ordered = sorted(widths)
-    n = len(ordered)
-    refs = (
-        ordered[-1],
-        ordered[int(0.85 * (n - 1))],
-        ordered[int(0.75 * (n - 1))],
-        ordered[n // 2],
-    )
-    seen: set[tuple[int, int]] = set()
-    bodies: list[tuple[int, int]] = []
-    for ref in refs:
-        if ref <= 0:
-            continue
-        band = _body(widths, reference=ref)
-        if band[1] > 0 and band not in seen:
-            seen.add(band)
-            bodies.append(band)
-    return bodies
+    return [
+        (int(start), int(length))
+        for start, length in hotcore.candidate_bodies(list(widths), BODY_WIDTH)
+    ]
 
 
 def _wrap(draw, paragraphs: Sequence[Sequence[str]], font, shaper: Shaper,
-          width_for_line, stroke_width: int = 0) -> list[str] | None:
+          width_for_line, stroke_width: int = 0, *, measure_width=None) -> list[str] | None:
     """Greedy wrap where each line asks how wide *it* is allowed to be.
 
     Each paragraph starts a new line: a break the translation put there is a
     decision about the balloon, not whitespace to reflow.
     """
+    if measure_width is None:
+        def measure_width(line):
+            return _measure(draw, line, font, shaper, stroke_width)[0]
     lines: list[str] = []
     for tokens in paragraphs:
         if not tokens:
             lines.append("")
             continue
-        current = _wrap_one(draw, tokens, font, shaper, width_for_line,
-                            stroke_width, lines)
+        current = _wrap_one(tokens, width_for_line, measure_width, lines)
         if current is None:
             return None
         if current:
@@ -327,8 +263,7 @@ def _wrap(draw, paragraphs: Sequence[Sequence[str]], font, shaper: Shaper,
     return lines or None
 
 
-def _wrap_one(draw, tokens: Sequence[str], font, shaper: Shaper,
-              width_for_line, stroke_width: int, lines: list[str]) -> str | None:
+def _wrap_one(tokens: Sequence[str], width_for_line, measure_width, lines: list[str]) -> str | None:
     """One paragraph, appending its full lines to `lines` and returning the
     part still open. ``None`` when a word will not fit on a line of its own."""
     current = ""
@@ -337,7 +272,7 @@ def _wrap_one(draw, tokens: Sequence[str], font, shaper: Shaper,
         if available <= 0:
             return None
         trial = f"{current} {token}".strip()
-        if _measure(draw, trial, font, shaper, stroke_width)[0] <= available:
+        if measure_width(trial) <= available:
             current = trial
             continue
         if current:
@@ -346,7 +281,7 @@ def _wrap_one(draw, tokens: Sequence[str], font, shaper: Shaper,
             available = width_for_line(len(lines))
             if available <= 0:
                 return None
-        if _measure(draw, token, font, shaper, stroke_width)[0] > available:
+        if measure_width(token) > available:
             # One word that does not fit on a line of its own. Splitting a
             # Persian word is worse than a smaller font, so the caller retries.
             #
@@ -367,7 +302,7 @@ def _wrap_one(draw, tokens: Sequence[str], font, shaper: Shaper,
 def fit_region(
     draw, text: str, mask, np, shaper: Shaper, font_path: Path,
     *, max_size: int, min_size: int, outline: bool = False,
-    styled: bool = False, envelope: Any = None,
+    styled: bool = False, envelope: Any = None, line_effects=None,
 ) -> dict[str, Any] | None:
     """Largest size at which `text` sets inside `mask`. ``None`` if it never does."""
     _, _, ImageFont = _pil()
@@ -388,78 +323,250 @@ def fit_region(
     if not bodies:
         return None
 
-    for body_top, body_height in bodies:
-        for size in range(int(max_size), int(min_size) - 1, -1):
-            font = ImageFont.truetype(str(font_path), size, layout_engine=shaper.layout)
-            # What this size will really cost once everything the renderer adds is
-            # on it — which depends on WHICH renderer, and for a styled effect on
-            # the style it measured. `envelope` is that renderer answering for
-            # itself; the booleans are the generic answer for callers that have no
-            # style to consult.
-            stroke_px = (int(envelope(size)) if envelope is not None
-                         else envelope_for(size, outline=outline, styled=styled))
-            probe = " ".join(token for paragraph in paragraphs for token in paragraph)
-            step = max(1, int(round(size * LINE_SPACING)),
-                       _measure(draw, probe, font, shaper, stroke_px)[1])
+    probe = " ".join(token for paragraph in paragraphs for token in paragraph)
 
-            placement: list[int] | None = None
-            lines: list[str] | None = None
-            # The block's vertical position depends on how many lines it has, and
-            # the number of lines depends on how wide each one is allowed to be,
-            # which depends on the position. Two or three passes settle it.
-            count = 1
-            for _ in range(4):
-                block = count * step
-                if block > body_height:
-                    lines = None
-                    break
-                offset = body_top + (body_height - block) // 2
+    def _try_size(body_top: int, body_height: int, size: int) -> dict[str, Any] | None:
+        font = ImageFont.truetype(str(font_path), size, layout_engine=shaper.layout)
+        effects = line_effects(size) if line_effects is not None else None
+        stroke_px = effects.stroke if effects is not None else (
+            int(envelope(size)) if envelope is not None
+            else envelope_for(size, outline=outline, styled=styled)
+        )
+        boxes = {}
 
-                def width_for_line(index: int, offset=offset, step=step) -> int:
-                    start = offset + index * step
-                    return span(start, start + step)[1]
+        def bounds(line):
+            if line not in boxes:
+                box = _anchored_box(draw, line, font, shaper, stroke_px) if line else (0, 0, 0, 0)
+                boxes[line] = effects.bounds(box) if effects is not None else box
+            return boxes[line]
 
-                lines = _wrap(draw, paragraphs, font, shaper, width_for_line,
-                              stroke_px)
-                if lines is None:
-                    break
-                if len(lines) == count:
-                    placement = [offset, step]
-                    break
-                count = len(lines)
-            if lines is None or placement is None:
-                continue
+        def measure_width(line):
+            x0, _, x1, _ = bounds(line)
+            return x1 - x0
 
-            offset, step = placement
-            rendered: list[dict[str, Any]] = []
-            overflow = False
-            for index, line in enumerate(lines):
+        _, probe_top, _, probe_bottom = bounds(probe)
+        step = max(1, round(size * LINE_SPACING), probe_bottom - probe_top)
+
+        placement: list[int] | None = None
+        lines: list[str] | None = None
+        count = 1
+        for _ in range(4):
+            block = count * step
+            if block > body_height:
+                lines = None
+                break
+            offset = body_top + (body_height - block) // 2
+
+            def width_for_line(index: int, offset=offset, step=step) -> int:
                 start = offset + index * step
-                band_left, available = span(start, start + step)
-                if available <= 0:
-                    overflow = True
-                    break
-                box = _anchored_box(draw, line, font, shaper, stroke_px)
-                text_width, text_height = box[2] - box[0], box[3] - box[1]
-                if text_width > available or text_height > step:
-                    overflow = True
-                    break
-                # Center the INK, then derive Pillow's anchor. Its font-metric
-                # middle is not the midpoint of this particular string's marks.
-                anchor_x = left + band_left + (available - text_width) // 2 - box[0]
-                anchor_y = top + start + (step - text_height) // 2 - box[1]
-                rendered.append({
-                    "text": line,
-                    "x": float(anchor_x),
-                    "y": float(anchor_y),
-                })
-            if overflow or not rendered:
-                continue
+                return span(start, start + step)[1]
 
-            return {
-                "size": size,
-                "lines": rendered,
-                "line_count": len(rendered),
-                "font": font_path.name,
-            }
+            lines = _wrap(draw, paragraphs, font, shaper, width_for_line, measure_width=measure_width)
+            if lines is None:
+                break
+            if len(lines) == count:
+                placement = [offset, step]
+                break
+            count = len(lines)
+        if lines is None or placement is None:
+            return None
+
+        offset, step = placement
+        rendered: list[dict[str, Any]] = []
+        for index, line in enumerate(lines):
+            start = offset + index * step
+            box = bounds(line)
+            text_width, text_height = box[2] - box[0], box[3] - box[1]
+            if text_height > step:
+                return None
+            ink_top = start + (step - text_height) // 2
+            # The entire rendered rectangle must fit every row it occupies.
+            band_left, available = span(ink_top, ink_top + text_height) if text_height else (0, 0)
+            if text_width > available:
+                return None
+            anchor_x = left + band_left + (available - text_width) // 2 - box[0]
+            anchor_y = top + ink_top - box[1]
+            rendered.append({
+                "text": line,
+                "x": float(anchor_x),
+                "y": float(anchor_y),
+            })
+        if not rendered:
+            return None
+        return {
+            "size": size,
+            "lines": rendered,
+            "line_count": len(rendered),
+            "font": font_path.name,
+        }
+
+    lo_bound, hi_bound = int(min_size), int(max_size)
+    if hi_bound < lo_bound:
+        return None
+
+    for body_top, body_height in bodies:
+        lo, hi = lo_bound, hi_bound
+        best_result: dict[str, Any] | None = None
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            res = _try_size(body_top, body_height, mid)
+            if res is not None:
+                best_result = res
+                lo = mid + 1
+            else:
+                hi = mid - 1
+        if best_result is not None:
+            # Check a small neighborhood above the binary-search pivot in case a
+            # discrete word-wrap break makes `pivot + 1` or `pivot + 2` fit too.
+            for probe_size in range(min(hi_bound, best_result["size"] + 2), best_result["size"], -1):
+                higher = _try_size(body_top, body_height, probe_size)
+                if higher is not None:
+                    best_result = higher
+                    break
+            return best_result
     return None
+
+
+def partition_shared_interiors(
+    authority: dict[str, tuple[int, int, Any]],
+    enclosed: set[str],
+    regions: list[dict[str, Any]],
+    page_size: tuple[int, int],
+    np,
+    *,
+    seam_margin: int = 2,
+) -> None:
+    """Split connected multi-lobe balloon interiors among their member regions.
+
+    When two or more translatable regions share one flood-filled white cavity
+    (for example a figure-8 double balloon), every region otherwise receives
+    the whole cavity and the first region in reading order steals the widest
+    lobe — swapping reading order upside-down. Assigning each cavity pixel to
+    the member whose original ``bbox`` is closest keeps every region inside its
+    own lobe without altering the outer balloon walls.
+    """
+    def _unpack(entry: Any) -> tuple[int, int, Any, bool]:
+        if isinstance(entry, tuple):
+            return entry[0], entry[1], entry[2], True
+        return 0, 0, entry, False
+
+    members = [
+        region for region in regions
+        if region["id"] in enclosed
+        and region.get("bbox")
+        and region["id"] in authority
+        and _unpack(authority[region["id"]])[2] is not None
+        and _unpack(authority[region["id"]])[2].size > 0
+    ]
+    if len(members) < 2:
+        return
+
+    def _overlaps(a_id: str, b_id: str) -> bool:
+        ax, ay, ap, _ = _unpack(authority[a_id])
+        bx, by, bp, _ = _unpack(authority[b_id])
+        x0, y0 = max(ax, bx), max(ay, by)
+        x1 = min(ax + ap.shape[1], bx + bp.shape[1])
+        y1 = min(ay + ap.shape[0], by + bp.shape[0])
+        if x1 <= x0 or y1 <= y0:
+            return False
+        sa = ap[y0 - ay:y1 - ay, x0 - ax:x1 - ax]
+        sb = bp[y0 - by:y1 - by, x0 - bx:x1 - bx]
+        return bool(np.any((sa > 0) & (sb > 0)))
+
+    # Group mutually overlapping enclosed regions into connected components.
+    n = len(members)
+    adj: list[list[int]] = [[] for _ in range(n)]
+    for i in range(n):
+        for j in range(i + 1, n):
+            if _overlaps(members[i]["id"], members[j]["id"]):
+                adj[i].append(j)
+                adj[j].append(i)
+
+    seen = [False] * n
+    for start in range(n):
+        if seen[start] or not adj[start]:
+            continue
+        stack = [start]
+        seen[start] = True
+        comp: list[dict[str, Any]] = []
+        while stack:
+            idx = stack.pop()
+            comp.append(members[idx])
+            for nxt in adj[idx]:
+                if not seen[nxt]:
+                    seen[nxt] = True
+                    stack.append(nxt)
+
+        unpacked = {r["id"]: _unpack(authority[r["id"]]) for r in comp}
+        ux0 = min(unpacked[r["id"]][0] for r in comp)
+        uy0 = min(unpacked[r["id"]][1] for r in comp)
+        ux1 = max(unpacked[r["id"]][0] + unpacked[r["id"]][2].shape[1] for r in comp)
+        uy1 = max(unpacked[r["id"]][1] + unpacked[r["id"]][2].shape[0] for r in comp)
+        uw, uh = ux1 - ux0, uy1 - uy0
+        if uw <= 0 or uh <= 0:
+            continue
+
+        union = np.zeros((uh, uw), dtype=bool)
+        for r in comp:
+            ax, ay, ap, _ = unpacked[r["id"]]
+            union[ay - uy0:ay - uy0 + ap.shape[0], ax - ux0:ax - ux0 + ap.shape[1]] |= (ap > 0)
+
+        ys, xs = np.nonzero(union)
+        if ys.size == 0:
+            continue
+        px = (xs + ux0).astype(np.int64)
+        py = (ys + uy0).astype(np.int64)
+
+        best_owner = np.zeros(px.size, dtype=np.int32)
+        best_rect = np.full(px.size, np.iinfo(np.int64).max, dtype=np.int64)
+        best_cen = np.full(px.size, np.inf, dtype=np.float64)
+
+        for owner_idx, r in enumerate(comp):
+            bx, by, bw, bh = ir.clamp_bbox(r["bbox"], *page_size)
+            dx = np.maximum(0, np.maximum(bx - px, px - (bx + max(1, bw) - 1)))
+            dy = np.maximum(0, np.maximum(by - py, py - (by + max(1, bh) - 1)))
+            rect_d2 = dx * dx + dy * dy
+            cx = bx + bw / 2.0
+            cy = by + bh / 2.0
+            cen_d2 = (px - cx) ** 2 + (py - cy) ** 2
+            better = (rect_d2 < best_rect) | ((rect_d2 == best_rect) & (cen_d2 < best_cen))
+            best_owner[better] = owner_idx
+            best_rect[better] = rect_d2[better]
+            best_cen[better] = cen_d2[better]
+
+        owner_grid = np.full((uh, uw), -1, dtype=np.int32)
+        owner_grid[ys, xs] = best_owner
+
+        for owner_idx, r in enumerate(comp):
+            rid = r["id"]
+            ax, ay, ap, is_tuple = unpacked[rid]
+            sub = np.zeros((uh, uw), dtype=bool)
+            sub[ay - uy0:ay - uy0 + ap.shape[0], ax - ux0:ax - ux0 + ap.shape[1]] = (ap > 0)
+            mine = sub & (owner_grid == owner_idx)
+            if seam_margin > 0:
+                other = (owner_grid >= 0) & (owner_grid != owner_idx)
+                # Trim only pixels adjacent to another lobe's partition, never outer walls.
+                near_other = other.copy()
+                for _ in range(seam_margin):
+                    grown = near_other.copy()
+                    grown[1:, :] |= near_other[:-1, :]
+                    grown[:-1, :] |= near_other[1:, :]
+                    grown[:, 1:] |= near_other[:, :-1]
+                    grown[:, :-1] |= near_other[:, 1:]
+                    near_other = grown
+                trimmed = mine & ~near_other
+                if trimmed.any():
+                    mine = trimmed
+            rows = np.flatnonzero(mine.any(axis=1))
+            cols = np.flatnonzero(mine.any(axis=0))
+            if rows.size and cols.size:
+                nx = ux0 + int(cols[0])
+                ny = uy0 + int(rows[0])
+                npatch = (mine[int(rows[0]):int(rows[-1]) + 1, int(cols[0]):int(cols[-1]) + 1].astype(np.uint8)) * 255
+                if is_tuple:
+                    authority[rid] = (nx, ny, npatch)
+                else:
+                    full = np.zeros_like(ap)
+                    full[ny:ny + npatch.shape[0], nx:nx + npatch.shape[1]] = npatch
+                    authority[rid] = full
+

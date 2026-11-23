@@ -18,6 +18,7 @@
 
     python revayat-comic.py serve mcp                   # JSON-RPC over stdio
     python revayat-comic.py serve http --port 8765      # loopback HTTP
+    python revayat-comic.py batch --help               # bulk sharding and orchestration
 
 ``doctor`` is the first thing to run. Two of the things it reports decide
 whether Persian will come out correct rather than merely present: whether
@@ -68,6 +69,9 @@ REQUIRED = {
     "numpy": ("numpy", "every pixel measurement in the pipeline"),
     "cv2": ("opencv-python-headless", "detecting balloons, building masks, inpainting"),
 }
+
+# Batch coordinates local filesystem workspaces; it is not an MCP tool.
+STAGES["batch"] = "batch"
 
 OPTIONAL = {
     "pymupdf": ("pymupdf", "reading a comic from a PDF and exporting to one"),

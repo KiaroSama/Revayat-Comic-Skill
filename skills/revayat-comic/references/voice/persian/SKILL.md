@@ -44,6 +44,13 @@ with `python scripts/lookup.py <source_file>` (`--json` for structured output); 
 idioms and collocations that occur in this text. If the text has measurements, settle the unit
 policy with the user before drafting (see Numbers and units).
 
+For a comic chapter, first look up official character names, pronunciations,
+honorifics, and relationships on the web. Record sources, confirmed facts,
+uncertainties, and agreed Persian forms in the chapter's `glossary.json`.
+Read `references/register-guide.md`, `references/pitfalls.md`, and
+`references/ai-tells.md` before drafting. Write speech a person could say aloud
+and let the speaker's relationship with the listener determine the register.
+
 **2. Draft.** Write the full draft, applying the brief and the checklist below. When a structure is
 tricky, open `references/pitfalls.md` (56 rules with worked EN↔FA exemplars).
 
@@ -100,6 +107,11 @@ where a Persian character sits next to it, so English inside a Persian document 
 is idempotent. Ambiguous cases (a bare «تر» that might mean "wet", a glued «میرود», an em dash) are
 reported, never auto-changed; resolve those with judgment.
 
+If a Persian sentence starts with an English word, enclose the sentence in
+U+2067 (RLI) and U+2069 (PDI). Leave pure-English and Persian-leading sentences
+unwrapped. `--check` reports `missing-rli-pdi` and `--fix` adds the isolation
+without doubling it. For a comic, also run `falint fix` on the merged chapter.
+
 If you cannot run scripts, apply sections 1 to 4 of `references/typography-and-rtl.md` by hand:
 ZWNJ for می‌/نمی‌، ‌ها، ‌تر/‌ترین and enclitics; «…» for quotes; «،» «؛» «؟»; Persian digits in prose.
 
@@ -115,12 +127,16 @@ ZWNJ for می‌/نمی‌، ‌ها، ‌تر/‌ترین and enclitics; «…�
 
 Characters aren't enough; the layout must be Persian too. Apply all three:
 
-1. **Direction RTL.** docx: `bidirectional: true`; HTML: `dir="rtl"` and `lang="fa"`.
+1. **Direction RTL and bidi isolation.** docx: `bidirectional: true`; HTML: `dir="rtl"` and `lang="fa"`.
+   In `dir="auto"` renderers (chat, Markdown, Telegram, web UI), prefix every Persian-bearing line
+   with `U+200F` (RLM) + `U+2067` (RLI) and close with `U+2069` (PDI) so English-led lines stay
+   right-aligned and isolated while purely English lines stay plain LTR.
 2. **Alignment: leading edge (logical start).** Do not set physical `right`: under bidi, Word reads
    `w:jc="right"` as the trailing edge and flips the text to the left. Use `w:jc="start"` (docx-js
    `AlignmentType.START`); CSS `text-align: start`.
-3. **Font: Arial by default,** set as the complex-script font too (Word's `w:cs`), or the Persian
-   glyphs ignore your choice. Vazirmatn or IRANSans if the readers have them or you embed them.
+3. **Font: Vazir (`Vazirmatn`) by default** (official OFL-1.1 weights are bundled in
+   `assets/fonts/`), set as the complex-script font too (Word's `w:cs`) so Persian glyphs use it
+   instead of falling back to Arial.
 
 Run the linter on the text before placing it in the file. Snippets: `references/typography-and-rtl.md` §8.
 

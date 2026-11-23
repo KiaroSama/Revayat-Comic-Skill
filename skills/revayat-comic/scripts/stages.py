@@ -111,7 +111,7 @@ def _region_text(region: dict[str, Any]) -> str:
     # JSON frames the fields even when the dialogue contains pipes or quotes.
     # Keep this inside the comparable record scheme so old ambiguous hashes
     # require a rerender instead of becoming a legacy publication exemption.
-    return _stable([
+    fields = [
         region["id"],
         region.get("target_text") or "",
         region.get("target_full") or "",
@@ -119,7 +119,11 @@ def _region_text(region: dict[str, Any]) -> str:
         str(bool(region.get("keep"))),
         str(bool(region.get("erase"))),
         str(region.get("fill") or "none"),
-    ])
+    ]
+    style = str(region.get("style") or "").strip()
+    if style:
+        fields.append(f"style:{style}")
+    return _stable(fields)
 
 
 def _region_render(region: dict[str, Any]) -> str:

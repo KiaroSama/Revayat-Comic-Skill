@@ -29,6 +29,8 @@ import falint
 import masks as mask_tools
 import certify
 import pageir as ir
+import pixcore
+import qachecks
 import stages
 from pageir import IMAGE_SUFFIXES  # noqa: F401 - `package.py` reads it from here
 import providers
@@ -52,6 +54,9 @@ CODES = {
     "archive-page-size": "error",
     "archive-duplicate-page": "error",
     "source-text-survived": "error",
+    "rendered-text-overlap": "error",
+    "text-crosses-outline": "error",
+    "page-dimension-mismatch": "error",
     "stale-stage": "error",
     "clean-refused": "error",
     "region-not-rendered": "error",
@@ -136,11 +141,29 @@ def compare_outside_mask(original_path: Path, final_path: Path, mask_path: Path 
     """``(changed_pixels, total_pixels, worst_delta)`` outside the authorised area."""
     np = ir.require("numpy", "numpy", "comparing pages")
 
-    before = np.asarray(ir.load_image(original_path)).astype(np.int16)
-    after = np.asarray(ir.load_image(final_path)).astype(np.int16)
-    if before.shape != after.shape:
+    before_u8 = np.asarray(ir.load_image(original_path))
+    after_u8 = np.asarray(ir.load_image(final_path))
+    if before_u8.shape != after_u8.shape:
         return None, None, None
 
+    if pixcore.BACKEND == "rust" and before_u8.ndim == 3 and before_u8.shape[2] == 3:
+        height, width = int(before_u8.shape[0]), int(before_u8.shape[1])
+        if mask_path is not None and mask_path.exists():
+            mask_u8 = mask_tools.load_mask(mask_path)
+        else:
+            mask_u8 = np.zeros((height, width), np.uint8)
+        changed, worst = pixcore.outside_mask_diff(
+            np.ascontiguousarray(before_u8, dtype=np.uint8).tobytes(),
+            np.ascontiguousarray(after_u8, dtype=np.uint8).tobytes(),
+            np.ascontiguousarray(mask_u8, dtype=np.uint8).tobytes(),
+            width,
+            height,
+            0,
+        )
+        return int(changed), width * height, int(worst)
+
+    before = before_u8.astype(np.int16)
+    after = after_u8.astype(np.int16)
     if mask_path is not None and mask_path.exists():
         allowed = mask_tools.load_mask(mask_path) > 0
     else:
@@ -180,7 +203,7 @@ def surviving_ink(original, cleaned, region: dict[str, Any],
 
     interior = mask_tools.balloon_interior(
         cleaned, balloon, region.get("polarity", "light"), page_size,
-        inset=mask_tools.OUTLINE_INSET,
+        inset=mask_tools.OUTLINE_INSET, seed_box=region.get("bbox"),
     )
     x, y, w, h = region["mask_box"]
     if w <= 0 or h <= 0:
@@ -222,11 +245,11 @@ def surviving_ink(original, cleaned, region: dict[str, Any],
 
     # Denominator is ALL original ink inside the interior, not only the sliver
     # outside the mask (which clean is forbidden to touch and always reads 100%).
-    all_ink = (np.abs(before - paper) > 60) & in_interior
+    all_ink = (np.abs(before - paper) > 100) & in_interior
     total = int(all_ink.sum())
     if total < 12:
         return 0.0
-    still = (np.abs(after - paper) > 60) & all_ink & consider
+    still = (np.abs(after - paper) > 100) & all_ink & consider
     return float(int(still.sum()) / total)
 
 
@@ -515,13 +538,21 @@ def check_document(doc_path: str | Path, *, strict: bool = False,
         # nothing changed that should not have. This proves the opposite
         # direction, which nothing else asks.
         cleaned_name = page.get("clean")
+        final_name = page.get("final")
+        for _stage, dim_detail in qachecks.check_page_dimensions(
+            original,
+            (root / cleaned_name) if cleaned_name else None,
+            (root / final_name) if final_name else None,
+        ):
+            findings.add("page-dimension-mismatch", page["id"], dim_detail)
         if cleaned_name and (root / cleaned_name).exists():
             import numpy as np
 
             before = np.asarray(ir.load_image(original))
             after = np.asarray(ir.load_image(root / cleaned_name))
             if before.shape == after.shape:
-                for region in page.get("regions", []):
+                page_regions = page.get("regions", [])
+                for region in page_regions:
                     # A dropped region is the reader saying there is no text
                     # here, so its "surviving ink" is artwork and measuring it
                     # means nothing. It has to be checked explicitly: a region
@@ -532,10 +563,16 @@ def check_document(doc_path: str | Path, *, strict: bool = False,
                         continue
                     if region.get("fill") in {"none", "keep"} or not region.get("mask"):
                         continue
-                    survived = surviving_ink(
-                        before, after, region,
-                        mask_tools.load_mask(root / region["mask"]),
-                        (page["width"], page["height"]), np,
+                    rmask = mask_tools.load_mask(root / region["mask"])
+                    survived = max(
+                        surviving_ink(
+                            before, after, region, rmask,
+                            (page["width"], page["height"]), np,
+                        ),
+                        qachecks.full_balloon_surviving_ink(
+                            before, after, region, page_regions, rmask,
+                            (page["width"], page["height"]), np,
+                        ),
                     )
                     if survived > MAX_SURVIVING_INK:
                         findings.add(
@@ -545,6 +582,23 @@ def check_document(doc_path: str | Path, *, strict: bool = False,
                             "mask did not cover the whole of the lettering",
                             share=round(survived, 3),
                         )
+                if final_name and (root / final_name).exists():
+                    final_arr = np.asarray(ir.load_image(root / final_name))
+                    if final_arr.shape == after.shape:
+                        for id_a, id_b, px in qachecks.rendered_text_overlaps(
+                            page, after, final_arr, np
+                        ):
+                            findings.add(
+                                "rendered-text-overlap", f"{id_a}+{id_b}",
+                                f"rendered Persian text overlaps between {id_a} and {id_b} ({px} px)",
+                            )
+                        for rid, px in qachecks.text_crosses_outline(
+                            page, before, after, final_arr, np
+                        ):
+                            findings.add(
+                                "text-crosses-outline", rid,
+                                f"rendered Persian ink crosses balloon outline/artwork ({px} px)",
+                            )
 
         for region in page.get("regions", []):
             stats["regions"] += 1

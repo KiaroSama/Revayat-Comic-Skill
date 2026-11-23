@@ -18,12 +18,17 @@ from __future__ import annotations
 
 import os
 import platform
+import re
 from pathlib import Path
 from typing import Any
 
 import pageir as ir
+from bidi_rli import PDI, RLI, ensure_rli_pdi
 
 ZWNJ = "\u200c"
+_ISOLATE_EMBEDDINGS = str.maketrans({"\u2066": "\u202a", RLI: "\u202b",
+                                     "\u2068": "\u202b", PDI: "\u202c"})
+_REMOVE_ISOLATES = dict.fromkeys(_ISOLATE_EMBEDDINGS)
 
 #: Fonts that carry a full Persian glyph set, best first. Vazirmatn and Sahel
 #: are the modern open Persian faces; the Noto and system entries are the
@@ -149,7 +154,16 @@ def shape_fallback(text: str) -> str:
     ir.require("bidi", "python-bidi", "Persian direction without RAQM")
     from bidi.algorithm import get_display
 
-    return get_display(_reshaper().reshape(text))
+    shaped = _reshaper().reshape(text)
+    if not any(ord(character) in _ISOLATE_EMBEDDINGS for character in shaped):
+        return get_display(shaped)
+
+    try:
+        from bidi import get_display as isolate_display
+    except ImportError:
+        # python-bidi 0.4 predates isolates; embeddings keep the RTL run legible.
+        return get_display(shaped.translate(_ISOLATE_EMBEDDINGS), base_dir="R")
+    return isolate_display(shaped, base_dir="R").translate(_REMOVE_ISOLATES)
 
 
 class Shaper:
@@ -167,7 +181,8 @@ class Shaper:
         return "raqm" if self.raqm else "reshaper"
 
     def prepare(self, text: str) -> str:
-        return text if self.raqm else shape_fallback(text)
+        isolated = ensure_rli_pdi(text)
+        return isolated if self.raqm else shape_fallback(isolated)
 
     def draw_kwargs(self) -> dict[str, Any]:
         # `direction` and `language` are RAQM-only; passing them without it
@@ -213,6 +228,34 @@ def font_identity(font_path: Path | str) -> str:
         return f"{path.name}:unreadable"
 
 
+BUNDLED_VAZIR = Path(__file__).resolve().parent.parent / "assets" / "fonts" / "Vazir-Regular.ttf"
+
+
+def find_font_variant(base_font: Path, *, bold: bool = False, weight: str = "regular") -> Path:
+    """Look for a sibling of the selected family; keep the base if none exists."""
+    if bold:
+        weight = "bold"
+    if weight not in {"regular", "medium", "bold"}:
+        raise ValueError(f"Unknown font weight: {weight}")
+    if weight == "regular":
+        return base_font
+    stem = base_font.stem
+    family = re.sub(r"[-_ ]?(?:semibold|extrabold|regular|medium|bold|light)$", "", stem,
+                    flags=re.IGNORECASE)
+    names = (f"{family}-{weight}", f"{family} {weight}", f"{family}{weight}")
+    if weight == "bold" and stem.lower() in {"arial", "tahoma", "calibri", "verdana"}:
+        names += (f"{stem}bd", f"{stem}b")
+    wanted = {f"{name}{base_font.suffix}".casefold() for name in names}
+    if base_font.name.casefold() in wanted:
+        return base_font
+    try:
+        siblings = {path.name.casefold(): path for path in base_font.parent.iterdir() if path.is_file()}
+    except OSError:
+        return base_font
+    return next((siblings[key] for name in names
+                 if (key := f"{name}{base_font.suffix}".casefold()) in siblings), base_font)
+
+
 def find_font(preferred: str | None = None) -> Path:
     """Locate a font that can actually draw Persian."""
     _, _, ImageFont = _pil()
@@ -226,6 +269,9 @@ def find_font(preferred: str | None = None) -> Path:
             return Path(getattr(loaded, "path", preferred))
         except OSError:
             pass  # fall through to the search, but remember what was asked for
+
+    if BUNDLED_VAZIR.is_file():
+        return BUNDLED_VAZIR
 
     for name in PERSIAN_FONTS:
         try:

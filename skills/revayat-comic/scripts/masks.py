@@ -52,7 +52,7 @@ def _numpy():
 
 
 def balloon_interior(page_rgb, balloon, polarity: str, page_size: tuple[int, int],
-                     *, inset: float = 0.0):
+                     *, inset: float = 0.0, seed_box: Any = None):
     """The paper inside a balloon's outline, as a page-sized 0/255 mask.
 
     A balloon's *bounding box* is not its interior, and using the box is a real
@@ -63,7 +63,9 @@ def balloon_interior(page_rgb, balloon, polarity: str, page_size: tuple[int, int
     rectangle punched through the screentone behind them.
 
     ``inset`` shrinks the result by that share of the balloon's smaller side,
-    which is how the outline itself is kept out of reach.
+    which is how the outline itself is kept out of reach. ``seed_box`` anchors
+    component selection to the region's text box so an open margin leak cannot
+    hijack the interior.
     """
     cv2, np = _cv2(), _numpy()
     width, height = page_size
@@ -78,25 +80,48 @@ def balloon_interior(page_rgb, balloon, polarity: str, page_size: tuple[int, int
         gray = 255 - gray
     _, light = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-    count, labels, stats, _ = cv2.connectedComponentsWithStats(light, connectivity=8)
-    if count < 2:
+    def _pick_component(binary):
+        cnt, lbls, st, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+        if cnt < 2:
+            return 0, lbls, st
+        areas = st[1:, cv2.CC_STAT_AREA]
+        largest_lbl = 1 + int(np.argmax(areas))
+        chosen = 0
+        if seed_box is not None:
+            sx, sy, sw, sh = ir.clamp_bbox(seed_box, width, height)
+            lx0, ly0 = max(0, sx - x), max(0, sy - y)
+            lx1, ly1 = min(w, sx + sw - x), min(h, sy + sh - y)
+            if lx1 > lx0 and ly1 > ly0:
+                sub = lbls[ly0:ly1, lx0:lx1]
+                nonzero = sub[sub > 0]
+                if nonzero.size > 0:
+                    vals, counts = np.unique(nonzero, return_counts=True)
+                    chosen = int(vals[int(np.argmax(counts))])
+        if chosen == 0:
+            chosen = int(lbls[h // 2, w // 2])
+            if chosen == 0 or int(st[chosen, cv2.CC_STAT_AREA]) < 0.5 * int(areas[largest_lbl - 1]):
+                chosen = largest_lbl
+        return chosen, lbls, st
+
+    centre, labels, stats = _pick_component(light)
+    if centre == 0:
         return canvas
 
-    areas = stats[1:, cv2.CC_STAT_AREA]
-    largest = 1 + int(np.argmax(areas))
-    centre = int(labels[h // 2, w // 2])
-    # The paper is far and away the biggest light component inside a balloon's
-    # own box, so anything much smaller under the centre pixel is not it. Two
-    # ways that happens, and only the first used to be handled: the centre lands
-    # on a letter (label 0), or it lands on a *speck* — a dot of screentone, an
-    # anti-aliased edge, the gap inside an `o`. Measured on a real page: the
-    # centre hit a 113-pixel fleck, the interior came back empty, cleaning had
-    # nothing to paint, and the English stayed on the finished page with every
-    # count reporting success. Only `source-text-survived` noticed.
-    if centre == 0 or int(stats[centre, cv2.CC_STAT_AREA]) < 0.5 * int(areas[largest - 1]):
-        centre = largest
-
     inside = ((labels == centre).astype(np.uint8)) * 255
+    # Guard against thin 1-2px gaps in an open/margin-touching balloon outline:
+    # if the chosen component floods across 3+ edges of the balloon box, thicken
+    # dark outlines slightly and re-seed from `seed_box` so margin paper stays out.
+    touches = int(inside[0, :].any()) + int(inside[-1, :].any()) + int(inside[:, 0].any()) + int(inside[:, -1].any())
+    if seed_box is not None and touches >= 3:
+        sealed = cv2.erode(light, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
+        c2, l2, _ = _pick_component(sealed)
+        if c2 > 0:
+            cand = ((l2 == c2).astype(np.uint8)) * 255
+            t2 = int(cand[0, :].any()) + int(cand[-1, :].any()) + int(cand[:, 0].any()) + int(cand[:, -1].any())
+            if t2 < touches and int((cand > 0).sum()) >= 0.15 * int((inside > 0).sum()):
+                inside = cv2.dilate(cand, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
+                inside = cv2.bitwise_and(inside, light)
+
     # The letters are holes in that component. Filling them is unambiguous here:
     # the outline is outside the component, so it cannot be filled by accident.
     frame = np.zeros((h + 2, w + 2), np.uint8)
@@ -295,6 +320,50 @@ def _ink_mask(window, polarity: str):
     return mask
 
 
+def _strip_perimeter_contours(mask, cv2, np):
+    """Separate interior glyph ink from border-touching hair, frames, and outlines.
+
+    `region_mask` already expands `region["bbox"]` outward by `pad`, so genuine
+    glyphs sit inside the window while hair, panel frames, screentone corners,
+    and balloon outlines cross the 1px outer perimeter. Returns
+    `(cleaned_mask, forbidden_border_mask)` so regions without an enclosed
+    balloon never paint solid white rectangles over artwork.
+    """
+    h, w = mask.shape[:2]
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    if count < 2:
+        return mask, np.zeros_like(mask)
+    keep = np.zeros_like(mask)
+    forbidden = np.zeros_like(mask)
+    kept_any = False
+    for idx in range(1, count):
+        cx = int(stats[idx, cv2.CC_STAT_LEFT])
+        cy = int(stats[idx, cv2.CC_STAT_TOP])
+        cw = int(stats[idx, cv2.CC_STAT_WIDTH])
+        ch = int(stats[idx, cv2.CC_STAT_HEIGHT])
+        touches = cx == 0 or cy == 0 or (cx + cw) >= w or (cy + ch) >= h
+        if touches:
+            forbidden[labels == idx] = 255
+        else:
+            keep[labels == idx] = 255
+            kept_any = True
+    if not kept_any:
+        # Safety fallback if a zero-pad tight box touches every glyph: strip only
+        # large artwork contours (hair/frames/outlines), keep small glyphs.
+        win_area = max(1, h * w)
+        keep.fill(0)
+        forbidden.fill(0)
+        for idx in range(1, count):
+            cw = int(stats[idx, cv2.CC_STAT_WIDTH])
+            ch = int(stats[idx, cv2.CC_STAT_HEIGHT])
+            area = int(stats[idx, cv2.CC_STAT_AREA])
+            if area >= 0.08 * win_area or cw >= 0.35 * w or ch >= 0.35 * h:
+                forbidden[labels == idx] = 255
+            else:
+                keep[labels == idx] = 255
+    return keep, forbidden
+
+
 def region_mask(
     page_rgb,
     region: dict[str, Any],
@@ -303,35 +372,59 @@ def region_mask(
     grow: float = DEFAULT_GROW,
     pad: float = DEFAULT_PAD,
     solid_free: bool = False,
+    full_balloon: bool = False,
 ):
     """``(mask, box)`` — an 8-bit mask and the page-space box it covers.
 
     ``solid_free`` covers a region that has **no balloon** — lettering drawn
     straight onto the artwork — as one filled area instead of the glyph shapes.
-
-    That is the wrong shape for the built-in cleaners, which would blank a
-    rectangle out of the drawing, and the right one for a generative cleaner:
-    clipped back to letter shapes, a reconstruction has to invent artwork inside
-    strokes a few pixels wide and every seam lands on a glyph edge, which is
-    exactly where the eye looks. Given the whole patch it can redraw what was
-    under the lettering. Only usable with ``clean --external``, and ``clean``
-    refuses the combination without it.
+    ``full_balloon`` expands the ink search across the entire inset balloon
+    interior for single-region balloons so no edge lettering survives cleaning.
     """
     cv2, np = _cv2(), _numpy()
     width, height = page_size
     smaller = min(width, height)
 
     box = ir.expand_bbox(region["bbox"], max(2.0, pad * smaller), width, height)
+    balloon = region.get("balloon")
+    if balloon and full_balloon:
+        bx, by, bw, bh = ir.clamp_bbox(balloon, width, height)
+        x0 = min(box[0], bx)
+        y0 = min(box[1], by)
+        x1 = max(box[0] + box[2], bx + bw)
+        y1 = max(box[1] + box[3], by + bh)
+        box = ir.clamp_bbox([x0, y0, x1 - x0, y1 - y0], width, height)
+
     x, y, w, h = box
     if w <= 0 or h <= 0:
         return np.zeros((1, 1), np.uint8), [x, y, 1, 1]
 
-    balloon = region.get("balloon")
     if solid_free and not balloon:
         return np.full((h, w), 255, np.uint8), box
 
-    window = page_rgb[y:y + h, x:x + w]
-    mask = _ink_mask(window, region.get("polarity", "light"))
+    polarity = region.get("polarity", "light")
+    allowed = None
+    if balloon:
+        # Compute the safe inset balloon interior FIRST and neutralize pixels
+        # outside it before Otsu thresholding so dark hair/screentone in the
+        # corners of the balloon box cannot bias Otsu or leak into the mask.
+        allowed = balloon_interior(
+            page_rgb, balloon, polarity,
+            page_size, inset=OUTLINE_INSET, seed_box=region.get("bbox"),
+        )
+        allowed_win = allowed[y:y + h, x:x + w] > 0
+        window = page_rgb[y:y + h, x:x + w].copy()
+        paper_fill = 0 if polarity == "dark" else 255
+        if allowed_win.any():
+            window[~allowed_win] = paper_fill
+    else:
+        window = page_rgb[y:y + h, x:x + w]
+
+    mask = _ink_mask(window, polarity)
+
+    forbidden = None
+    if not balloon and not region.get("erase") and (w * h) < 0.25 * (width * height):
+        mask, forbidden = _strip_perimeter_contours(mask, cv2, np)
 
     radius = max(1, int(round(grow * smaller)))
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * radius + 1, 2 * radius + 1))
@@ -341,14 +434,26 @@ def region_mask(
     # slivers of the old background surviving between them.
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
 
-    if balloon:
-        # Clip to the balloon's real interior, inset so the outline itself is
-        # structurally out of reach. Not the bounding box — see balloon_interior.
-        allowed = balloon_interior(
-            page_rgb, balloon, region.get("polarity", "light"),
-            page_size, inset=OUTLINE_INSET,
-        )
+    if forbidden is not None and forbidden.any():
+        # Protect border-touching hair/outline pixels + 1px safety rim.
+        guard = cv2.dilate(forbidden, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)))
+        mask = cv2.bitwise_and(mask, cv2.bitwise_not(guard))
+
+    if allowed is not None:
         mask = cv2.bitwise_and(mask, allowed[y:y + h, x:x + w])
+        # When `full_balloon` expanded the search window across the whole
+        # balloon to catch missed lettering, shrink `box` back to the tight
+        # padded hull of the masked pixels so `clean` samples pure balloon paper
+        # instead of outer corner hair/speedlines.
+        if full_balloon and mask.any():
+            ys, xs = np.nonzero(mask)
+            margin = max(2, int(round(pad * smaller)))
+            nx0 = max(0, int(xs.min()) - margin)
+            ny0 = max(0, int(ys.min()) - margin)
+            nx1 = min(w, int(xs.max()) + 1 + margin)
+            ny1 = min(h, int(ys.max()) + 1 + margin)
+            mask = mask[ny0:ny1, nx0:nx1].copy()
+            box = [x + nx0, y + ny0, nx1 - nx0, ny1 - ny0]
 
     return mask, box
 
@@ -469,9 +574,28 @@ def build_document(
                 1 for r in editable if r["id"] in derived_ids and r.get("balloon")
             )
 
+        def _balloon_shared(target: dict[str, Any]) -> bool:
+            tb = target.get("balloon")
+            if not tb:
+                return False
+            tx0, ty0, tw, th = tb
+            tx1, ty1 = tx0 + tw, ty0 + th
+            for other in editable:
+                if other["id"] == target["id"]:
+                    continue
+                ob = other.get("bbox")
+                if not ob:
+                    continue
+                ox0, oy0, ow, oh = ob
+                if min(tx1, ox0 + ow) > max(tx0, ox0) and min(ty1, oy0 + oh) > max(ty0, oy0):
+                    return True
+            return False
+
         for region in editable:
-            mask, box = region_mask(rgb, region, size, grow=grow, pad=pad,
-                                    solid_free=solid_free)
+            mask, box = region_mask(
+                rgb, region, size, grow=grow, pad=pad, solid_free=solid_free,
+                full_balloon=bool(region.get("balloon")) and not _balloon_shared(region),
+            )
             relative = f"masks/{page['id']}/{region['id']}.png"
             ir.write_bytes(
                 root / relative,

@@ -575,3 +575,31 @@ jobs:
           assert not found, f"artwork committed: {found}"
           print(f"ok: {len(tracked)} tracked files, no artwork")
           PY
+
+  rust-crates:
+    name: rust crates (fmt, clippy, test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Update stable Rust toolchain
+        run: |
+          rustup update stable
+          rustup default stable
+          rustup component add rustfmt clippy
+
+      - name: Verify hotcore-rs and pixcore-rs
+        run: |
+          for crate in rust/hotcore-rs rust/pixcore-rs; do
+            echo "=== $crate ==="
+            cargo fmt --manifest-path "$crate/Cargo.toml" -- --check
+            cargo clippy --manifest-path "$crate/Cargo.toml" -- -D warnings
+            cargo test --manifest-path "$crate/Cargo.toml"
+          done
+

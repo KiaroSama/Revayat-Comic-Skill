@@ -153,13 +153,35 @@ Treat overflow as layout first, without lowering the agreed size floor:
 4. Re-run merge, typography, typesetting and QA. If it still cannot fit, keep
    the region under review rather than shrinking below the floor or truncating.
 
-## Colour and stroke
+## Colour, stroke, and text styles
 
 - A light balloon gets near-black text.
 - A dark balloon gets near-white text.
 - Lettering with **no balloon** — a sign, a caption over artwork — gets a stroke
   in the opposite colour, because without it the text disappears into the
   drawing at exactly the moment it matters.
+
+The skill ships official SIL OFL-1.1 **Vazir** fonts (`Vazir-Regular.ttf`,
+`Vazir-Medium.ttf`, and `Vazir-Bold.ttf`) inside `assets/fonts/` and selects
+them by default before checking system fonts, unless `--font` overrides it.
+
+Regions can carry an optional `style:` field in worksheets (comma-separated
+tokens, case-insensitive):
+
+| Style token | Visual effect |
+| --- | --- |
+| `bold` | Selects bundled `Vazir-Bold.ttf` (or bold sibling of `--font`) |
+| `italic` | Oblique shear on the HarfBuzz/RAQM-shaped layer so Persian letters stay connected |
+| `bold-italic` | Combines bold weight and oblique shear |
+| `outline` | Contrasting outer halo around glyphs (for titles, signs, and SFX over art) |
+| `shadow` | Subtle 2px offset drop shadow behind glyphs |
+| `shout` | Bold emphasis with a higher font-size harmonization ceiling |
+
+`typeset` harmonizes font sizes across ordinary speech balloons on the same page
+so a single short word beside a multi-line balloon does not jump to twice the
+size. Even when `balloon` is unset, both `typefit` and `qa` detect bounded
+white balloon enclosures around `bbox` and keep every rendered glyph pixel
+strictly inside the eroded interior.
 
 ## Checking a result
 
