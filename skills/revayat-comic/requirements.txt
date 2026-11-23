@@ -3,7 +3,7 @@
 # macOS and Windows, plus a Python 3.12 lane pinned to the literal minima below.
 
 # Core — required for every run.
-pillow>=10.0                  # page IO, and the Persian text renderer
+pillow>=13.0.0                  # page IO, and the Persian text renderer
 numpy>=2.5.5                   # every pixel measurement
 # 4.10.0.84 is the first opencv-python-headless wheel built against the NumPy 2
 # ABI for Python 3.12+. Older 4.8/4.9 wheels crash at import under NumPy 2.5+.
