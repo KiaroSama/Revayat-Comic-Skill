@@ -167,8 +167,8 @@ script's.** For each `$WORK/worksheets/pNNNN.txt`, write
 **One page at a time, merged before the next one starts.** This is the default
 and it is the only order that keeps the guarantee below true.
 Read `references/voice/index.md` before drafting or reviewing prose. For comic
-translation, you must use `references/voice/persian/SKILL.md` and its
-`references/register-guide.md`, `references/pitfalls.md`, and `references/ai-tells.md`.
+translation, use `references/voice/persian/SKILL.md` and its bundled guides
+(`register-guide.md`, `pitfalls.md`, and `ai-tells.md` inside that folder).
 Write dialogue in natural spoken Persian. Match how each character addresses
 this listener in this scene; keep formal speech where the source calls for it.
 Read lines aloud and compare them with the source. For stilted Persian or

@@ -15,7 +15,7 @@
 [![اجرا روی ویندوز، لینوکس و مک](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-0891b2)](.github/workflows/ci.yml)
 [![نصب با پنج قالب افزونه یا اسکریپت مستقل](https://img.shields.io/badge/install-5%20plugins%20%7C%20standalone-4f46e5)](#نصب)
 [![مستندات فارسی و انگلیسی](https://img.shields.io/badge/docs-English%20%7C%20Persian-0284c7)](README.md)
-[![حجم درخت ردیابی‌شدهٔ مخزن حدود ۳٫۰ مگابایت است](https://img.shields.io/badge/repo%20size-3.0%20MB-ca8a04)](#توسعه)
+[![حجم درخت ردیابی‌شدهٔ مخزن حدود ۳٫۱ مگابایت است](https://img.shields.io/badge/repo%20size-3.1%20MB-ca8a04)](#توسعه)
 [![حروف‌چینی فارسی با قلم وزیرِ همراه مخزن و Pillow](https://img.shields.io/badge/typography-Vazir%20%7C%20Pillow-15803d)](skills/revayat-comic/assets/fonts/OFL.txt)
 [![ورودی و خروجی PDF با PyMuPDF](https://img.shields.io/badge/pdf-PyMuPDF-b45309)](skills/revayat-comic/requirements.txt)
 [![تشخیص حباب، ماسک و ترمیم با OpenCV](https://img.shields.io/badge/vision-OpenCV-334155)](skills/revayat-comic/requirements.txt)
