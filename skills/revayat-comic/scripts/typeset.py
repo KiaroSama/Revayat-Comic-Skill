@@ -28,12 +28,15 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from statistics import median
 from typing import Any, Sequence
 
 import lettering
 import masks as mask_tools
 import pageir as ir
 import stages
+import typestyle
+from qachecks import balloon_text_interior
 from typefit import (  # noqa: F401 - re-exported: every caller and every
     BALLOON_PADDING,                   # test reaches these through
     BODY_WIDTH,                        # `typeset`, which is where they
@@ -48,6 +51,7 @@ from typefit import (  # noqa: F401 - re-exported: every caller and every
     _wrap,
     fit_region,
     interior_mask,
+    partition_shared_interiors,
     stroke_for,
 )
 from typefont import (  # noqa: F401 - re-exported: `typeset.find_font`
@@ -57,6 +61,7 @@ from typefont import (  # noqa: F401 - re-exported: `typeset.find_font`
     ZWNJ,
     Shaper,
     font_identity,
+    find_font_variant,
     _numpy,
     _pil,
     _supports_persian,
@@ -139,9 +144,6 @@ def typeset_page(
         # `_restore` needs the untouched page, not the cleaned one.
         region["_page_image"] = page["image"]
     clean_rgb = np.asarray(canvas)
-    # An explicit copy, kept as the reference for "did this line land where
-    # it was allowed to". `canvas` is drawn on in place below.
-    before_draw = np.array(canvas)
     draw = ImageDraw.Draw(canvas)
     size = (page["width"], page["height"])
 
@@ -166,6 +168,8 @@ def typeset_page(
     #: neighbour's authority, which is not this region's to spend. Two balloons
     #: side by side is the ordinary case, not a corner one.
     authority: dict[str, Any] = {}
+    enclosed: set[str] = set()
+    bold_font = find_font_variant(font_path, bold=True)
     writable = np.zeros((page["height"], page["width"]), np.uint8)
     union = page.get("mask")
     if union:
@@ -181,19 +185,10 @@ def typeset_page(
                 own = np.maximum(own, mask_tools.load_mask(root / region["mask"]))
             except Exception:  # pragma: no cover - a mask file that went away
                 pass
-        if region.get("balloon"):
-            # `inset=0` deliberately, unlike `clean`. The inset is a CLEANING
-            # conservatism — do not repaint the balloon's own outline — not a
-            # statement about where text may go. Measured on a real Japanese
-            # page: six pixels of one glyph's anti-aliased edge landed on the
-            # outline it was set against, every one of them within two pixels
-            # of the inset interior. The balloon is still the boundary; text
-            # shoved off it entirely is still caught.
-            interior = mask_tools.balloon_interior(
-                before_draw, region["balloon"],
-                region.get("polarity", "light"), size, inset=0.0,
-            )
-            own = np.maximum(own, np.asarray(interior, np.uint8))
+        interior = balloon_text_interior(clean_rgb, region, size)
+        if interior is not None:
+            enclosed.add(region["id"])
+            own = interior
         elif region.get("mask_box"):
             # Free lettering has no balloon, so the authorised area is the
             # box the region was masked at — approved geometry either way.
@@ -212,10 +207,67 @@ def typeset_page(
         authority[region["id"]] = (x, y, patch)
         del own
 
+    partition_shared_interiors(authority, enclosed, page.get("regions", []), size, np)
+
     placed = 0
     overflow: list[str] = []
     unreliable: list[str] = []
     refused: list[str] = []
+    occupied = np.zeros((page["height"], page["width"]), np.uint8)
+    editable_boxes: list[tuple[str, list[int]]] = [
+        (r["id"], r["bbox"])
+        for r in page.get("regions", [])
+        if not r.get("dropped") and (r.get("target_text") or "").strip() and r.get("bbox")
+    ]
+    def flat_area(region):
+        rid = region["id"]
+        if rid in enclosed:
+            slot = authority[rid]
+            if isinstance(slot, tuple):
+                area = np.zeros_like(occupied)
+                ax, ay, patch = slot
+                area[ay:ay + patch.shape[0], ax:ax + patch.shape[1]] = patch
+                return area
+            return slot.copy()
+        area = np.zeros_like(occupied)
+        x, y, w, h = ir.clamp_bbox(region["bbox"], *size)
+        area[y:y + h, x:x + w] = 255
+        for other_id, box in editable_boxes:
+            if other_id != rid:
+                ox, oy, ow, oh = ir.clamp_bbox(box, *size)
+                area[max(0, oy - 3):oy + oh + 3, max(0, ox - 3):ox + ow + 3] = 0
+        return area
+
+    def flat_fit(region, area, limit):
+        flags = typestyle.style_flags(region.get("style") or "")
+        weighted = typestyle.wants_bold(flags)
+        face = bold_font if weighted else font_path
+        fill, stroke = _text_colour(region)
+        if region["id"] in enclosed and region.get("polarity") != "dark":
+            stroke = None
+        halo = ((255, 255, 255) if fill[0] < 128 else (0, 0, 0)) if "outline" in flags else stroke
+
+        def effects(font_size):
+            return typestyle.effects_for(font_size, flags, faux_bold=weighted and face == font_path,
+                                         plain_outline=stroke_for(font_size) if stroke else 0)
+
+        fitted = fit_region(draw, region["target_text"], area, np, shaper, face,
+                            max_size=limit, min_size=min_size, line_effects=effects)
+        return fitted, face, effects, fill, halo
+
+    initial = {}
+    normal_sizes = []
+    for region in page.get("regions", []):
+        text = (region.get("target_text") or "").strip()
+        if (region["kind"] not in {"speech", "thought"} or not text
+                or not ir.translatable(region, policy) or refused_clean(region)):
+            continue
+        fit = flat_fit(region, flat_area(region), max_size)
+        initial[region["id"]] = fit
+        if fit[0] is not None and len(text) >= 8:
+            normal_sizes.append(fit[0]["size"])
+    page_median = median(normal_sizes) if len(normal_sizes) >= 2 else None
+
     glossed: list[str] = []
     fresh_notes: list[dict[str, Any]] = []
     skipped = 0
@@ -284,7 +336,7 @@ def typeset_page(
                 mask_tools.load_mask(root / region["mask"]), np,
                 origin=region.get("mask_box", (0, 0))[:2],
             )
-        if not stylise:
+        if not stylise or region.get("style") and drawn is not None and drawn["verdict"] != "unreliable":
             drawn = None
 
         if drawn is not None and drawn["verdict"] == "unreliable":
@@ -338,34 +390,30 @@ def typeset_page(
                 continue
 
         if record is None:
-            area = interior_mask(clean_rgb, region, size)
-            fitted = fit_region(
-                draw, text, area, np, shaper, font_path,
-                max_size=max_size, min_size=min_size, outline=bool(stroke),
-            )
+            area = flat_area(region)
+            collision = (occupied > 0) & (area > 0)
+            limit = max_size
+            cached = initial.get(region["id"])
+            if page_median is not None and cached is not None:
+                flags = typestyle.style_flags(region.get("style") or "")
+                text_only = text.strip()
+                shout = "shout" in flags or len(text_only) < 8 and "!" in text_only
+                limit = min(limit, round(page_median * (1.32 if shout else 1.18)))
+            if cached is None or collision.any() or cached[0] and cached[0]["size"] > limit:
+                area[collision] = 0
+                cached = flat_fit(region, area, limit)
+            fitted, face, effects, fill, halo = cached
             if fitted is None:
                 overflow.append(region["id"])
                 region["typeset"] = {"status": "overflow"}
                 continue
 
-            font = ImageFont.truetype(str(font_path), fitted["size"],
-                                      layout_engine=shaper.layout)
+            font = ImageFont.truetype(str(face), fitted["size"], layout_engine=shaper.layout)
             for line in fitted["lines"]:
-                shaped = shaper.prepare(line["text"])
-                options: dict[str, Any] = {
-                    "font": font, "fill": fill, "anchor": "mm",
-                    **shaper.draw_kwargs(),
-                }
-                if stroke:
-                    options["stroke_width"] = stroke_for(fitted["size"])
-                    options["stroke_fill"] = stroke
-                draw.text((line["x"], line["y"]), shaped, **options)
-                box = draw.textbbox((line["x"], line["y"]), shaped, **{
-                    k: v for k, v in options.items()
-                    if k != "fill" and k != "stroke_fill"
-                })
-                painted.append([int(box[0]), int(box[1]),
-                                int(box[2]), int(box[3])])
+                if line["text"]:
+                    box = typestyle.draw_line(canvas, draw, (line["x"], line["y"]), line["text"],
+                                              font, shaper, effects(fitted["size"]), fill, halo)
+                    painted.append([int(edge) for edge in box])
             record = {
                 "status": "ok",
                 "style": "flat",
@@ -433,6 +481,19 @@ def typeset_page(
                     record["clipped_by_page"] = True
                 if region["id"] not in overflow:
                     overflow.append(region["id"])
+            elif x1 > x0 and y1 > y0:
+                ys_c, xs_c = np.nonzero(changed)
+                if xs_c.size and ys_c.size:
+                    ix0 = int(x0 + xs_c.min())
+                    iy0 = int(y0 + ys_c.min())
+                    ix1 = int(x0 + xs_c.max()) + 1
+                    iy1 = int(y0 + ys_c.max()) + 1
+                    record["ink_box"] = [ix0, iy0, ix1 - ix0, iy1 - iy0]
+                    pad_occ = 4
+                    occupied[
+                        max(0, iy0 - pad_occ):min(page["height"], iy1 + pad_occ),
+                        max(0, ix0 - pad_occ):min(page["width"], ix1 + pad_occ),
+                    ] = 255
 
         region["typeset"] = record
         # Only what is still on the page. A region painted, measured, found to

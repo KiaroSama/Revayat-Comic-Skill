@@ -145,6 +145,36 @@ def _composite(base, repaired, mask, np):
             + repaired.astype(np.float32) * alpha).round().astype(np.uint8)
 
 
+def _composite_external(original, base, external, box, mask, np):
+    """Match a flat surround and feather a supplied edit within its mask."""
+    cv2 = _cv2()
+    x, y, w, h = box
+    window = base[y:y + h, x:x + w]
+    repaired = external[y:y + h, x:x + w]
+    distance = cv2.distanceTransform(np.pad((mask > 0).astype(np.uint8), 1),
+                                     cv2.DIST_L2, cv2.DIST_MASK_PRECISE)[1:-1, 1:-1]
+    # Narrow glyph masks have no background rim to fade into.
+    reach = float(distance.max())
+    if reach < 7:
+        return _composite(window, repaired, mask, np)
+
+    x0, x1 = max(0, x - 3), min(base.shape[1], x + w + 3)
+    y0, y1 = max(0, y - 3), min(base.shape[0], y + h + 3)
+    footprint = np.zeros((y1 - y0, x1 - x0), np.uint8)
+    footprint[y - y0:y - y0 + h, x - x0:x - x0 + w] = mask > 0
+    ring = (cv2.dilate(footprint, np.ones((7, 7), np.uint8)) > footprint)
+    if np.count_nonzero(ring) >= 12:
+        a, b = original[y0:y1, x0:x1][ring], external[y0:y1, x0:x1][ring]
+        # A uniform supplied fill is an explicit color, with no separate surround to match.
+        if max(a.std(axis=0).max(), b.std(axis=0).max()) <= FLAT_STD and not np.all(repaired == b[0]):
+            offset = np.rint(np.median(a, axis=0) - np.median(b, axis=0)).astype(np.int16)
+            repaired = np.clip(repaired.astype(np.int16) + offset, 0, 255)
+
+    t = np.clip((distance - 1) / min(8, reach - 1), 0, 1)
+    alpha = (-np.expm1(-4 * t * t) / -np.expm1(-4) * (mask / 255.0))[..., None]
+    return np.rint(window * (1 - alpha) + repaired * alpha).astype(np.uint8)
+
+
 def _from_provider(provider, base, page, root, np, report) -> Any:
     """Ask an image model to redraw the page, and hand back only an array.
 
@@ -224,7 +254,8 @@ def clean_page(
     root = ir.doc_dir(doc_path)
     report = report if report is not None else []
     solid_free = mask_mode(page, document_mode) == "solid"
-    base = np.asarray(ir.load_image(root / page["image"])).copy()
+    original = np.asarray(ir.load_image(root / page["image"]))
+    base = original.copy()
 
     supplied = None
     if external is not None:
@@ -390,7 +421,10 @@ def clean_page(
                 continue
             repaired = _repair(window, mask, strategy, colour, np)
 
-        base[y:y + h, x:x + w] = _composite(window, repaired, mask, np)
+        base[y:y + h, x:x + w] = (
+            _composite_external(original, base, supplied, (x, y, w, h), mask, np)
+            if supplied is not None else _composite(window, repaired, mask, np)
+        )
         region["fill"] = strategy
         region["clean_status"] = "cleaned"
         if colour is not None:

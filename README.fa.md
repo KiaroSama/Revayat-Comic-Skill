@@ -11,11 +11,12 @@
 [![نسخهٔ 1.1.0 افزونه در پنج قالب مانیفست](https://img.shields.io/badge/plugin-v1.1.0-ea580c)](plugin.json)
 [![مجموعهٔ آزمون خودکار pytest در ماتریس CI](https://img.shields.io/badge/tests-pytest%20suite-0d9488)](tests/README.md)
 [![پایتون 3.13.15 در آزمون محلی، حداقل پایتون 3.12 یا بالاتر](https://img.shields.io/badge/Python-3.13.15-8b5cf6)](skills/revayat-comic/requirements.txt)
+[![راست 1.99.1 اندازه‌گیری‌شده برای دو هستهٔ PyO3 شامل hotcore و pixcore](https://img.shields.io/badge/Rust-1.99.1-9a3412)](rust/hotcore-rs/Cargo.toml)
 [![اجرا روی ویندوز، لینوکس و مک](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-0891b2)](.github/workflows/ci.yml)
 [![نصب با پنج قالب افزونه یا اسکریپت مستقل](https://img.shields.io/badge/install-5%20plugins%20%7C%20standalone-4f46e5)](#نصب)
 [![مستندات فارسی و انگلیسی](https://img.shields.io/badge/docs-English%20%7C%20Persian-0284c7)](README.md)
-[![حجم درخت منتشرشده با git archive حدود ۲٫۶ مگابایت است](https://img.shields.io/badge/repo%20size-2.6%20MB-ca8a04)](#توسعه)
-[![ترسیم و ترکیب تصویر صفحه با Pillow](https://img.shields.io/badge/built%20with-Pillow-15803d)](skills/revayat-comic/requirements.txt)
+[![حجم درخت ردیابی‌شدهٔ مخزن حدود ۳٫۰ مگابایت است](https://img.shields.io/badge/repo%20size-3.0%20MB-ca8a04)](#توسعه)
+[![حروف‌چینی فارسی با قلم وزیرِ همراه مخزن و Pillow](https://img.shields.io/badge/typography-Vazir%20%7C%20Pillow-15803d)](skills/revayat-comic/assets/fonts/OFL.txt)
 [![ورودی و خروجی PDF با PyMuPDF](https://img.shields.io/badge/pdf-PyMuPDF-b45309)](skills/revayat-comic/requirements.txt)
 [![تشخیص حباب، ماسک و ترمیم با OpenCV](https://img.shields.io/badge/vision-OpenCV-334155)](skills/revayat-comic/requirements.txt)
 [![سه راهنمای لحن با مجوز MIT برای فارسی، انگلیسی و روسی](https://img.shields.io/badge/voice%20guides-3%20bundled-7c3aed)](skills/revayat-comic/references/voice/index.md)
@@ -161,7 +162,7 @@ python skills/revayat-comic/scripts/revayat-comic.py doctor
 
 اگر `"ready": true` بود، کار تمام است. دو فیلد زیر `persian` تعیین می‌کنند خروجی *درست* است یا فقط *موجود*:
 
-- **`"font"`** و **`"vazir"`** — قلمی که فارسی با آن کشیده می‌شود، و اینکه همان قلمِ خانگی است یا نه. **فارسی در این پروژه با وزیر حروف‌چینی می‌شود**؛ [وزیرمتن](https://github.com/rastikerdar/vazirmatn/releases) نسخهٔ امروزی همین خانواده است و هر وزنی از آن، حتی نسخهٔ variable، کار می‌کند. هیچ قلمی همراه این مخزن نمی‌آید: فایل قلم یک باینریِ با مجوز جداگانه است و جای آن در یک درختِ GPL نیست. تاهوما، نوتو نسخ عربی و Geeza Pro همه فارسیِ درست می‌کشند، پس خروجیِ آن‌ها سالم به نظر می‌رسد و قلمِ خانگی نیست — به همین دلیل `"vazir": false` با یک یادداشت می‌آید و بی‌صدا رد نمی‌شود.
+- **`"font"`** و **`"vazir"`** — قلمی که فارسی با آن کشیده می‌شود، و اینکه همان قلمِ خانگی است یا نه. **فارسی در این پروژه به‌صورت پیش‌فرض با قلم وزیر حروف‌چینی می‌شود**؛ وزن‌های رسمی `Vazir-Regular.ttf`، `Vazir-Medium.ttf` و `Vazir-Bold.ttf` (با مجوز `SIL OFL-1.1` در `skills/revayat-comic/assets/fonts/`) داخل خود مخزن قرار دارند و روی ویندوز، لینوکس و مک به‌صورت خودکار انتخاب می‌شوند. همچنین افکت‌های متنی `bold`، `italic`، `bold-italic`، `outline`، `shadow` و `shout`، یکدست‌سازی اندازهٔ قلم در سطح صفحه، ایزولهٔ یونیکد `RLI/PDI` (`U+2067`/`U+2069`)، دو هستهٔ اختیاری راست (`rust/hotcore-rs` و `rust/pixcore-rs` با بازگشت خودکار پایتون) و هماهنگی چندایجنتی `batch` پشتیبانی می‌شوند. تاهوما، نوتو نسخ عربی و Geeza Pro هم در صورت انتخاب دستی با `--font` کار می‌کنند و وقتی قلمی غیر از وزیر انتخاب شود، `"vazir": false` گزارش می‌شود.
 - **`"raqm"`** — اینکه Pillow خودش خط عربی را shape می‌کند یا نه. **این محدودیتِ پلتفرم نیست.** Pillow در wheel هر پلتفرمی libraqm را می‌فرستد؛ آنچه libraqm در زمان اجرا لود می‌کند **FriBiDi** است، و لینوکس معمولاً آن را دارد و ویندوز و مک معمولاً نه. یک `fribidi.dll` — `fribidi-0.dll` یا `libfribidi-0.dll` هم کار می‌کنند — در پوشه‌ای که روی `PATH` است بگذارید (پوشه‌ای در مسیرِ جستجوی DLL؛ کنار `python.exe` کافی نیست) تا `raqm` در ویندوز true شود. در لینوکس و مک، `libfribidi` را نصب کنید. بدون آن، مسیر جایگزین `arabic-reshaper` + `python-bidi` اجرا می‌شود و صفحه‌ها باز هم برای خواندن درست‌اند.
 
 ## استفاده

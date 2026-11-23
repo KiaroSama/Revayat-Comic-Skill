@@ -54,14 +54,26 @@ from replies import (  # noqa: F401 - re-exported: the protocol and the
     _add_region,
     _apply,
     _apply_page,
+    field_lines,
     invalid_fields,
     parse_worksheet,
     reply_digest,
 )
-from sheet import (  # noqa: F401 - re-exported: `worksheet.page_worksheet`
-    STAMP_SCHEME,                          # is the name every caller and
-    page_worksheet,                        # every test already uses.
-)
+from sheet import STAMP_SCHEME, page_worksheet as _page_worksheet
+
+
+def page_worksheet(doc: dict[str, Any], page: dict[str, Any], fingerprint: str) -> str:
+    text = _page_worksheet(doc, page, fingerprint)
+    styles = {region["id"]: region["style"] for region in page.get("regions", []) if region.get("style")}
+    if not styles:
+        return text
+    lines = []
+    for line in text.split("\n"):
+        lines.append(line)
+        header = HEADER.match(line)
+        if header and (style := styles.get(header["id"])):
+            lines.extend(field_lines("style", style))
+    return "\n".join(lines)
 
 FINGERPRINT = re.compile(r"^#\s*fingerprint:\s*(?P<value>[0-9a-f]{64})\s*$", re.M)
 

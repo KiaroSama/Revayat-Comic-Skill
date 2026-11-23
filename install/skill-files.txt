@@ -1,4 +1,8 @@
 SKILL.md
+assets/fonts/OFL.txt
+assets/fonts/Vazir-Bold.ttf
+assets/fonts/Vazir-Medium.ttf
+assets/fonts/Vazir-Regular.ttf
 references/artwork-preservation.md
 references/detection.md
 references/evaluation.md
@@ -42,6 +46,8 @@ references/voice/persian/scripts/lookup.py
 references/voice/persian/scripts/persian_lint.py
 references/voice/persian/SKILL.md
 scripts/adapters.py
+scripts/batch.py
+scripts/bidi_rli.py
 scripts/certify.py
 scripts/clean.py
 scripts/context.py
@@ -50,6 +56,8 @@ scripts/detect.py
 scripts/export.py
 scripts/falint.py
 scripts/glossary.py
+scripts/hotcore/__init__.py
+scripts/hotcore/geometry.py
 scripts/journal.py
 scripts/languages.py
 scripts/lettering.py
@@ -61,9 +69,12 @@ scripts/pageimages.py
 scripts/pageir.py
 scripts/pageorder.py
 scripts/pdfpage.py
+scripts/pixcore/__init__.py
+scripts/pixcore/kernels.py
 scripts/provider_errors.py
 scripts/providers.py
 scripts/qa.py
+scripts/qachecks.py
 scripts/readers.py
 scripts/regions.py
 scripts/replies.py
@@ -79,6 +90,7 @@ scripts/translate.py
 scripts/typefit.py
 scripts/typefont.py
 scripts/typeset.py
+scripts/typestyle.py
 scripts/watermark.py
 scripts/wire_json.py
 scripts/worksheet.py

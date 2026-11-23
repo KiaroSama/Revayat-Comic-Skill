@@ -9,11 +9,12 @@
 [![Plugin version 1.1.0 across five manifest formats](https://img.shields.io/badge/plugin-v1.1.0-ea580c)](plugin.json)
 [![Automated pytest suite across CI matrices](https://img.shields.io/badge/tests-pytest%20suite-0d9488)](tests/README.md)
 [![Python 3.13.15 measured locally, requires Python 3.12 or newer](https://img.shields.io/badge/Python-3.13.15-8b5cf6)](skills/revayat-comic/requirements.txt)
+[![Rust 1.99.1 measured locally for optional PyO3 hotcore and pixcore crates](https://img.shields.io/badge/Rust-1.99.1-9a3412)](rust/hotcore-rs/Cargo.toml)
 [![Runs on Windows, Linux, and macOS](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-0891b2)](.github/workflows/ci.yml)
 [![Install via five plugin formats or standalone scripts](https://img.shields.io/badge/install-5%20plugins%20%7C%20standalone-4f46e5)](#install)
 [![Documentation in English and Persian](https://img.shields.io/badge/docs-English%20%7C%20Persian-0284c7)](README.fa.md)
-[![Published tree measured via git archive of HEAD is 2.6 MB](https://img.shields.io/badge/repo%20size-2.6%20MB-ca8a04)](#development)
-[![Pillow image IO and Persian text rendering](https://img.shields.io/badge/built%20with-Pillow-15803d)](skills/revayat-comic/requirements.txt)
+[![Published tree measured via git ls-files is 3.0 MB](https://img.shields.io/badge/repo%20size-3.0%20MB-ca8a04)](#development)
+[![Pillow image IO and Persian text rendering with bundled SIL OFL Vazir fonts](https://img.shields.io/badge/typography-Vazir%20%7C%20Pillow-15803d)](skills/revayat-comic/assets/fonts/OFL.txt)
 [![PyMuPDF PDF import and export](https://img.shields.io/badge/pdf-PyMuPDF-b45309)](skills/revayat-comic/requirements.txt)
 [![OpenCV balloon detection, masks, and inpainting](https://img.shields.io/badge/vision-OpenCV-334155)](skills/revayat-comic/requirements.txt)
 [![Three bundled MIT voice guides for Persian, English, and Russian](https://img.shields.io/badge/voice%20guides-3%20bundled-7c3aed)](skills/revayat-comic/references/voice/index.md)
@@ -47,7 +48,9 @@ than approximately right.
 | **Panel-aware reading order** | A balloon at the top of the next panel is read after one at the bottom of this panel, even though it sits higher on the paper. Right-to-left for manga, left-to-right for webtoons and Western comics. |
 | **The size floor is a floor** | When Persian will not fit, the text does not silently shrink: the region is reported as `text-overflow` so the translation can be shortened instead. |
 | **Sound effects are artwork** | SFX are classified separately from dialogue and the default is `keep`. Erasing hand-lettering to put a guess in its place is worse than not translating it. |
-| **Deterministic quality gates** | Untranslated regions, source script surviving inside the Persian, text overflow, broken reading order, modified artwork, glossary drift. Counts and pixel comparisons, not a second opinion from a model. |
+| **Deterministic quality gates** | Untranslated regions, source script surviving anywhere inside the full balloon interior, text overflow, rendered text overlap, outline crossing, page dimension mismatch, broken reading order, modified artwork, glossary drift. Counts and pixel comparisons, not a second opinion from a model. |
+| **Bundled Vazir typography and text effects** | Official SIL OFL-1.1 Vazir fonts (`Regular`, `Medium`, `Bold`) ship inside `skills/revayat-comic/assets/fonts/` and are selected by default. Regions support `bold`, `italic`, `bold-italic`, `outline`, `shadow`, and `shout` effects plus page-level font-size harmonization and Unicode RLI/PDI isolation (`U+2067`/`U+2069`) on Latin-initial Persian sentences. |
+| **Optional Rust PyO3 hot-path acceleration** | Heavy geometry (`rust/hotcore-rs`) and full-page pixel QA (`rust/pixcore-rs`) kernels have safe Rust PyO3 crates (`#![forbid(unsafe_code)]`) with automatic pure-Python/NumPy fallback when no native wheel is built, plus multi-agent bulk sharding via `batch plan-shards`, `batch merge-shards`, and `batch plan-books`. |
 
 ## Install
 
@@ -111,13 +114,14 @@ output is *correct* rather than merely present:
 
 - **`"font"`** and **`"vazir"`** — the Persian face it will draw with, and
   whether that face is the house one. **Persian here is set in Vazir**;
-  [Vazirmatn](https://github.com/rastikerdar/vazirmatn/releases) is the current
-  release of that family and any weight works, including the variable build. No
-  font ships with this repository: a font file is a separately licensed binary
-  and does not belong in a GPL source tree. Tahoma, Noto Naskh Arabic and Geeza
-  Pro all draw correct Persian, so a run on one of them looks fine and is not
-  the house face — which is why `"vazir": false` comes with a note instead of
-  passing quietly.
+  The repository ships official SIL OFL-1.1 **Vazir** fonts
+  (`Vazir-Regular.ttf`, `Vazir-Medium.ttf`, and `Vazir-Bold.ttf`, with
+  `OFL.txt`) under `skills/revayat-comic/assets/fonts/` and selects them by
+  default across Windows, Linux, and macOS unless `--font` overrides it. System
+  [Vazirmatn](https://github.com/rastikerdar/vazirmatn/releases) or any Persian
+  font can still be selected explicitly with `--font`. Tahoma, Noto Naskh Arabic,
+  and Geeza Pro draw correct Persian as fallbacks, which is why `"vazir": false`
+  is reported when a non-Vazir face is explicitly chosen.
 - **`"raqm"`** — whether Pillow shapes Arabic script itself. **This is not a
   platform limit.** Pillow ships libraqm in the wheel on every platform; what
   libraqm loads at run time is **FriBiDi**, and Linux images usually have one

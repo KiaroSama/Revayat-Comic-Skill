@@ -37,6 +37,7 @@ import sys
 from pathlib import Path
 from typing import Any, Sequence
 
+import hotcore
 import pageir as ir
 import stages
 
@@ -549,43 +550,12 @@ MAX_SEEDS = 400
 
 
 def _gap(a, b) -> float:
-    ax0, ay0, aw, ah = a
-    bx0, by0, bw, bh = b
-    dx = max(0, max(ax0, bx0) - min(ax0 + aw, bx0 + bw))
-    dy = max(0, max(ay0, by0) - min(ay0 + ah, by0 + bh))
-    return (dx * dx + dy * dy) ** 0.5
+    return float(hotcore.box_gap(list(a), list(b)))
 
 
 def _cluster(seeds: list[list[int]]) -> list[list[list[int]]]:
-    """Group marks that are close relative to their own size.
-
-    A single dilation cannot do this. Its reach is one number for the whole
-    page, so a value that groups small dialogue type leaves a large sound
-    effect as separate blobs and drops it silently, while a value that catches
-    the sound effect welds every line of dialogue into one block. Comparing each
-    pair against *their* size has no such conflict.
-    """
-    if len(seeds) > MAX_SEEDS:
-        seeds = sorted(seeds, key=lambda box: -box[2] * box[3])[:MAX_SEEDS]
-
-    parent = list(range(len(seeds)))
-
-    def find(index: int) -> int:
-        while parent[index] != index:
-            parent[index] = parent[parent[index]]
-            index = parent[index]
-        return index
-
-    for i in range(len(seeds)):
-        for j in range(i + 1, len(seeds)):
-            scale = max(seeds[i][2], seeds[i][3], seeds[j][2], seeds[j][3])
-            if _gap(seeds[i], seeds[j]) <= CLUSTER_REACH * scale:
-                parent[find(i)] = find(j)
-
-    groups: dict[int, list[list[int]]] = {}
-    for index, box in enumerate(seeds):
-        groups.setdefault(find(index), []).append(box)
-    return list(groups.values())
+    """Group marks that are close relative to their own size via `hotcore`."""
+    return hotcore.cluster_boxes(seeds, MAX_SEEDS, CLUSTER_REACH)
 
 
 def _hull(group: list[list[int]], width: int, height: int) -> list[int]:

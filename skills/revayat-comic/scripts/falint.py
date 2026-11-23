@@ -30,6 +30,7 @@ from typing import Any, Sequence
 
 import pageir as ir
 import stages
+from bidi_rli import ensure_rli_pdi
 
 ZWNJ = "‌"
 
@@ -357,7 +358,8 @@ def fix_text(text: str, options: Options | None = None) -> str:
     if not text:
         return text
     options = options or Options()
-    return "\n".join(fix_line(line, options) for line in re.split(r"\r\n|[\r\n]", text)).strip(" \t\r")
+    fixed = "\n".join(fix_line(line, options) for line in re.split(r"\r\n|[\r\n]", text))
+    return ensure_rli_pdi(fixed.strip(" \t\r"))
 
 
 # --------------------------------------------------------------------------- #
@@ -540,6 +542,9 @@ def lint_text(text: str, *, acknowledged: Sequence[str] = (),
     def note(code: str, detail: str) -> None:
         if code not in settled:
             issues.append({"code": code, "detail": detail[:140]})
+
+    if ensure_rli_pdi(text) != text:
+        note("missing-rli-pdi", "Enclose Latin-leading Persian sentences in U+2067 and U+2069")
 
     # Everything below reads the line with URLs, emails and Latin words blanked
     # out — the same spans the fixer refuses to touch. Reporting an Arabic kaf

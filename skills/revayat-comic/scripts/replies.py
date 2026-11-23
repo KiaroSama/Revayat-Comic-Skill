@@ -15,11 +15,12 @@ import re
 from typing import Any
 
 import pageir as ir
+from typestyle import STYLE_TOKENS, normalize_style
 
 HEADER = re.compile(r"^@@\s+(?P<id>\+?[A-Za-z0-9_#-]+)(?:\s+(?P<rest>.*))?$")
 FIELD = re.compile(
     r"^(?P<name>src|fa_full|fa|kind|speaker|propose|note|drop|keep|erase|box"
-    r"|polarity|reviewed)"
+    r"|polarity|reviewed|style)"
     r"\s*:\s?(?P<value>.*)$")
 
 #: `box: x y w h`, in the PAGE's own pixels. `overview.png` is drawn at most
@@ -27,7 +28,7 @@ FIELD = re.compile(
 BOX = re.compile(r"^\s*(\d+)[ ,]+(\d+)[ ,]+(\d+)[ ,]+(\d+)\s*$")
 
 FIELDS = ("src", "fa", "fa_full", "kind", "speaker", "propose", "note",
-          "drop", "keep", "erase", "box", "polarity", "reviewed")
+          "drop", "keep", "erase", "box", "polarity", "reviewed", "style")
 
 #: `propose: Anna, the Iron Gate` — a comma in either script separates them.
 PROPOSALS = re.compile(r"[,\u060c]")
@@ -162,6 +163,12 @@ def parse_worksheet(text: str) -> dict[str, dict[str, Any]]:
                 current[field] += separator + tail
             blanks = 0
             started = True
+    for block in blocks.values():
+        if "style" in block:
+            try:
+                block["style"] = normalize_style(block["style"])
+            except ValueError:
+                pass  # Keep invalid input so the normal field check can report it.
     return blocks
 
 
@@ -188,6 +195,13 @@ def invalid_fields(block: dict[str, Any]) -> list[str]:
     value = block.get("polarity", "")
     if not isinstance(value, str) or value.strip().lower() not in {"", "dark", "light"}:
         errors.append("polarity: expected dark, light or empty")
+    style = block.get("style", "")
+    try:
+        if not isinstance(style, str):
+            raise ValueError
+        normalize_style(style)
+    except ValueError:
+        errors.append(f"style: expected comma-separated styles from {', '.join(STYLE_TOKENS)}, or empty")
     return errors
 
 
@@ -354,6 +368,11 @@ def _apply(region: dict[str, Any], block: dict[str, str],
     if page is not None:
         _correct_geometry(region, block, page, report)
     _set_or_clear(region, block, "speaker", "speaker")
+    if "style" in block:
+        style = normalize_style(block["style"])
+        if style != region.get("style", ""):
+            region["typeset"] = {}
+            _set_or_clear(region, {"style": style}, "style", "style")
     # Approval is about the newly supplied pair, never the region's old full
     # text or source. Both texts remain available to the reviewer.
     region["source_text"] = source

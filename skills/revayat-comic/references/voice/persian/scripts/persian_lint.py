@@ -37,6 +37,11 @@ import argparse
 import json
 import re
 import sys
+from pathlib import Path
+
+# The full skill bundle keeps both linters on the same isolation rule.
+sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "scripts"))
+from bidi_rli import with_rli_pdi  # noqa: E402
 
 # Windows consoles default to a legacy code page; force UTF-8 on every stream.
 for _stream in (sys.stdout, sys.stderr, sys.stdin):
@@ -297,7 +302,9 @@ def normalize(text, digits="persian"):
     masked, c = re.subn(r"[ \t]+(\n|$)", r"\1", masked)
     bump("trailing_space", c)
 
-    return _unmask(masked, spans), stats
+    fixed, isolated = with_rli_pdi(_unmask(masked, spans))
+    bump("missing-rli-pdi", isolated)
+    return fixed, stats
 
 
 # Bureaucratic / machine-Persian phrases. Reported with --style, never auto-fixed:
