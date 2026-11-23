@@ -164,7 +164,7 @@ skill rule, not merely a coding-agent logging rule. Keep
 `skills/revayat-comic/references/translation-log.md` and the skill's startup and
 delivery gates aligned. CLI diagnostic logs alone do not fulfill this rule.
 
-Keep the three plugin manifests and the marketplace entry at the same `version`.
+Keep the five plugin manifests and the three marketplace entries at the same `version`.
 The [voice guide index](skills/revayat-comic/references/voice/index.md) records the
 pinned sources and the output-language rule for the three bundled guides.
 

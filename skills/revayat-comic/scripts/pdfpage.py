@@ -24,6 +24,8 @@ from __future__ import annotations
 import io
 import math
 import re
+import zlib
+from functools import lru_cache
 from typing import Any
 
 import pageir as ir
@@ -41,6 +43,97 @@ MAX_RASTER_PIXELS = 4_000_000
 #: carries it: the two paths disagree by a few units of 255 from resampling
 #: alone. A wrong, rotated, cropped or overlaid page moves tens of units.
 APPEARANCE_TOLERANCE = 12
+
+MAX_ICC_PROFILE_BYTES = 1_048_576
+
+
+def _image_colour_identity(document: Any, xref: int) -> tuple | None:
+    """Recognize ordinary device colors or a bounded, exact ICC profile."""
+    kind, value = document.xref_get_key(xref, "ColorSpace")
+    for _ in range(8):
+        reference = re.fullmatch(r"(\d+)\s+\d+\s+R", value.strip())
+        if kind != "xref" and reference is None:
+            break
+        if reference is None:
+            return None
+        value = document.xref_object(int(reference[1]), compressed=True)
+        kind = "resolved"
+    else:
+        return None
+    if value in {"/DeviceRGB", "/DeviceGray"}:
+        return ("device", value)
+    profile = re.fullmatch(r"\[\s*/ICCBased\s+(\d+)\s+\d+\s+R\s*\]", value)
+    if profile is None:
+        return None
+    profile_xref = int(profile[1])
+    components = document.xref_get_key(profile_xref, "N")
+    if components not in {("int", "1"), ("int", "3")}:
+        return None
+    alternate = document.xref_get_key(profile_xref, "Alternate")
+    expected = "/DeviceGray" if components[1] == "1" else "/DeviceRGB"
+    if alternate not in {("null", "null"), ("name", expected)}:
+        return None
+    if any(document.xref_get_key(profile_xref, key)[0] != "null"
+           for key in ("Range", "DecodeParms")):
+        return None
+    length = document.xref_get_key(profile_xref, "Length")
+    if length[0] != "int" or not 0 < int(length[1]) <= MAX_ICC_PROFILE_BYTES:
+        return None
+    payload = document.xref_stream_raw(profile_xref)
+    if not payload or len(payload) > MAX_ICC_PROFILE_BYTES:
+        return None
+    encoding = document.xref_get_key(profile_xref, "Filter")
+    if encoding == ("name", "/FlateDecode"):
+        try:
+            decoder = zlib.decompressobj()
+            payload = decoder.decompress(payload, MAX_ICC_PROFILE_BYTES + 1)
+        except zlib.error:
+            return None
+        if not decoder.eof or decoder.unused_data or len(payload) > MAX_ICC_PROFILE_BYTES:
+            return None
+    elif encoding[0] != "null":
+        return None
+    return ("icc", components[1], ir.sha256_bytes(payload))
+
+
+@lru_cache(maxsize=1)
+def _default_image_profiles() -> frozenset[tuple]:
+    """The current engine's own RGB/gray profiles, measured from tiny controls."""
+    pymupdf = ir.require("pymupdf", "pymupdf", "checking PDF image color")
+    found = set()
+    for colorspace in (pymupdf.csRGB, pymupdf.csGRAY):
+        pixmap = pymupdf.Pixmap(colorspace, pymupdf.IRect(0, 0, 1, 1), False)
+        pixmap.clear_with(255)
+        with pymupdf.open() as document:
+            page = document.new_page(width=1, height=1)
+            xref = page.insert_image(page.rect, pixmap=pixmap)
+            identity = _image_colour_identity(document, xref)
+            if identity is not None:
+                found.add(identity)
+    return frozenset(found)
+
+
+def plain_image_colour(page: Any, xref: int) -> bool:
+    """Whether extraction can omit PDF color state without changing pixels."""
+    document = page.parent
+    if any(document.xref_get_key(xref, key)[0] != "null" for key in
+           ("Decode", "ImageMask", "SMaskInData", "Intent")):
+        return False
+    parameters = document.xref_get_key(xref, "DecodeParms")
+    if (parameters[0] != "null"
+            and not (parameters[0] == "dict" and re.fullmatch(r"<<\s*>>", parameters[1]))):
+        return False
+    # Inherited or substituted default spaces need rendering, even when the
+    # image object itself says DeviceRGB. The plain-image program cannot prove
+    # those component values mean the same thing outside this page.
+    if document.xref_get_key(page.xref, "Resources")[0] == "null":
+        return False
+    if any(document.xref_get_key(page.xref, f"Resources/ColorSpace/{name}")[0] != "null"
+           for name in ("DefaultRGB", "DefaultGray", "DefaultCMYK")):
+        return False
+    identity = _image_colour_identity(document, xref)
+    return identity in {("device", "/DeviceRGB"), ("device", "/DeviceGray")} \
+        or identity in _default_image_profiles()
 
 
 def appearance(payload: bytes) -> str:

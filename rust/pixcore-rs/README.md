@@ -8,15 +8,29 @@ The Python references in `skills/revayat-comic/scripts/pixcore/kernels.py` defin
 
 Set `REVAYAT_PIXCORE=python` before importing `pixcore` to use the references instead of the extension. The PyO3 bindings borrow input buffers because rust-anything 3.3.0 generates a JSON value for every byte otherwise. Keep that adaptation if you run `rust-anything refresh`.
 
+## Build and install
+
+Use Python 3.12 or later and Rust 1.97 or later with a working platform linker.
+From the repository root, in the Python environment that runs Revayat Comic:
+
+```console
+python -m pip install ./rust/pixcore-rs
+```
+
+The PEP 517 build installs a wheel containing `pixcore_rs._native` and its
+Python package. A plain `cargo build` does not install an importable Python
+package. The skill's loader selects the installed extension even when the
+skill is copied outside this repository.
+
 ## Verification
 
-Run these commands from this crate with the local rust-anything manifest and recording inputs. Encode input buffers as `{"$bytes":[0,128,255]}` in the JSONL file.
+After installing the wheel, run these commands from the repository root:
 
-```sh
-rust-anything record . --inputs extra-inputs.jsonl
-rust-anything build .
-rust-anything diff .
-rust-anything bench .
-rust-anything shadow .
-rust-anything gate .
+```console
+cargo test --manifest-path rust/pixcore-rs/Cargo.toml
+python -m pytest tests/test_pixcore_parity.py -q
 ```
+
+The native CI lane asserts that `pixcore.BACKEND` is `rust` before running the
+parity tests. Without a compiled extension they exercise the reference kernels;
+that fallback is supported, but it does not verify the compiled bindings.

@@ -386,6 +386,19 @@ def _single_embedded_image(document, page) -> bytes | None:
     if int(images[0][2]) * int(images[0][3]) > MAX_PAGE_PIXELS:
         return None
 
+    # Clipping, graphics state and colour-key transparency do not appear in
+    # image placement bounds. Share the package verifier's visibility proof:
+    # extraction is safe only when the entire drawing program is one plain
+    # image. Otherwise the native-resolution renderer must preserve the page.
+    import pdfpage
+
+    try:
+        if (not pdfpage._is_plain_full_page(page, page.get_image_info(xrefs=True))
+                or not pdfpage.plain_image_colour(page, xref)):
+            return None
+    except Exception:  # pragma: no cover - malformed or unsupported PDF state
+        return None
+
     # `get_images` counts IMAGES. A page that is one scan plus a line of typeset
     # dialogue, a redaction bar, or a drawn speech tail still answers "one
     # image", and taking those bytes imports the scan with the rest simply gone

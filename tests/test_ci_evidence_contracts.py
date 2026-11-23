@@ -13,6 +13,25 @@ check_skips = test_ci_guards.check_skips  # Reuse the existing fixture unchanged
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_main_ci_is_automatically_attached_to_pr_updates_and_main():
+    text = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    events = text.split("\non:\n", 1)[1].split("\npermissions:", 1)[0]
+    assert re.search(r"^  pull_request:\s*$", events, re.M), "new PR heads have no main CI"
+    assert re.search(r"^  push:\s*\n    branches: \[main\]", events, re.M)
+    assert not re.search(r"^    (?:paths|paths-ignore|branches-ignore):", events, re.M)
+    assert "  workflow_dispatch:" in events
+
+
+def test_native_ci_installs_and_requires_both_rust_backends():
+    text = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    assert "  native-python:" in text, "compiled crates are never loaded by Python CI"
+    job = text.split("  native-python:", 1)[1]
+    assert "./rust/hotcore-rs ./rust/pixcore-rs" in job
+    assert "hotcore.BACKEND == pixcore.BACKEND == 'rust'" in job
+    assert "tests/test_hotcore_parity.py" in job and "tests/test_pixcore_parity.py" in job
+    assert "ubuntu-latest, macos-latest, windows-latest" in job
+
+
 def runtime_floors(text):
     floors = {}
     for raw in text.splitlines():

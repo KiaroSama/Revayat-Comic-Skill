@@ -569,4 +569,9 @@ def partition_shared_interiors(
                     full = np.zeros_like(ap)
                     full[ny:ny + npatch.shape[0], nx:nx + npatch.shape[1]] = npatch
                     authority[rid] = full
+            else:
+                # No assigned pixels means no permission to render. Keeping the
+                # original patch here gives a losing region the whole cavity again.
+                authority[rid] = ((ax, ay, np.zeros((0, 0), dtype=ap.dtype))
+                                  if is_tuple else np.zeros_like(ap))
 

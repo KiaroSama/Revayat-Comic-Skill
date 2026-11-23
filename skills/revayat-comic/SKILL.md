@@ -242,6 +242,16 @@ failed shards before merging. Keep the original chapter unchanged while agents
 work and wait for all writers to stop before running `merge-shards`. Then run
 chapter-wide QA and review every final page in original order.
 
+The plan records a frozen digest of the chapter, shared glossary/policy and
+chapter assets. A merge refuses changed canonical files or changed shared
+worker decisions before writing anything; it never silently drops a worker's
+glossary edit. Only an exact repeat of the already merged result is accepted.
+If the snapshot is missing (an older plan) or inputs changed, retain all worker
+drafts, reconcile the changed terms/decisions with the coordinator, create a
+fresh plan and reapply the reviewed drafts against that plan. Do not edit the
+snapshot digest to force a stale merge. New terminology discovered in a shard
+is a coordinator decision before a replacement plan is issued.
+
 **Lock what you already know before page 1.** If this is chapter 12 of a series
 you have already translated, copy the locked `glossary.entries` from the previous
 chapter's `comic.json` into this one and run `glossary scan` *before* translating

@@ -1,4 +1,4 @@
-"""Contracts for the published voice skills and manual project validation."""
+"""Contracts for published voice skills and optional manual validation."""
 
 import json
 from pathlib import Path
@@ -40,8 +40,8 @@ def test_voice_skill_is_registered_and_in_the_standalone_payload(name, required)
     assert "MIT License" in (folder / "LICENSE").read_text(encoding="utf-8")
 
 
-@pytest.mark.parametrize("name", ["ci", "integration", "source-evidence"])
-def test_project_validation_is_manual(name):
+@pytest.mark.parametrize("name", ["integration", "source-evidence"])
+def test_optional_validation_remains_manual(name):
     workflow = (ROOT / f".github/workflows/{name}.yml").read_text(encoding="utf-8")
     triggers = workflow.split("\non:\n", 1)[1].split("\n\n", 1)[0]
     assert triggers == "  workflow_dispatch:"

@@ -38,6 +38,7 @@ class BatchManifest(TypedDict):
     source: str
     workers: int
     items: list[BatchItem]
+    snapshot: NotRequired[dict[str, Any]]
 
 
 def _owned(root: Path, name: str | Path) -> Path:
@@ -193,6 +194,67 @@ def _write_manifest(root: Path, manifest: BatchManifest) -> None:
     ir.write_text(root / MANIFEST, ir.dumps(manifest) + "\n")
 
 
+def _shared_digest(doc: dict) -> str:
+    """Bind worker decisions to the chapter-wide inputs they actually used."""
+    shared = deepcopy({key: value for key, value in doc.items()
+                       if key not in {"pages", "stages"}})
+    shared.get("meta", {}).pop("worksheets", None)
+    # Mask runs update this default even for one selected page. The effective
+    # mode and its freshness options belong to each page, as in stages.py.
+    shared.get("meta", {}).pop("free_lettering_mask", None)
+    shared.get("source", {}).pop("page_count", None)
+    payload = json.dumps(shared, ensure_ascii=False, sort_keys=True, allow_nan=False)
+    return ir.sha256_bytes(payload.encode("utf-8"))
+
+
+def _asset_snapshot(root: Path, doc: dict) -> dict[str, str | None]:
+    worksheets = _worksheets(root, doc)
+    paths = {_owned(root, "glossary.json")}
+    for page in doc["pages"]:
+        paths.update(_page_files(root, page, worksheets, include_source=True))
+    return {path.relative_to(root).as_posix(): ir.sha256_file(_file(path))
+            if path.exists() else None for path in sorted(paths)}
+
+
+def _snapshot(batch: Path) -> dict:
+    manifest = json.loads(_file(_owned(batch, MANIFEST)).read_text(encoding="utf-8"))
+    snapshot = manifest.get("snapshot")
+    digest = re.compile(r"[0-9a-f]{64}")
+    if (not isinstance(snapshot, dict)
+            or any(not isinstance(snapshot.get(key), str)
+                   or not digest.fullmatch(snapshot[key]) for key in ("document", "shared"))
+            or not isinstance(snapshot.get("assets"), dict)
+            or any(not isinstance(key, str) or
+                   (value is not None and (not isinstance(value, str) or not digest.fullmatch(value)))
+                   for key, value in snapshot["assets"].items())):
+        raise ValueError("batch has no valid frozen snapshot; preserve drafts and create a new plan")
+    return snapshot
+
+
+def _check_snapshot(root: Path, doc: dict, snapshot: dict, pending: dict[Path, Path],
+                    before: str, assets: dict[str, str | None]) -> None:
+    """Permit the frozen base or an exact no-op replay, never a stale overwrite."""
+    if before == snapshot["document"] and assets == snapshot["assets"]:
+        for target in pending:
+            name = target.relative_to(root).as_posix()
+            if name not in snapshot["assets"] and target.exists():
+                raise ValueError(f"chapter asset changed after the batch snapshot: {name}")
+        return
+    expected = dict(snapshot["assets"])
+    expected.update({target.relative_to(root).as_posix(): ir.sha256_file(source)
+                     for target, source in pending.items()})
+    after = ir.sha256_bytes((ir.dumps(doc) + "\n").encode("utf-8"))
+    if before == after and assets.keys() <= expected.keys():
+        for name, wanted in expected.items():
+            path = _owned(root, name)
+            actual = ir.sha256_file(_file(path)) if path.exists() else None
+            if actual != wanted:
+                break
+        else:
+            return
+    raise ValueError("chapter changed after the batch snapshot; preserve drafts and reconcile before replanning")
+
+
 @contextmanager
 def _plan_directory(out: Path) -> Iterator[Path]:
     with destination_claim(out, out / MANIFEST):
@@ -224,7 +286,11 @@ def plan_shards(doc_dir: str | Path, shards: int, out: str | Path | None = None)
             raise ValueError("overlapping page IDs in source chapter")
         worksheets = _worksheets(root, doc)
         worksheet_name = worksheets.relative_to(root)
-        manifest: BatchManifest = {"mode": "shards", "source": str(root), "workers": shards, "items": []}
+        manifest: BatchManifest = {
+            "mode": "shards", "source": str(root), "workers": shards, "items": [],
+            "snapshot": {"document": ir.sha256_file(root / "comic.json"),
+                         "shared": _shared_digest(doc), "assets": _asset_snapshot(root, doc)},
+        }
         base, extra = divmod(len(pages), shards)
         with _plan_directory(out) as staged:
             start = 0
@@ -276,16 +342,28 @@ def _shard_folders(batch: Path, into: Path) -> list[tuple[Path, list[int]]]:
     return [result[sid] for sid in sorted(result)]
 
 
-def _prepare_merge(root: Path, doc: dict, shards: list[tuple[Path, list[int]]]
+def _prepare_merge(root: Path, doc: dict, shards: list[tuple[Path, list[int]]], shared: str,
+                   external_glossary: str | None
                    ) -> dict[Path, Path]:
     ids = [_page_id(page) for page in doc["pages"]]
     seen: dict[str, tuple[Path, dict, dict]] = {}
     planned = []
     for shard, (first, stop) in shards:
         local = _doc(shard)
+        if _shared_digest(local) != shared:
+            raise ValueError(f"{shard.name}: shared glossary or policy changed; reconcile before replanning")
+        glossary = _owned(shard, "glossary.json")
+        glossary_hash = ir.sha256_file(_file(glossary)) if glossary.exists() else None
+        if glossary_hash != external_glossary:
+            raise ValueError(f"{shard.name}: shared glossary file changed; reconcile before replanning")
         shard_ids = []
         for page in local["pages"]:
             pid = _page_id(page)
+            if (not page.get("free_lettering_mask") and
+                    local["meta"].get("free_lettering_mask", "glyphs") !=
+                    doc["meta"].get("free_lettering_mask", "glyphs")):
+                raise ValueError(f"{pid}: legacy page mask mode would change during merge; "
+                                 "rebuild this page's masks with its intended mode first")
             if pid in seen:
                 raise ValueError(f"overlapping page ID: {pid}")
             seen[pid] = (shard, local, page)
@@ -380,7 +458,13 @@ def merge_shards(batch_dir: str | Path, into: str | Path) -> dict[str, Any]:
         for shard, _ in shards:
             locks.enter_context(ir.workspace_lock(shard, what="merge-shards"))
         doc = _doc(root)
-        pending = _prepare_merge(root, doc, shards)
+        snapshot = _snapshot(batch)
+        if _shared_digest(doc) != snapshot["shared"]:
+            raise ValueError("shared chapter inputs changed after the batch snapshot")
+        before, assets = ir.sha256_file(root / "comic.json"), _asset_snapshot(root, doc)
+        pending = _prepare_merge(root, doc, shards, snapshot["shared"],
+                                 snapshot["assets"].get("glossary.json"))
+        _check_snapshot(root, doc, snapshot, pending, before, assets)
         _publish(root, doc, pending)
     return {"document": str(root / "comic.json"), "pages": len(doc["pages"]), "shards": len(shards)}
 

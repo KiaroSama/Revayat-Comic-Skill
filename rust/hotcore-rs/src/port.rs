@@ -9,10 +9,10 @@ pub fn box_gap(a: Vec<i64>, b: Vec<i64>) -> Result<f64, String> {
     if a.len() < 4 || b.len() < 4 {
         return Err("ValueError: Each box must have four integers: [x, y, w, h]".to_string());
     }
-    let (ax0, ay0, aw, ah) = (a[0], a[1], a[2], a[3]);
-    let (bx0, by0, bw, bh) = (b[0], b[1], b[2], b[3]);
-    let dx = 0i64.max(ax0.max(bx0) - (ax0 + aw).min(bx0 + bw)) as f64;
-    let dy = 0i64.max(ay0.max(by0) - (ay0 + ah).min(by0 + bh)) as f64;
+    let [ax0, ay0, aw, ah] = [a[0], a[1], a[2], a[3]].map(i128::from);
+    let [bx0, by0, bw, bh] = [b[0], b[1], b[2], b[3]].map(i128::from);
+    let dx = 0i128.max(ax0.max(bx0) - (ax0 + aw).min(bx0 + bw)) as f64;
+    let dy = 0i128.max(ay0.max(by0) - (ay0 + ah).min(by0 + bh)) as f64;
     Ok(dx.hypot(dy))
 }
 
@@ -68,10 +68,10 @@ pub fn cluster_boxes(
     let mut parent: Vec<usize> = (0..n).collect();
 
     for i in 0..n {
-        let ax0 = work[i][0];
-        let ay0 = work[i][1];
-        let aw = work[i][2];
-        let ah = work[i][3];
+        let ax0 = i128::from(work[i][0]);
+        let ay0 = i128::from(work[i][1]);
+        let aw = i128::from(work[i][2]);
+        let ah = i128::from(work[i][3]);
         let ax1 = ax0 + aw;
         let ay1 = ay0 + ah;
         for (j, bj) in work.iter().enumerate().skip(i + 1) {
@@ -81,12 +81,9 @@ pub fn cluster_boxes(
                         .to_string(),
                 );
             };
-            let bx0 = bj[0];
-            let by0 = bj[1];
-            let bw = bj[2];
-            let bh = bj[3];
-            let dx = 0i64.max(ax0.max(bx0) - ax1.min(bx0 + bw)) as f64;
-            let dy = 0i64.max(ay0.max(by0) - ay1.min(by0 + bh)) as f64;
+            let [bx0, by0, bw, bh] = [bj[0], bj[1], bj[2], bj[3]].map(i128::from);
+            let dx = 0i128.max(ax0.max(bx0) - ax1.min(bx0 + bw)) as f64;
+            let dy = 0i128.max(ay0.max(by0) - ay1.min(by0 + bh)) as f64;
             let scale = aw.max(ah).max(bw).max(bh) as f64;
             let limit = reach_val * scale;
             if limit >= 0.0 && (dx * dx + dy * dy) <= limit * limit + 1e-12 && dx.hypot(dy) <= limit
@@ -344,6 +341,20 @@ mod tests {
         assert_eq!(box_gap(vec![0, 0, 10, 10], vec![5, 5, 10, 10]), Ok(0.0));
         assert_eq!(box_gap(vec![0, 0, 10, 10], vec![13, 14, 5, 5]), Ok(5.0));
         assert!(box_gap(vec![0, 0, 10], vec![0, 0, 10, 10]).is_err());
+    }
+
+    #[test]
+    fn coordinate_sums_do_not_wrap_at_i64_boundaries() {
+        let far = vec![i64::MAX - 5, 0, 10, 10];
+        let origin = vec![0, 0, 1, 1];
+        assert_eq!(
+            box_gap(far.clone(), origin.clone()),
+            Ok((i64::MAX - 6) as f64)
+        );
+        assert_eq!(
+            cluster_boxes(vec![far.clone(), origin.clone()], Some(400), Some(1.6)),
+            Ok(vec![vec![far], vec![origin]])
+        );
     }
 
     #[test]
