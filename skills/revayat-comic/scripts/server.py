@@ -96,6 +96,38 @@ MAX_BODY_BYTES = 1 << 20
 READ_TIMEOUT = 30.0
 
 
+class _RequestOutput(io.StringIO):
+    """Capture only the request thread; discard asynchronous provider output.
+
+    A timed-out provider can outlive its request. Its later diagnostics must
+    neither become another request's report nor disclose raw provider payloads.
+    With no owner, this is a non-buffering sink for non-protocol MCP stdout.
+    A forwarding stream preserves service-thread stderr without buffering it.
+    """
+
+    def __init__(self, owner: int | None = None, forward=None):
+        super().__init__()
+        self.owner = owner
+        self.forward = forward
+
+    def write(self, text: str) -> int:
+        if threading.get_ident() == self.owner:
+            if self.forward is not None:
+                return self.forward.write(text)
+            return super().write(text)
+        return len(text)
+
+    def writelines(self, lines) -> None:
+        for text in lines:
+            self.write(text)
+
+    def flush(self) -> None:
+        if self.forward is not None and threading.get_ident() == self.owner:
+            self.forward.flush()
+        else:
+            super().flush()
+
+
 def _describe(stage: str) -> str:
     """One line about a stage, taken from the module that implements it.
 
@@ -228,7 +260,8 @@ def run(name: str, args: list[str] | None = None) -> dict[str, Any]:
         return {"ok": False, "stage": stage, "error": "argument exceeds the supported numeric range"}
     reason = ""
     with _STDOUT_LOCK:
-        captured, complaint = io.StringIO(), io.StringIO()
+        captured = _RequestOutput(threading.get_ident())
+        complaint = _RequestOutput(threading.get_ident())
         try:
             with contextlib.redirect_stdout(captured), \
                     contextlib.redirect_stderr(complaint):
@@ -414,6 +447,19 @@ def serve_mcp(stream_in=None, stream_out=None) -> int:
     stream_in = sys.stdin if stream_in is None else stream_in
     stream_out = sys.stdout if stream_out is None else stream_out
 
+    # Reserve the saved wire stream for explicit protocol writes. Provider
+    # threads may print after their stage timed out and restored stdout; never
+    # send those bytes to the client or copy their potentially private payloads
+    # into stderr/logs. The sink does not retain or buffer the discarded text.
+    diagnostics = _RequestOutput(threading.get_ident(), forward=sys.stderr)
+    with contextlib.redirect_stdout(_RequestOutput()), \
+            contextlib.redirect_stderr(diagnostics):
+        return _serve_mcp_frames(stream_in, stream_out)
+
+
+def _serve_mcp_frames(stream_in, stream_out) -> int:
+    """Process frames while ordinary stdout is isolated from the wire."""
+
     from runlog import event
     from stdio_frames import read_frame
 
@@ -488,8 +534,10 @@ def _handler_class(token: str):
             # A page in a browser can POST to localhost. It cannot read a token
             # printed in this terminal, and cross-origin rules stop it setting
             # this header at all without a preflight this server never answers.
-            return secrets.compare_digest(
-                self.headers.get("X-Revayat-Token", ""), token)
+            supplied = self.headers.get("X-Revayat-Token", "")
+            # HTTP headers may contain Latin-1, while compare_digest requires
+            # ASCII strings. Invalid credentials are a 401, not a lost reply.
+            return supplied.isascii() and secrets.compare_digest(supplied, token)
 
         def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler's name
             if not self._authorised():
@@ -568,6 +616,9 @@ def serve_http(port: int = 8765, token: str | None = None,
             f"refusing to bind {host!r}: this server runs pipeline stages that "
             f"write files, and it is only safe on loopback"
         )
+    if token is not None and (not isinstance(token, str) or any(
+            not 0x21 <= ord(char) <= 0x7E for char in token)):
+        raise ValueError("HTTP token must be printable ASCII without whitespace")
     token = token or secrets.token_urlsafe(24)
 
     class Loopback(ThreadingHTTPServer):

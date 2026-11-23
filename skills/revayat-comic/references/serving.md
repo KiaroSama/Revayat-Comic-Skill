@@ -64,6 +64,13 @@ Two stages capturing at once each restore the other's stdout, and the caller
 receives someone else's report with nothing raising — a wrong answer that parses
 is the worst shape a transport can fail in.
 
+MCP reserves stdout for protocol frames throughout the connection. Stage
+captures accept output only from their request thread, so a provider that times
+out and later prints cannot corrupt the protocol or another stage's report.
+These intercepted writes are discarded; the provider's sanitized result status
+remains available in the stage report. Between MCP requests, stderr likewise
+accepts only the service thread's diagnostics, suppressing late worker output.
+
 In practice the queue costs little: these stages are CPU-bound image work that
 would contend anyway. If you ever need real parallelism, the fix is to stop
 using process-global stdout as the return channel, not to remove the lock.
@@ -86,7 +93,10 @@ The HTTP transport therefore:
 - **requires a token**, printed to stderr at startup and sent as
   `X-Revayat-Token`. A page in a browser can POST to `localhost`; it cannot read
   a token from the terminal, and it cannot set that header cross-origin without
-  a preflight this server never answers.
+  a preflight this server never answers. A custom `--token` must use printable
+  ASCII without whitespace; invalid configured values are refused before the
+  server starts. Malformed incoming tokens receive the same `401` as any other
+  incorrect token.
 - **ends the connection when it rejects a request before reading the body.**
   The body is still in the socket, and on a keep-alive connection the next read
   would start in the middle of it — so a rejected call could be followed by a

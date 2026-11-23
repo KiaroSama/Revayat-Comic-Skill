@@ -4,7 +4,8 @@
 
 use pyo3::prelude::*;
 use pyo3::types::{
-    PyBool, PyBytes, PyDict, PyFloat, PyFrozenSet, PyInt, PyList, PySet, PyString, PyTuple,
+    PyBool, PyByteArray, PyByteArrayMethods, PyBytes, PyDict, PyFloat, PyFrozenSet, PyInt, PyList,
+    PySet, PyString, PyTuple,
 };
 use serde_json::{Map, Value, json};
 
@@ -93,6 +94,9 @@ pub fn from_py(obj: &Bound<'_, PyAny>) -> Result<Value, String> {
     }
     if obj.is_instance_of::<PyBytes>() {
         return Ok(json!({"$bytes": obj.extract::<Vec<u8>>().map_err(|e| e.to_string())?}));
+    }
+    if let Ok(buffer) = obj.cast::<PyByteArray>() {
+        return Ok(json!({"$bytes": buffer.to_vec()}));
     }
     Err(type_error(obj))
 }

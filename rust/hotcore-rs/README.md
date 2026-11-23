@@ -11,12 +11,37 @@ Rust port of `skills/revayat-comic/scripts/hotcore/`, bridged with PyO3. Generat
 - `body_bounds` (`skills/revayat-comic/scripts/hotcore/geometry.py:140`)
 - `candidate_bodies` (`skills/revayat-comic/scripts/hotcore/geometry.py:168`)
 
-## Loop
+## Build and install
 
-```sh
-rust-anything record .   # record what the TS code does
-rust-anything build .    # build the PyO3 module
-rust-anything diff .     # run the recorded cases against Rust
-rust-anything shadow .   # run both in the app, log mismatches
-rust-anything gate .     # fmt, clippy, tests, unsafe, API, diff
+Use Python 3.12 or later and Rust 1.97 or later with a working platform linker.
+From the repository root, in the Python environment that runs Revayat Comic:
+
+```console
+python -m pip install ./rust/hotcore-rs
 ```
+
+The PEP 517 build installs a wheel containing `hotcore_rs._native` and its
+Python package. A plain `cargo build` only produces the Rust library; it does
+not install an importable Python package. The installed extension can be used
+from any working directory, including when the skill is copied outside this
+repository.
+
+The skill's `hotcore` loader automatically selects the installed extension.
+Set `REVAYAT_HOTCORE=python` before importing it to force the reference kernels.
+
+## Verification
+
+After installing the wheel, run these commands from the repository root:
+
+```console
+cargo test --manifest-path rust/hotcore-rs/Cargo.toml
+python -m pytest tests/test_hotcore_parity.py tests/test_native_geometry_boundaries.py -q
+```
+
+The native CI lane asserts that `hotcore.BACKEND` is `rust` before running the
+parity tests. Without a compiled extension the same tests exercise the Python
+reference, so a passing reference-only run is not native verification.
+
+The bindings originated in rust-anything. If they are regenerated, preserve
+the `bytearray` conversion in `src/pyconv.rs` and re-run the installed-wheel
+tests; the reference mask scans accept both `bytes` and `bytearray`.

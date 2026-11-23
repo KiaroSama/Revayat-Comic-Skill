@@ -22,6 +22,17 @@ def load_image(path: str | os.PathLike[str]):
         with Image.open(stream) as image:
             if image.width * image.height > MAX_PAGE_PIXELS:
                 raise ValueError("image exceeds the decoded-pixel limit")
+            # The document represents one raster per page. Silently taking the
+            # first TIFF page or animation frame loses the rest when cleaned
+            # or exported as PDF. Probe only the next frame, not the full count.
+            try:
+                image.seek(1)
+            except EOFError:
+                image.seek(0)
+            else:
+                raise ValueError(
+                    f"{os.path.basename(path)} is a multi-frame image, which is not supported; "
+                    "split its pages or frames into separate images before importing")
             return image.convert("RGB")
 
 

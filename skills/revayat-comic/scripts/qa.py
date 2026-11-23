@@ -272,11 +272,19 @@ def _normalise(payload: Any, page_id: str) -> tuple[list[dict[str, Any]], int]:
         if not isinstance(item, dict) or item.get("code") not in VISUAL_CODES:
             dropped += 1
             continue
+        region = str(item.get("region") or "")
+        note = str(item.get("note") or "")[:400]
+        try:
+            region.encode("utf-8", errors="strict")
+            note.encode("utf-8", errors="strict")
+        except UnicodeEncodeError:
+            dropped += 1
+            continue
         kept.append({
             "code": item["code"],
             "page": page_id,
-            "region": str(item.get("region") or ""),
-            "note": str(item.get("note") or "")[:400],
+            "region": region,
+            "note": note,
         })
     return kept, dropped
 
@@ -510,13 +518,17 @@ def check_document(doc_path: str | Path, *, strict: bool = False,
         certify.certify_artifact(findings, root, page, policy)
         certify.certify_cleaning(findings, root, page)
         final = page.get("final")
-        if final:
-            final_path = root / final
+        # An erasure-only edition ships the clean directly. Its certificate
+        # proves provenance; it still needs the same pixel-preservation gate.
+        finished = final or page.get("clean")
+        if finished:
+            final_path = root / finished
             if not final_path.exists():
-                findings.add("page-missing", page["id"], f"{final} is gone")
+                findings.add("page-missing", page["id"], f"{finished} is gone")
             else:
-                certify.certify_delivery(findings, root, page, final)
-                mask_name = page.get("writable") or page.get("mask")
+                if final:
+                    certify.certify_delivery(findings, root, page, final)
+                mask_name = (page.get("writable") if final else None) or page.get("mask")
                 changed, total, worst = compare_outside_mask(
                     original, final_path, root / mask_name if mask_name else None
                 )

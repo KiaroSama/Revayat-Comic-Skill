@@ -404,6 +404,16 @@ def call(provider, role: str, *args, timeout: float = DEFAULT_TIMEOUT,
         return Result(False, "refused", label, role,
                       detail="the provider declined to answer",
                       elapsed=elapsed)
+    if isinstance(value, str):
+        try:
+            value.encode("utf-8", errors="strict")
+        except UnicodeEncodeError:
+            # JSON can decode escaped lone surrogates, but comic.json is UTF-8.
+            # Advisory vision text is stored too. Refuse invalid text before
+            # it can abort a page save and discard the other accepted answers.
+            return Result(False, "error", label, role,
+                          detail="the provider returned invalid Unicode text",
+                          elapsed=elapsed)
     if role in {"ocr", "translation"}:
         if not isinstance(value, str):
             return Result(False, "error", label, role,

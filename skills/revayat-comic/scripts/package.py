@@ -340,6 +340,11 @@ def _check_pdf(findings: Findings, package: Path, doc: dict[str, Any],
                 want = doc["pages"][index]
                 from pagegeometry import pdf_points
                 expected_points = pdf_points(want)
+                if any(abs(a - b) > 0.01 for a, b in zip(
+                    (page.rect.width, page.rect.height), expected_points
+                )):
+                    findings.add("archive-page-size", package.name,
+                                 f"page {index + 1} differs from its known physical PDF dimensions")
                 ratio = expected_points[0] / expected_points[1]
                 shown = (page.rect.width / page.rect.height
                          if page.rect.height else 0)
@@ -382,6 +387,36 @@ def _format_of(package: Path) -> str:
         return "cbz"
     if _looks_like_pdf(package):
         return "pdf"
+    return ""
+
+
+def _pdf_manifest_problem(manifest: Any, doc: dict[str, Any]) -> str:
+    """Require one identified, dimensioned row per sheet before trusting proof.
+
+    Container hashes and per-page visibility remain alternative proof paths,
+    but neither can replace the page inventory the edition claims. An absent
+    inventory used to skip verification entirely, including for changed PDFs.
+    """
+    from pagegeometry import pdf_points
+
+    if (not isinstance(manifest, list) or not manifest
+            or len(manifest) != len(doc["pages"])):
+        return "this PDF edition has incomplete page evidence; export it again"
+    names: set[str] = set()
+    for index, row in enumerate(manifest):
+        if not isinstance(row, dict):
+            return "this PDF edition has malformed page evidence; export it again"
+        name = row.get("name")
+        if (not isinstance(name, str) or not name.strip() or name in names
+                or row.get("page") != doc["pages"][index]["id"]):
+            return "this PDF edition has missing, repeated or unordered page identities; export it again"
+        names.add(name)
+        if any(type(row.get(key)) is not int or row[key] <= 0 for key in ("width", "height")):
+            return "this PDF edition has invalid native page dimensions; export it again"
+        try:
+            pdf_points(row)
+        except ValueError:
+            return "this PDF edition has invalid physical page dimensions; export it again"
     return ""
 
 
@@ -431,6 +466,14 @@ def check_package(package: str | Path, doc_path: str | Path) -> dict[str, Any]:
                                   "evidence. Restore its export record or export it again")
         # Keep usable rows for count/name/hash diagnostics even when proof is incomplete.
         manifest = safe_rows
+    elif fmt == "pdf":
+        evidence_problem = _pdf_manifest_problem(manifest, doc)
+        if evidence_problem:
+            problem = problem or evidence_problem
+            # Invalid row positions cannot support per-sheet content claims.
+            # Still inspect the PDF's count and shape, reporting the missing
+            # evidence as unverified rather than calling its pixels corrupt.
+            manifest = []
     if problem:
         findings.add("archive-unverified", package.name, problem)
 

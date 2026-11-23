@@ -13,7 +13,8 @@ _ALL_ISOLATES = _ISOLATES + PDI
 _LEADING_MARKS = _ALL_ISOLATES + "‎‏؜﻿\"'"
 _PERSIAN = re.compile(r"[؀-ۿݐ-ݿࢠ-ࣿﭐ-﷿ﹰ-ﻼ]")
 _PROTECTED = re.compile(
-    r"(?ms)^ {0,3}(?P<fence>`{3,}|~{3,})[^\n]*\n.*?(?:^ {0,3}(?P=fence)[ \t]*(?=\r?$)|\Z)"
+    r"(?ms)^ {0,3}(?P<fence>(?P<marker>[`~])(?P=marker){2,})(?!(?P=marker))[^\n]*\n.*?"
+    r"(?:^ {0,3}(?P=fence)(?P=marker)*[ \t]*(?=\r?$)|\Z)"
     r"|(?P<code>`+)[^\r\n]*?(?P=code)"
     r"|(?P<address>(?i:https?://|www\.)[^\s<>\"'«»⁦-⁩`]+"
     r"|\b[\w.+%-]+@[\w-]+(?:\.[\w-]+)+)"

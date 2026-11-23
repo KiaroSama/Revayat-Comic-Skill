@@ -1,0 +1,13 @@
+[build-system]
+requires = ["maturin>=1.12,<2"]
+build-backend = "maturin"
+
+[project]
+name = "pixcore-rs"
+version = "0.1.0"
+description = "Optional native pixel QA kernels for Revayat Comic"
+requires-python = ">=3.12"
+
+[tool.maturin]
+python-source = "python"
+module-name = "pixcore_rs._native"

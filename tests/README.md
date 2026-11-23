@@ -45,7 +45,7 @@ worker join). The tiny lifecycle controls need no comic/image setup. One-shot by
 regressions retain malformed-frame/healthy-next-request assertions through the shared
 owner; each E2E stage has a 180-second wall/60-second idle ceiling.
 
-The seven full-suite lanes still discover the entire `tests` directory. PDF and
+The ten full-suite lanes discover the entire `tests` directory. PDF and
 fallback packages cannot skip in lanes installing them; Linux also requires RAQM,
 CJK and the real RAR reader. The named Windows/macOS RAQM/CJK/RAR gaps remain
 accepted. Empty/truncated JUnit is not evidence. Weekly CBR runs the reader file
@@ -56,3 +56,20 @@ workflow execution. Runtime-only CLI/E2E lanes remain separate from developer to
 
 Fonts, generated pages, test packages and logs remain temporary. File-processing
 tests on an operator's real comic are separate from these portable regression fixtures.
+
+Main CI runs automatically for pull requests and pushes to `main`, so checks
+belong to the current revision. Manual dispatch remains available. The optional
+integration and source-evidence workflows remain manual.
+
+Six additional native Python lanes install both crates as actual wheels on
+Linux, macOS and Windows with Python 3.12 and 3.14. They require both loaders to
+report `rust` before running parity and geometry-boundary tests; successful
+Cargo compilation alone does not prove that Python loaded the extension.
+Native JUnit and resolved dependency versions are retained on failure too.
+The Rust source checks also exercise the declared Rust 1.97 minimum, alongside
+the current stable compiler, without changing the existing stable check name.
+
+For a local proxy-configured machine, bypass the proxy for `localhost`,
+`127.0.0.1`, `::1` and `[::1]` while exercising loopback HTTP tests. Python's
+urllib checks the bracketed IPv6 host when the request URL contains `[::1]`.
+Do not change production proxy settings to make these local tests pass.
