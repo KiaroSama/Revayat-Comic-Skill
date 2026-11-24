@@ -188,7 +188,7 @@ jobs:
         with:
           python-version: '3.13'
 
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           name: revayat-comic-bin-${{ matrix.platform }}
           path: bin/
@@ -327,7 +327,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           pattern: revayat-comic-signed-*
           path: dist/
