@@ -63,16 +63,6 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
 name = "num-bigint"
-version = "0.4.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c89e69e7e0f03bea5ef08013795c25018e101932225a656383bd384495ecc367"
-dependencies = [
- "num-integer",
- "num-traits",
-]
-
-[[package]]
-name = "num-bigint"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "93e7820bc0a80a0238e650327316f929ba18d5be054b647490a3a6a339f3e7c0"
@@ -127,8 +117,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "229ca13b8a15bb0d1487b81ab975bfcd97513416499a8312011b6036e42e0de4"
 dependencies = [
  "libc",
- "num-bigint 0.4.8",
- "num-traits",
  "once_cell",
  "portable-atomic",
  "pyo3-build-config",
@@ -239,7 +227,7 @@ name = "textcore-rs"
 version = "0.1.0"
 dependencies = [
  "fancy-regex",
- "num-bigint 0.5.1",
+ "num-bigint",
  "pyo3",
  "regex",
  "unicode-general-category",

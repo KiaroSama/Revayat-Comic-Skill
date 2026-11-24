@@ -20,7 +20,7 @@ packcore_rs = { package = "packcore-rs", path = "../packcore-rs", default-featur
 pixcore_rs = { package = "pixcore-rs", path = "../pixcore-rs", default-features = false }
 qacore_rs = { package = "qacore-rs", path = "../qacore-rs", default-features = false }
 textcore_rs = { package = "textcore-rs", path = "../textcore-rs", default-features = false }
-num-bigint = "0.4.8"
+num-bigint = "0.5.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["float_roundtrip"] }
 time = { version = "0.3.55", default-features = false, features = ["std"] }

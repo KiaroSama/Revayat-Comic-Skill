@@ -5,8 +5,8 @@
 # Core — required for every run.
 pillow>=13.0.0                # page IO and the Persian text renderer
 numpy>=2.5.5                   # every pixel measurement
-# 4.10.0.84 is the first opencv-python-headless wheel built against the NumPy 2
-# ABI for Python 3.12+. Older 4.8/4.9 wheels crash at import under NumPy 2.5+.
+# 5.1.0.95 is the declared opencv-python-headless floor built against NumPy 2
+# for Python 3.12+ (matching the literal CI floor lane).
 opencv-python-headless>=5.1.0.95 # balloon detection, masks, inpainting
 
 # Strongly recommended. Without it CBZ, CBR and folders still work, but PDF

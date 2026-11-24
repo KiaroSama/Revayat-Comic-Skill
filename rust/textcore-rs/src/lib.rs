@@ -5,11 +5,37 @@
 #[cfg(feature = "python")]
 use num_bigint::BigInt;
 #[cfg(feature = "python")]
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
+#[cfg(feature = "python")]
+use pyo3::types::{PyBool, PyInt};
 
 pub mod port;
+
+#[cfg(feature = "python")]
+fn extract_bigint(obj: &Bound<'_, PyAny>) -> PyResult<BigInt> {
+    if obj.is_instance_of::<PyBool>() || !obj.is_instance_of::<PyInt>() {
+        return Err(PyTypeError::new_err(format!(
+            "'{}' object cannot be interpreted as an integer",
+            obj.get_type().name()?
+        )));
+    }
+    if let Ok(value) = obj.extract::<i128>() {
+        return Ok(BigInt::from(value));
+    }
+    let bit_len: usize = obj.call_method0("bit_length")?.extract()?;
+    let byte_len = (bit_len / 8) + 1;
+    let bytes: Vec<u8> = obj
+        .call_method1("to_bytes", (byte_len, "little", true))?
+        .extract()?;
+    Ok(BigInt::from_signed_bytes_le(&bytes))
+}
+
+#[cfg(feature = "python")]
+fn extract_bigint_vec(items: Vec<Bound<'_, PyAny>>) -> PyResult<Vec<BigInt>> {
+    items.iter().map(extract_bigint).collect()
+}
 
 #[cfg(feature = "python")]
 fn error(message: String) -> PyErr {
@@ -47,11 +73,14 @@ fn normalize_persian_text(text: String) -> PyResult<String> {
 #[cfg(feature = "python")]
 #[pyfunction]
 fn balanced_wrap_lines(
-    word_widths: Vec<BigInt>,
-    space_width: BigInt,
-    band_widths: Vec<BigInt>,
+    word_widths: Vec<Bound<'_, PyAny>>,
+    space_width: &Bound<'_, PyAny>,
+    band_widths: Vec<Bound<'_, PyAny>>,
 ) -> PyResult<Vec<Vec<usize>>> {
-    port::balanced_wrap_lines(word_widths, space_width, band_widths).map_err(error)
+    let words = extract_bigint_vec(word_widths)?;
+    let space = extract_bigint(space_width)?;
+    let bands = extract_bigint_vec(band_widths)?;
+    port::balanced_wrap_lines(words, space, bands).map_err(error)
 }
 
 #[cfg(feature = "python")]
