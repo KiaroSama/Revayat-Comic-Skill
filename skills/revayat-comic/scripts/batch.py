@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Literal, NotRequired, TypedDict
 
 import pageir as ir
+import stages as stage_tools
 from workspace import destination_claim
 
 MANIFEST = "batch-manifest.json"
@@ -164,7 +165,7 @@ def _stage_slice(stages: dict, ids: set[str]) -> dict:
     result = deepcopy(stages)
     for record in result.values():
         for field in _PAGE_STAGE_MAPS:
-            if field in record:
+            if isinstance(record.get(field), dict):
                 record[field] = {key: val for key, val in record[field].items() if key in ids}
         for need, pages in (record.get("needs") or {}).items():
             record["needs"][need] = {key: val for key, val in pages.items() if key in ids}
@@ -175,12 +176,20 @@ def _merge_page_stages(result: dict, source: dict, pid: str) -> None:
     for stage in sorted(result.keys() | source.keys()):
         record = source.get(stage)
         if stage not in result:
-            result[stage] = {"scheme": record.get("scheme"), "pages": {},
-                             "page_options": {}, "needs": {}}
+            result[stage] = _stage_slice({stage: record}, set())[stage]
         target = result[stage]
+        if (record and record.get("scheme") == stage_tools.SCHEME
+                and target.get("scheme") != stage_tools.SCHEME):
+            # A recomputed worker can establish current evidence for its own
+            # pages without claiming the untouched legacy pages were rerun.
+            target = result[stage] = {
+                **deepcopy(record), "pages": {}, "page_options": {}, "needs": {},
+            }
         for field in _PAGE_STAGE_MAPS:
-            target.get(field, {}).pop(pid, None)
-            if record and target.get("scheme") == record.get("scheme") and pid in record.get(field, {}):
+            if isinstance(target.get(field), dict):
+                target[field].pop(pid, None)
+            if (record and target.get("scheme") == record.get("scheme")
+                    and isinstance(record.get(field), dict) and pid in record[field]):
                 target.setdefault(field, {})[pid] = record[field][pid]
         for rows in (target.get("needs") or {}).values():
             rows.pop(pid, None)
@@ -194,7 +203,7 @@ def _write_manifest(root: Path, manifest: BatchManifest) -> None:
     ir.write_text(root / MANIFEST, ir.dumps(manifest) + "\n")
 
 
-def _shared_digest(doc: dict) -> str:
+def _shared_digest(doc: dict, *, legacy: bool = False) -> str:
     """Bind worker decisions to the chapter-wide inputs they actually used."""
     shared = deepcopy({key: value for key, value in doc.items()
                        if key not in {"pages", "stages"}})
@@ -203,6 +212,12 @@ def _shared_digest(doc: dict) -> str:
     # mode and its freshness options belong to each page, as in stages.py.
     shared.get("meta", {}).pop("free_lettering_mask", None)
     shared.get("source", {}).pop("page_count", None)
+    if not legacy:
+        shared.get("meta", {}).pop("stage_seq", None)
+        # Planning adds only a local page count to documents predating `source`.
+        # Absence and an empty source carry the same inputs; real fields still bind.
+        if not shared.get("source"):
+            shared.pop("source", None)
     payload = json.dumps(shared, ensure_ascii=False, sort_keys=True, allow_nan=False)
     return ir.sha256_bytes(payload.encode("utf-8"))
 
@@ -234,12 +249,6 @@ def _snapshot(batch: Path) -> dict:
 def _check_snapshot(root: Path, doc: dict, snapshot: dict, pending: dict[Path, Path],
                     before: str, assets: dict[str, str | None]) -> bool:
     """Return True for an exact no-op replay, False for frozen base, raise on stale overwrite."""
-    if before == snapshot["document"] and assets == snapshot["assets"]:
-        for target in pending:
-            name = target.relative_to(root).as_posix()
-            if name not in snapshot["assets"] and target.exists():
-                raise ValueError(f"chapter asset changed after the batch snapshot: {name}")
-        return False
     expected = dict(snapshot["assets"])
     expected.update({target.relative_to(root).as_posix(): ir.sha256_file(source)
                      for target, source in pending.items()})
@@ -252,6 +261,12 @@ def _check_snapshot(root: Path, doc: dict, snapshot: dict, pending: dict[Path, P
                 break
         else:
             return True
+    if before == snapshot["document"] and assets == snapshot["assets"]:
+        for target in pending:
+            name = target.relative_to(root).as_posix()
+            if name not in snapshot["assets"] and target.exists():
+                raise ValueError(f"chapter asset changed after the batch snapshot: {name}")
+        return False
     raise ValueError("chapter changed after the batch snapshot; preserve drafts and reconcile before replanning")
 
 
@@ -459,10 +474,14 @@ def merge_shards(batch_dir: str | Path, into: str | Path) -> dict[str, Any]:
             locks.enter_context(ir.workspace_lock(shard, what="merge-shards"))
         doc = _doc(root)
         snapshot = _snapshot(batch)
-        if _shared_digest(doc) != snapshot["shared"]:
+        shared = _shared_digest(doc)
+        # Existing plans used the same inputs with two bookkeeping differences.
+        # Recognize that exact historical hash of the canonical document, then
+        # compare workers using normalized inputs; frozen bytes still gate writes.
+        if snapshot["shared"] not in {shared, _shared_digest(doc, legacy=True)}:
             raise ValueError("shared chapter inputs changed after the batch snapshot")
         before, assets = ir.sha256_file(root / "comic.json"), _asset_snapshot(root, doc)
-        pending = _prepare_merge(root, doc, shards, snapshot["shared"],
+        pending = _prepare_merge(root, doc, shards, shared,
                                  snapshot["assets"].get("glossary.json"))
         if not _check_snapshot(root, doc, snapshot, pending, before, assets):
             _publish(root, doc, pending)

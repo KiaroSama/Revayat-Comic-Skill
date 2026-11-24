@@ -63,6 +63,7 @@ def _native_scale(page, minimum: float, pymupdf) -> float:
             self.scale = minimum
             self.use_virtual_fill_image()
             self.use_virtual_fill_image_mask()
+            self.use_virtual_clip_image_mask()
 
         def fill_image(self, ctx, image, matrix, alpha, color_params):
             if alpha <= 0:
@@ -100,6 +101,11 @@ def _native_scale(page, minimum: float, pymupdf) -> float:
         def fill_image_mask(self, ctx, image, matrix, colorspace, color,
                             alpha, color_params):
             self.fill_image(ctx, image, matrix, alpha, color_params)
+
+        def clip_image_mask(self, ctx, image, matrix, scissor):
+            # Pattern-painted stencils are clipping operations rather than
+            # fill_image_mask calls, but their pixels still bound the detail.
+            self.fill_image(ctx, image, matrix, 1, None)
 
     device = ImageDensity()
     try:

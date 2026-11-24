@@ -193,3 +193,67 @@ def test_native_density_includes_associated_soft_mask(tmp_path, monkeypatch, ove
         page = ir.load_doc(report["document"])["pages"][0]
         assert (page["width"], page["height"]) == (1000, 1000)
         assert ir.load_image(tmp_path / "work" / page["image"]).tobytes() == expected
+
+
+def _stencil_pdf(path, *, pattern, nested):
+    """A thousand alternating source columns painted in one hundred points."""
+    pymupdf = pytest.importorskip("pymupdf")
+    with pymupdf.open() as pdf:
+        page = pdf.new_page(width=100, height=100)
+        mask = pdf.get_new_xref()
+        pdf.update_object(mask, "<< /Type /XObject /Subtype /Image /Width 1000 "
+                          "/Height 1000 /ImageMask true /BitsPerComponent 1 "
+                          "/Decode [0 1] >>")
+        pdf.update_stream(mask, b"\xaa" * 125_000)
+        paint = pdf.get_new_xref()
+        pdf.update_object(paint, "<< /Type /Pattern /PatternType 1 /PaintType 1 "
+                          "/TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 "
+                          "/Resources << >> >>")
+        pdf.update_stream(paint, b"0 g 0 0 10 10 re f")
+        pdf.xref_set_key(page.xref, "Resources", f"<< /XObject << /M {mask} 0 R >> "
+                         f"/Pattern << /P {paint} 0 R >> >>")
+        content = pdf.get_new_xref()
+        pdf.update_object(content, "<< >>")
+        color = b"/Pattern cs /P scn" if pattern else b"0 g"
+        pdf.update_stream(content, b"q " + color + b" 100 0 0 100 0 0 cm /M Do Q")
+        pdf.xref_set_key(page.xref, "Contents", f"{content} 0 R")
+        if nested:
+            with pymupdf.open() as wrapper:
+                outer = wrapper.new_page(width=100, height=100)
+                outer.show_pdf_page(outer.rect, pdf, 0)
+                wrapper.save(path)
+        else:
+            pdf.save(path)
+    return path
+
+
+@pytest.mark.parametrize("pattern", [False, True])
+@pytest.mark.parametrize("nested", [False, True])
+def test_import_preserves_native_stencil_detail(tmp_path, pattern, nested):
+    pymupdf = pytest.importorskip("pymupdf")
+    source = _stencil_pdf(tmp_path / "source.pdf", pattern=pattern, nested=nested)
+    with pymupdf.open(source) as pdf:
+        reference = pdf[0].get_pixmap(matrix=pymupdf.Matrix(10, 10), alpha=False)
+        assert set(reference.samples) == {0, 255}
+        expected = reference.samples
+
+    result = readers.import_source(source, tmp_path / "work", dpi=72)
+    page = ir.load_doc(result["document"])["pages"][0]
+    assert (page["width"], page["height"]) == (1000, 1000)
+    assert page["pdf_points"] == [100, 100]
+    assert ir.load_image(tmp_path / "work" / page["image"]).tobytes() == expected
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_pattern_stencil_limit_refuses_before_raster_allocation(tmp_path, monkeypatch, nested):
+    pymupdf = pytest.importorskip("pymupdf")
+    source = _stencil_pdf(tmp_path / "source.pdf", pattern=True, nested=nested)
+    monkeypatch.setattr(readers, "MAX_PAGE_PIXELS", 100_000)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("an over-budget stencil reached raster allocation")
+
+    monkeypatch.setattr(pymupdf.Page, "get_pixmap", forbidden)
+    with pytest.raises(ValueError, match="native-resolution.*pixel limit"):
+        readers.import_source(source, tmp_path / "work", dpi=72)
+    assert not (tmp_path / "work" / "comic.json").exists()

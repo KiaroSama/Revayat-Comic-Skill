@@ -234,7 +234,10 @@ jobs:
           import sys
           from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
-          members = (f"bin/{os.environ['BIN_NAME']}", "LICENSE", "README.md", "docs/signing/publisher.json")
+          members = (
+              f"bin/{os.environ['BIN_NAME']}", "LICENSE", "README.md",
+              "rust/revayat-comic-cli/README.md", "docs/signing/publisher.json",
+          )
           metadata = Path(members[-1]).read_bytes()
           publisher = json.loads(metadata.decode("utf-8"))
           assert b"PRIVATE KEY" not in metadata
