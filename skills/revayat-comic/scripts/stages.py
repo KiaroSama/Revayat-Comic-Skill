@@ -360,8 +360,8 @@ def _why(stage: str, page_id: str, record: dict[str, Any],
         return "it has not run for"
     consumed = record.get("needs") or {}
     for need in sorted(STAGE_NEEDS.get(stage, ())):
-        was = (consumed.get(need) or {}).get(page_id)
-        now = _page_revisions(stages.get(need) or {}).get(page_id)
+        was = (consumed.get(need) or {}).get(page_id) or "unknown"
+        now = _page_revisions(stages.get(need) or {}).get(page_id) or "unknown"
         if was != now:
             return f"`{need}` has run again since, for"
     return "the inputs changed after it ran, for"

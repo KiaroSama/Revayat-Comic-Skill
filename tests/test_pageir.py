@@ -346,7 +346,8 @@ def test_remasking_then_recleaning_settles_instead_of_staying_stale_forever():
     _all_fresh(doc, "detect", "masks", "clean")
 
     stages.stamp_stage(doc, "masks", {"written": 1}, options={"grow": 6})
-    assert "clean" in stages.stale_stages(doc)
+    assert stages.stale_stages(doc)["clean"] == (
+        "`masks` has run again since, for 2 page(s): p0001, p0002")
 
     # The SAME clean summary as before — equal counts, different pixels.
     stages.stamp_stage(doc, "clean", {"ran": True})
@@ -436,13 +437,23 @@ def test_the_retired_counter_is_not_left_behind():
     assert "stage_seq" not in doc["meta"]
 
 
-def test_recomputed_stage_treats_legacy_upstream_counts_as_unverified():
+@pytest.mark.parametrize("upstream", ["legacy-counter", "missing"])
+def test_recomputed_stage_treats_legacy_upstream_counts_as_unverified(upstream):
     doc = _doc()
-    doc["stages"]["crops"] = {"fingerprint": "old-build", "pages": len(doc["pages"])}
+    if upstream == "legacy-counter":
+        doc["stages"]["crops"] = {"fingerprint": "old-build", "pages": len(doc["pages"])}
     stages.stamp_stage(doc, "ocr", {"read": 1})
     assert stages.stale_pages(doc, "ocr") == []
     assert set(doc["stages"]["ocr"]["needs"]["crops"].values()) == {"unknown"}
-    assert "crops" in stages.unverified_stages(doc)
+    if upstream == "legacy-counter":
+        assert "crops" in stages.unverified_stages(doc)
     # Editing page geometry must still explain staleness with old dependencies.
     doc["pages"][0]["regions"][0]["bbox"][0] += 1
-    assert "ocr" in stages.stale_stages(doc)
+    expected = "the inputs changed after it ran, for 1 page(s): p0001"
+    assert stages.stale_stages(doc)["ocr"] == expected
+    # A missing consumed revision has the same meaning as the unknown sentinel.
+    del doc["stages"]["ocr"]["needs"]["crops"]["p0001"]
+    assert stages.stale_stages(doc)["ocr"] == expected
+    stages.stamp_stage(doc, "crops", {"rendered": 1}, pages=["p0001"])
+    assert stages.stale_stages(doc)["ocr"] == (
+        "`crops` has run again since, for 1 page(s): p0001")
