@@ -14,16 +14,40 @@ updates:
     open-pull-requests-limit: 1
 
   - package-ecosystem: cargo
-    directory: /rust/hotcore-rs
+    directories:
+      - /rust/hotcore-rs
+      - /rust/pixcore-rs
+      - /rust/maskcore-rs
+      - /rust/textcore-rs
+      - /rust/detectcore-rs
+      - /rust/qacore-rs
+      - /rust/cleancore-rs
+      - /rust/layoutcore-rs
+      - /rust/packcore-rs
     schedule:
       interval: weekly
     open-pull-requests-limit: 1
+    groups:
+      rust-crates:
+        patterns: ["*"]
 
-  - package-ecosystem: cargo
-    directory: /rust/pixcore-rs
+  - package-ecosystem: pip
+    directories:
+      - /rust/hotcore-rs
+      - /rust/pixcore-rs
+      - /rust/maskcore-rs
+      - /rust/textcore-rs
+      - /rust/detectcore-rs
+      - /rust/qacore-rs
+      - /rust/cleancore-rs
+      - /rust/layoutcore-rs
+      - /rust/packcore-rs
     schedule:
       interval: weekly
     open-pull-requests-limit: 1
+    groups:
+      maturin-build:
+        patterns: ["*"]
 
   # Keep Actions proposals grouped.
   - package-ecosystem: github-actions

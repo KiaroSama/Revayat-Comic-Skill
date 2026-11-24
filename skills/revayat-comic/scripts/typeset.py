@@ -169,6 +169,15 @@ def typeset_page(
     #: side by side is the ordinary case, not a corner one.
     authority: dict[str, Any] = {}
     enclosed: set[str] = set()
+    flat_guards = {}
+    panels = {panel["id"]: panel["bbox"] for panel in page.get("panels", [])}
+    sibling_balloons = [(r["id"], ir.expand_bbox(r["balloon"], 3, *size))
+                        for r in page.get("regions", []) if not r.get("dropped") and r.get("balloon")]
+    cv2 = mask_tools._cv2()
+    dark_art = cv2.cvtColor(clean_rgb, cv2.COLOR_RGB2GRAY) < 185
+    wall_kernel = np.ones((7, 7), np.uint8)
+    side = max(1, min(min_size, *size))
+    usable_kernel = np.ones((side, side), np.uint8)
     bold_font = find_font_variant(font_path, bold=True)
     writable = np.zeros((page["height"], page["width"]), np.uint8)
     union = page.get("mask")
@@ -180,20 +189,49 @@ def typeset_page(
                 or region["kind"] == "sfx" and policy in ("bilingual", "annotate")):
             continue
         own = np.zeros((page["height"], page["width"]), np.uint8)
-        if region.get("mask") :
+        if region.get("mask"):
             try:
-                own = np.maximum(own, mask_tools.load_mask(root / region["mask"]))
-            except Exception:  # pragma: no cover - a mask file that went away
+                mask = mask_tools.load_mask(root / region["mask"])
+                if mask.shape == own.shape:
+                    own = mask.copy()
+                elif region.get("mask_box"):
+                    bx, by, bw, bh = region["mask_box"]
+                    own[by:by + bh, bx:bx + bw] = mask
+            except (OSError, ValueError):  # An unavailable mask does not grant extra authority.
                 pass
-        interior = balloon_text_interior(clean_rgb, region, size)
+        rid = region["id"]
+        interior = balloon_text_interior(clean_rgb, region, size, panel=panels.get(region.get("panel")))
+        blocked = None
         if interior is not None:
-            enclosed.add(region["id"])
+            enclosed.add(rid)
             own = interior
-        elif region.get("mask_box"):
-            # Free lettering has no balloon, so the authorised area is the
-            # box the region was masked at — approved geometry either way.
+        elif region.get("polarity") != "dark":
+            x, y, w, h = box = ir.clamp_bbox(region["bbox"], *size)
+            if w and h:
+                blocked = np.zeros((h, w), np.uint8)
+                for other_id, balloon_box in sibling_balloons:
+                    ox, oy, ow, oh = map(int, ir.bbox_intersection(box, balloon_box))
+                    if other_id != rid and ow and oh:
+                        blocked[oy - y:oy - y + oh, ox - x:ox - x + ow] = 1
+                gx, gy, gw, gh = ir.expand_bbox(box, 3, *size)
+                roi = np.s_[gy:gy + gh, gx:gx + gw]
+                dark = dark_art[roi] & (own[roi] == 0)
+                if dark.any():
+                    walls = cv2.dilate(dark.astype(np.uint8), wall_kernel)
+                    walls = walls[y - gy:y - gy + h, x - gx:x - gx + w]
+                    white = 1 - (blocked | walls)
+                    # Keep the normal layout on textured artwork with no usable paper band.
+                    if cv2.erode(white, usable_kernel, borderType=cv2.BORDER_CONSTANT, borderValue=0).any():
+                        blocked |= walls
+                if blocked.any():
+                    flat_guards[rid] = (x, y, blocked.astype(bool))
+        if interior is None and region.get("mask_box"):
+            # Free lettering is authorised in the box the region was masked at.
             bx, by, bw, bh = region["mask_box"]
             own[by:by + bh, bx:bx + bw] = 255
+        if rid in flat_guards:
+            gx, gy, guard = flat_guards[rid]
+            own[gy:gy + guard.shape[0], gx:gx + guard.shape[1]][guard] = 0
         writable = np.maximum(writable, own)
         rows = np.flatnonzero(own.any(axis=1))
         columns = np.flatnonzero(own.any(axis=0))
@@ -236,6 +274,9 @@ def typeset_page(
             if other_id != rid:
                 ox, oy, ow, oh = ir.clamp_bbox(box, *size)
                 area[max(0, oy - 3):oy + oh + 3, max(0, ox - 3):ox + ow + 3] = 0
+        if rid in flat_guards:
+            gx, gy, guard = flat_guards[rid]
+            area[gy:gy + guard.shape[0], gx:gx + guard.shape[1]][guard] = 0
         return area
 
     def flat_fit(region, area, limit):
@@ -365,8 +406,17 @@ def typeset_page(
                 canvas, text, drawn, shaper, font_path, fill, stroke, np,
                 fit_region, _pil(), max_size=max_size, min_size=min_size)
             if done is not None:
-                painted.append(done.pop("box"))
-                record = {"status": "ok", **done}
+                guard_slot = flat_guards.get(region["id"])
+                if guard_slot is not None:
+                    gx, gy, guard = guard_slot
+                    roi = np.s_[gy:gy + guard.shape[0], gx:gx + guard.shape[1]]
+                    if np.any(np.asarray(canvas)[roi][guard] != before_region[roi][guard]):
+                        # Refit a transformed effect as flat type if it crossed a wall.
+                        canvas.paste(Image.fromarray(before_region))
+                        done = None
+                if done is not None:
+                    painted.append(done.pop("box"))
+                    record = {"status": "ok", **done}
             elif drawn["verdict"] in {"curved", "warped"}:
                 # A strongly stylised effect that will not fit its own shape.
                 # Setting it flat would replace an arc of hand lettering with a

@@ -92,8 +92,7 @@ def test_ci_keeps_its_evidence_on_failure_too():
 
 
 def test_the_floors_are_tested_as_well_as_the_latest():
-    """`pillow>=10.0` is a promise that the project works on Pillow 10, and
-    nothing tested it: CI resolved the latest of everything."""
+    """The runtime floor lane must exercise each declared minimum, including Pillow 13.0.0."""
     workflow = WORKFLOW.read_text(encoding="utf-8")
     assert "minimum-dependencies:" in workflow
     requirements = (ROOT / "skills" / "revayat-comic"
@@ -188,9 +187,7 @@ def test_no_workflow_deselects_part_of_the_suite():
 
 
 def test_the_floors_job_pins_exact_versions_not_patch_series():
-    """`==10.0.*` is a patch series: pip resolves it to the newest 10.0.x, so
-    the job tested whichever patch happened to be last rather than the floor
-    `pillow>=10.0` promises."""
+    """A patch wildcard allows pip to install a version above the declared floor."""
     import re
 
     workflow = WORKFLOW.read_text(encoding="utf-8")

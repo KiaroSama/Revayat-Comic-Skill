@@ -232,14 +232,14 @@ def _snapshot(batch: Path) -> dict:
 
 
 def _check_snapshot(root: Path, doc: dict, snapshot: dict, pending: dict[Path, Path],
-                    before: str, assets: dict[str, str | None]) -> None:
-    """Permit the frozen base or an exact no-op replay, never a stale overwrite."""
+                    before: str, assets: dict[str, str | None]) -> bool:
+    """Return True for an exact no-op replay, False for frozen base, raise on stale overwrite."""
     if before == snapshot["document"] and assets == snapshot["assets"]:
         for target in pending:
             name = target.relative_to(root).as_posix()
             if name not in snapshot["assets"] and target.exists():
                 raise ValueError(f"chapter asset changed after the batch snapshot: {name}")
-        return
+        return False
     expected = dict(snapshot["assets"])
     expected.update({target.relative_to(root).as_posix(): ir.sha256_file(source)
                      for target, source in pending.items()})
@@ -251,7 +251,7 @@ def _check_snapshot(root: Path, doc: dict, snapshot: dict, pending: dict[Path, P
             if actual != wanted:
                 break
         else:
-            return
+            return True
     raise ValueError("chapter changed after the batch snapshot; preserve drafts and reconcile before replanning")
 
 
@@ -464,8 +464,8 @@ def merge_shards(batch_dir: str | Path, into: str | Path) -> dict[str, Any]:
         before, assets = ir.sha256_file(root / "comic.json"), _asset_snapshot(root, doc)
         pending = _prepare_merge(root, doc, shards, snapshot["shared"],
                                  snapshot["assets"].get("glossary.json"))
-        _check_snapshot(root, doc, snapshot, pending, before, assets)
-        _publish(root, doc, pending)
+        if not _check_snapshot(root, doc, snapshot, pending, before, assets):
+            _publish(root, doc, pending)
     return {"document": str(root / "comic.json"), "pages": len(doc["pages"]), "shards": len(shards)}
 
 

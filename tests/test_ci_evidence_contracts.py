@@ -27,8 +27,13 @@ def test_native_ci_installs_and_requires_both_rust_backends():
     assert "  native-python:" in text, "compiled crates are never loaded by Python CI"
     job = text.split("  native-python:", 1)[1]
     assert "./rust/hotcore-rs ./rust/pixcore-rs" in job
+    for crate in (
+        "hotcore", "pixcore", "maskcore", "textcore", "detectcore",
+        "qacore", "cleancore", "layoutcore", "packcore",
+    ):
+        assert f"./rust/{crate}-rs" in job, crate
+        assert f"tests/test_{crate}_parity.py" in job, crate
     assert "hotcore.BACKEND == pixcore.BACKEND == 'rust'" in job
-    assert "tests/test_hotcore_parity.py" in job and "tests/test_pixcore_parity.py" in job
     assert "ubuntu-latest, macos-latest, windows-latest" in job
 
 

@@ -169,3 +169,22 @@ def test_legacy_page_mask_fallback_cannot_change_across_merge(chapter, tmp_path,
     masks.build_document(shard_document, pages=["p0029"], solid_free=source_solid)
     batch.merge_shards(folder, chapter)
     assert stages.stale_pages(ir.load_doc(document), "masks") == []
+
+
+def test_exact_replay_skips_republishing_assets(chapter, tmp_path, monkeypatch):
+    document = chapter / "comic.json"
+    masks.build_document(document, solid_free=False)
+    folder = _plan(chapter, tmp_path)
+    shard_document = folder / "shard-001" / "comic.json"
+    masks.build_document(shard_document, pages=["p0031"], solid_free=True)
+
+    batch.merge_shards(folder, chapter)
+    before = document.read_bytes()
+
+    def _forbid_publish(*_args, **_kwargs):
+        raise AssertionError("exact no-op replay must not call _publish")
+
+    monkeypatch.setattr(batch, "_publish", _forbid_publish)
+    report = batch.merge_shards(folder, chapter)
+    assert report["document"] == str(document.resolve())
+    assert document.read_bytes() == before

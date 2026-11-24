@@ -13,6 +13,7 @@ references/persian-review.md
 references/persian-typesetting.md
 references/recovery.md
 references/serving.md
+references/sfx-glossary.md
 references/sound-effects.md
 references/source-languages.md
 references/translation-log.md
@@ -50,9 +51,13 @@ scripts/batch.py
 scripts/bidi_rli.py
 scripts/certify.py
 scripts/clean.py
+scripts/cleancore/__init__.py
+scripts/cleancore/kernels.py
 scripts/context.py
 scripts/crops.py
 scripts/detect.py
+scripts/detectcore/__init__.py
+scripts/detectcore/kernels.py
 scripts/export.py
 scripts/falint.py
 scripts/glossary.py
@@ -60,10 +65,16 @@ scripts/hotcore/__init__.py
 scripts/hotcore/geometry.py
 scripts/journal.py
 scripts/languages.py
+scripts/layoutcore/__init__.py
+scripts/layoutcore/kernels.py
 scripts/lettering.py
+scripts/maskcore/__init__.py
+scripts/maskcore/kernels.py
 scripts/masks.py
 scripts/ocr.py
 scripts/package.py
+scripts/packcore/__init__.py
+scripts/packcore/kernels.py
 scripts/pagegeometry.py
 scripts/pageimages.py
 scripts/pageir.py
@@ -75,6 +86,8 @@ scripts/provider_errors.py
 scripts/providers.py
 scripts/qa.py
 scripts/qachecks.py
+scripts/qacore/__init__.py
+scripts/qacore/kernels.py
 scripts/readers.py
 scripts/regions.py
 scripts/replies.py
@@ -85,6 +98,8 @@ scripts/server.py
 scripts/sheet.py
 scripts/stages.py
 scripts/stdio_frames.py
+scripts/textcore/__init__.py
+scripts/textcore/kernels.py
 scripts/textmatch.py
 scripts/translate.py
 scripts/typefit.py

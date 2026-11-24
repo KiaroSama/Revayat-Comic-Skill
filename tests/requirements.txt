@@ -1,7 +1,7 @@
 # Repository developer tools; install alongside the skill's runtime manifest.
 # These tool floors are not the runtime compatibility minima tested by CI.
 pytest>=9.2.0
-pytest-timeout>=2.3
+pytest-timeout>=2.4.0
 ruff>=0.17.5                    # the lint gate; see ruff.toml for the rules
 
 # Font subsets are generated while testing glyph-coverage failures (official Vazir OFL fonts ship under skills/revayat-comic/assets/fonts/).

@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "revayat-comic",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Translate manga, manhwa, manhua and Western comics into Persian and produce a finished CBZ or PDF: pixel-accurate balloon detection, source lettering removed without altering the artwork, and real right-to-left Persian typesetting fitted to each balloon.",
   "author": {
     "name": "Kiaro Sama",

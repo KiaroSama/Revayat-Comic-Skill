@@ -52,7 +52,7 @@ def _numpy():
 
 
 def balloon_interior(page_rgb, balloon, polarity: str, page_size: tuple[int, int],
-                     *, inset: float = 0.0, seed_box: Any = None):
+                     *, inset: float = 0.0, min_inset: int = 0, seed_box: Any = None):
     """The paper inside a balloon's outline, as a page-sized 0/255 mask.
 
     A balloon's *bounding box* is not its interior, and using the box is a real
@@ -62,10 +62,9 @@ def balloon_interior(page_rgb, balloon, polarity: str, page_size: tuple[int, int
     across them. Measured — it left the balloons as pairs of arcs with a white
     rectangle punched through the screentone behind them.
 
-    ``inset`` shrinks the result by that share of the balloon's smaller side,
-    which is how the outline itself is kept out of reach. ``seed_box`` anchors
-    component selection to the region's text box so an open margin leak cannot
-    hijack the interior.
+    ``inset`` shrinks the paper by a share of the smaller side, with a pixel
+    floor of ``min_inset``. ``seed_box`` keeps a margin leak from taking over
+    component selection.
     """
     cv2, np = _cv2(), _numpy()
     width, height = page_size
@@ -79,6 +78,11 @@ def balloon_interior(page_rgb, balloon, polarity: str, page_size: tuple[int, int
     if polarity == "dark":
         gray = 255 - gray
     _, light = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    if polarity != "dark" and (gray >= 232).any():
+        # Otsu alone can group a faint outline with the paper when dark ink is present.
+        dx = cv2.Sobel(gray, cv2.CV_16S, 1, 0)
+        dy = cv2.Sobel(gray, cv2.CV_16S, 0, 1)
+        light[(gray < 232) | (np.abs(dx) + np.abs(dy) >= 42)] = 0
 
     def _pick_component(binary):
         cnt, lbls, st, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
@@ -131,12 +135,14 @@ def balloon_interior(page_rgb, balloon, polarity: str, page_size: tuple[int, int
     cv2.floodFill(flooded, scratch, (0, 0), 255)
     inside = cv2.bitwise_or(inside, cv2.bitwise_not(flooded)[1:-1, 1:-1])
 
-    if inset > 0:
-        radius = max(1, int(inset * min(w, h)))
-        kernel = cv2.getStructuringElement(
-            cv2.MORPH_ELLIPSE, (2 * radius + 1, 2 * radius + 1)
-        )
-        inside = cv2.erode(inside, kernel)
+    if inset > 0 or min_inset:
+        radius = max(1, min_inset, int(inset * min(w, h)))
+        shape = cv2.MORPH_RECT if min_inset else cv2.MORPH_ELLIPSE
+        kernel = cv2.getStructuringElement(shape, (2 * radius + 1, 2 * radius + 1))
+        if min_inset:
+            inside = cv2.erode(inside, kernel, borderType=cv2.BORDER_CONSTANT, borderValue=0)
+        else:
+            inside = cv2.erode(inside, kernel)
 
     canvas[y:y + h, x:x + w] = inside
     return canvas
@@ -410,7 +416,8 @@ def region_mask(
         # corners of the balloon box cannot bias Otsu or leak into the mask.
         allowed = balloon_interior(
             page_rgb, balloon, polarity,
-            page_size, inset=OUTLINE_INSET, seed_box=region.get("bbox"),
+            page_size, inset=OUTLINE_INSET, min_inset=2 if full_balloon else 0,
+            seed_box=region.get("bbox"),
         )
         allowed_win = allowed[y:y + h, x:x + w] > 0
         window = page_rgb[y:y + h, x:x + w].copy()

@@ -4,16 +4,16 @@
 
 **Translate manga, manhwa, manhua and Western comics into Persian, and get a CBZ or PDF with the artwork provably untouched.**
 
-[![GitHub Actions CI workflow with manual dispatch](https://img.shields.io/badge/CI-GitHub%20Actions-16a34a)](.github/workflows/ci.yml)
+[![GitHub Actions CI workflow on push, pull requests, and manual dispatch](https://img.shields.io/badge/CI-GitHub%20Actions-16a34a)](.github/workflows/ci.yml)
 [![GNU General Public License v3.0 or later](https://img.shields.io/badge/license-GPL--3.0--or--later-2563eb)](LICENSE)
-[![Plugin version 1.1.0 across five manifest formats](https://img.shields.io/badge/plugin-v1.1.0-ea580c)](plugin.json)
+[![Plugin version 1.2.0 across five manifest formats](https://img.shields.io/badge/plugin-v1.2.0-ea580c)](plugin.json)
 [![Automated pytest suite across CI matrices](https://img.shields.io/badge/tests-pytest%20suite-0d9488)](tests/README.md)
 [![Python 3.13.15 measured locally, requires Python 3.12 or newer](https://img.shields.io/badge/Python-3.13.15-8b5cf6)](skills/revayat-comic/requirements.txt)
-[![Rust 1.99.1 measured locally for optional PyO3 hotcore and pixcore crates](https://img.shields.io/badge/Rust-1.99.1-9a3412)](rust/hotcore-rs/Cargo.toml)
+[![Rust 1.99.1 measured locally for nine optional PyO3 kernel crates](https://img.shields.io/badge/Rust-1.99.1-9a3412)](rust/hotcore-rs/Cargo.toml)
 [![Runs on Windows, Linux, and macOS](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-0891b2)](.github/workflows/ci.yml)
 [![Install via five plugin formats or standalone scripts](https://img.shields.io/badge/install-5%20plugins%20%7C%20standalone-4f46e5)](#install)
 [![Documentation in English and Persian](https://img.shields.io/badge/docs-English%20%7C%20Persian-0284c7)](README.fa.md)
-[![Published tree measured via git ls-files is 3.1 MB](https://img.shields.io/badge/repo%20size-3.1%20MB-ca8a04)](#development)
+[![Published tree measured via git ls-files is 3.5 MB](https://img.shields.io/badge/repo%20size-3.5%20MB-ca8a04)](#development)
 [![Pillow image IO and Persian text rendering with bundled SIL OFL Vazir fonts](https://img.shields.io/badge/typography-Vazir%20%7C%20Pillow-15803d)](skills/revayat-comic/assets/fonts/OFL.txt)
 [![PyMuPDF PDF import and export](https://img.shields.io/badge/pdf-PyMuPDF-b45309)](skills/revayat-comic/requirements.txt)
 [![OpenCV balloon detection, masks, and inpainting](https://img.shields.io/badge/vision-OpenCV-334155)](skills/revayat-comic/requirements.txt)
@@ -50,7 +50,7 @@ than approximately right.
 | **Sound effects are artwork** | SFX are classified separately from dialogue and the default is `keep`. Erasing hand-lettering to put a guess in its place is worse than not translating it. |
 | **Deterministic quality gates** | Untranslated regions, source script surviving anywhere inside the full balloon interior, text overflow, rendered text overlap, outline crossing, page dimension mismatch, broken reading order, modified artwork, glossary drift. Counts and pixel comparisons, not a second opinion from a model. |
 | **Bundled Vazir typography and text effects** | Official SIL OFL-1.1 Vazir fonts (`Regular`, `Medium`, `Bold`) ship inside `skills/revayat-comic/assets/fonts/` and are selected by default. Regions support `bold`, `italic`, `bold-italic`, `outline`, `shadow`, and `shout` effects plus page-level font-size harmonization and Unicode RLI/PDI isolation (`U+2067`/`U+2069`) on Latin-initial Persian sentences. |
-| **Optional Rust PyO3 hot-path acceleration** | Heavy geometry (`rust/hotcore-rs`) and full-page pixel QA (`rust/pixcore-rs`) kernels have safe Rust PyO3 crates (`#![forbid(unsafe_code)]`) with automatic pure-Python/NumPy fallback when no native wheel is built, plus multi-agent bulk sharding via `batch plan-shards`, `batch merge-shards`, and `batch plan-books`. |
+| **Optional Rust PyO3 hot-path acceleration** | Nine safe Rust PyO3 crates (`#![forbid(unsafe_code)]`, PEP 517 `maturin` builds) accelerate geometry (`hotcore-rs`), pixel QA (`pixcore-rs`), balloon masks (`maskcore-rs`), Persian bidi and wrap (`textcore-rs`), panel and balloon vision (`detectcore-rs`), outline/halo/SSIM checks (`qacore-rs`), cleaning and diffusion (`cleancore-rs`), band layout (`layoutcore-rs`), and packaging checks (`packcore-rs`), each with automatic pure-Python fallback, plus bulk sharding via `batch plan-shards`, `batch merge-shards`, and `batch plan-books`. |
 
 ## Install
 
@@ -354,6 +354,8 @@ worksheets before rebuilding the primary comic. Existing destinations are refuse
   — masks, cleaning tiers, what QA proves
 - [`references/sound-effects.md`](skills/revayat-comic/references/sound-effects.md)
   — the four policies and how to choose
+- [`references/sfx-glossary.md`](skills/revayat-comic/references/sfx-glossary.md)
+  — Japanese and English manga SFX table with Persian equivalents and traps
 - [`references/watermarks.md`](skills/revayat-comic/references/watermarks.md)
   — erasing a mark, and whether it is yours to erase
 - [`references/ocr.md`](skills/revayat-comic/references/ocr.md) — reading with

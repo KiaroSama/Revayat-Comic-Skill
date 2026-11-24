@@ -9,11 +9,20 @@ import pageir as ir
 def pdf_points(page: dict) -> tuple[float, float]:
     """Legacy/non-PDF documents retain the historical one-pixel-per-point size."""
     value = page.get("pdf_points", [page["width"], page["height"]])
-    if (not isinstance(value, (list, tuple)) or len(value) != 2
-            or any(isinstance(v, bool) or not isinstance(v, (int, float))
-                   or not math.isfinite(v) or v <= 0 for v in value)):
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
         raise ValueError("page PDF dimensions must be two finite positive point values")
-    return tuple(float(v) for v in value)
+    points: list[float] = []
+    for v in value:
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            raise ValueError("page PDF dimensions must be two finite positive point values")
+        try:
+            f = float(v)
+        except OverflowError:
+            raise ValueError("page PDF dimensions must be two finite positive point values") from None
+        if not math.isfinite(f) or f <= 0:
+            raise ValueError("page PDF dimensions must be two finite positive point values")
+        points.append(f)
+    return (points[0], points[1])
 
 
 def record_pdf(source: Path, doc: dict) -> None:

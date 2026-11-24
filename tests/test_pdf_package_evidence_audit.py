@@ -28,7 +28,7 @@ def pdf_edition(tmp_path):
 @pytest.mark.parametrize("tampered", [False, True])
 @pytest.mark.parametrize("damage", [
     "missing", "empty", "short", "extra", "duplicate-name", "row",
-    "wrong-page", "dimensions", "points",
+    "wrong-page", "dimensions", "points", "points-overflow", "width-overflow",
 ])
 def test_incomplete_pdf_evidence_never_certifies_a_package(pdf_edition, damage, tampered):
     pymupdf = pytest.importorskip("pymupdf")
@@ -52,6 +52,11 @@ def test_incomplete_pdf_evidence_never_certifies_a_package(pdf_edition, damage, 
         rows[0]["page"] = rows[1]["page"]
     elif damage == "dimensions":
         rows[0]["width"] = "40"
+    elif damage == "points-overflow":
+        rows[0]["pdf_points"] = [10**400, 60]
+    elif damage == "width-overflow":
+        rows[0].pop("pdf_points", None)
+        rows[0]["width"] = 10**400
     else:
         rows[0]["pdf_points"] = [0, 60]
     ir.save_doc(doc, document)

@@ -6,16 +6,16 @@
 
 **ترجمهٔ مانگا، مانهوا، مانهوای چینی و کمیک به فارسی، و تحویل CBZ یا PDF با اثبات دست‌نخوردگی نقاشی صفحه.**
 
-[![گردش‌کار CI در GitHub Actions با اجرای دستی](https://img.shields.io/badge/CI-GitHub%20Actions-16a34a)](.github/workflows/ci.yml)
+[![گردش‌کار CI در GitHub Actions روی push، پول‌ریکوئست و اجرای دستی](https://img.shields.io/badge/CI-GitHub%20Actions-16a34a)](.github/workflows/ci.yml)
 [![مجوز GPL نسخهٔ ۳ یا بالاتر](https://img.shields.io/badge/license-GPL--3.0--or--later-2563eb)](LICENSE)
-[![نسخهٔ 1.1.0 افزونه در پنج قالب مانیفست](https://img.shields.io/badge/plugin-v1.1.0-ea580c)](plugin.json)
+[![نسخهٔ 1.2.0 افزونه در پنج قالب مانیفست](https://img.shields.io/badge/plugin-v1.2.0-ea580c)](plugin.json)
 [![مجموعهٔ آزمون خودکار pytest در ماتریس CI](https://img.shields.io/badge/tests-pytest%20suite-0d9488)](tests/README.md)
 [![پایتون 3.13.15 در آزمون محلی، حداقل پایتون 3.12 یا بالاتر](https://img.shields.io/badge/Python-3.13.15-8b5cf6)](skills/revayat-comic/requirements.txt)
-[![راست 1.99.1 اندازه‌گیری‌شده برای دو هستهٔ PyO3 شامل hotcore و pixcore](https://img.shields.io/badge/Rust-1.99.1-9a3412)](rust/hotcore-rs/Cargo.toml)
+[![راست 1.99.1 اندازه‌گیری‌شده برای نه هستهٔ اختیاری PyO3](https://img.shields.io/badge/Rust-1.99.1-9a3412)](rust/hotcore-rs/Cargo.toml)
 [![اجرا روی ویندوز، لینوکس و مک](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-0891b2)](.github/workflows/ci.yml)
 [![نصب با پنج قالب افزونه یا اسکریپت مستقل](https://img.shields.io/badge/install-5%20plugins%20%7C%20standalone-4f46e5)](#نصب)
 [![مستندات فارسی و انگلیسی](https://img.shields.io/badge/docs-English%20%7C%20Persian-0284c7)](README.md)
-[![حجم درخت ردیابی‌شدهٔ مخزن حدود ۳٫۱ مگابایت است](https://img.shields.io/badge/repo%20size-3.1%20MB-ca8a04)](#توسعه)
+[![حجم درخت ردیابی‌شدهٔ مخزن حدود ۳٫۵ مگابایت است](https://img.shields.io/badge/repo%20size-3.5%20MB-ca8a04)](#توسعه)
 [![حروف‌چینی فارسی با قلم وزیرِ همراه مخزن و Pillow](https://img.shields.io/badge/typography-Vazir%20%7C%20Pillow-15803d)](skills/revayat-comic/assets/fonts/OFL.txt)
 [![ورودی و خروجی PDF با PyMuPDF](https://img.shields.io/badge/pdf-PyMuPDF-b45309)](skills/revayat-comic/requirements.txt)
 [![تشخیص حباب، ماسک و ترمیم با OpenCV](https://img.shields.io/badge/vision-OpenCV-334155)](skills/revayat-comic/requirements.txt)
@@ -89,7 +89,9 @@ Docx یا PDF Processing Pro لازم نیست. اصلاحات Word باید ا�
 | **ترتیبِ خواندنِ پنل‌آگاه** | حبابِ بالای پنلِ بعدی بعد از حبابِ پایینِ این پنل خوانده می‌شود، حتی اگر روی کاغذ بالاتر باشد. برای مانگا راست‌به‌چپ، برای وبتون و کمیک غربی چپ‌به‌راست. |
 | **کفِ اندازهٔ قلم، واقعاً کف است** | وقتی فارسی در حباب جا نمی‌شود، متن بی‌صدا کوچک نمی‌شود؛ ناحیه به‌عنوان `text-overflow` گزارش می‌شود تا ترجمه کوتاه‌تر شود. |
 | **افکت صوتی، هنر است** | افکت‌های صوتی جدا از گفت‌وگو دسته‌بندی می‌شوند و پیش‌فرض `keep` است. پاک کردنِ حروف‌نگاریِ دستی برای گذاشتن یک حدس به‌جایش، بدتر از ترجمه‌نکردن است. |
-| **دروازه‌های کیفیِ قطعی** | ناحیهٔ ترجمه‌نشده، بازماندهٔ خطِ مبدأ داخل فارسی، سرریزِ متن، ترتیبِ خواندنِ شکسته، تغییرِ نقاشی، و رانشِ واژه‌نامه. همه بر پایهٔ شمارش و مقایسهٔ پیکسل، نه نظر دوبارهٔ یک مدل. |
+| **دروازه‌های کیفیِ قطعی** | ناحیهٔ ترجمه‌نشده، بازماندهٔ خطِ مبدأ داخل فارسی، سرریزِ متن، تداخل متن‌ها، عبور از خط دور حباب، ترتیبِ خواندنِ شکسته، تغییرِ نقاشی، و رانشِ واژه‌نامه. همه بر پایهٔ شمارش و مقایسهٔ پیکسل، نه نظر دوبارهٔ یک مدل. |
+| **قلم وزیر و افکت‌های متن فارسی** | قلم رسمی وزیر (`Regular`، `Medium`، `Bold` با مجوز SIL OFL-1.1) همراه مخزن است و به‌طور پیش‌فرض انتخاب می‌شود. نواحی از سبک‌های `bold`، `italic`، `bold-italic`، `outline`، `shadow` و `shout`، هم‌اندازه‌سازی فونت صفحه و جداسازی یونی‌کدی RLI/PDI پشتیبانی می‌کنند. |
+| **شتاب‌دهی اختیاری با نه هستهٔ Rust** | نه crate امن Rust با `#![forbid(unsafe_code)]` و ساخت استاندارد PEP 517 (`maturin`) بخش‌های سنگین هندسه (`hotcore-rs`)، بررسی پیکسل (`pixcore-rs`)، ماسک حباب (`maskcore-rs`)، متن و bidi فارسی (`textcore-rs`)، تشخیص پنل و حباب (`detectcore-rs`)، تشخیص هاله و خط دور و SSIM (`qacore-rs`)، پاک‌سازی و انتشار رنگ (`cleancore-rs`)، چیدمان نوارهای حباب (`layoutcore-rs`) و بسته‌بندی (`packcore-rs`) را شتاب می‌دهند و در نبود wheel به‌طور خودکار به پایتون برمی‌گردند. |
 
 ## نصب
 
@@ -296,6 +298,7 @@ out = original × (1 − alpha) + repaired × alpha        where alpha ≤ mask
 - [`references/detection.md`](skills/revayat-comic/references/detection.md) — آستانه‌ها، صفحه‌های دشوار، اصلاح یک ناحیه
 - [`references/artwork-preservation.md`](skills/revayat-comic/references/artwork-preservation.md) — ماسک‌ها، لایه‌های پاک‌سازی، و آنچه QA اثبات می‌کند
 - [`references/sound-effects.md`](skills/revayat-comic/references/sound-effects.md) — چهار سیاست و انتخاب میانشان
+- [`references/sfx-glossary.md`](skills/revayat-comic/references/sfx-glossary.md) — جدول صوت‌های رایج مانگا (ژاپنی و انگلیسی) با معادل فارسی طبیعی و خطاهای رایج
 - [`references/watermarks.md`](skills/revayat-comic/references/watermarks.md) — حذف واترمارک، و اینکه آیا حذفش با شماست
 - [`references/ocr.md`](skills/revayat-comic/references/ocr.md) — خواندن با چشم خود، و اینکه کِی یک مدل کمک می‌کند
 - [`references/serving.md`](skills/revayat-comic/references/serving.md) — MCP و HTTP روی loopback، برای میزبانی که نمی‌تواند این CLI را اجرا کند

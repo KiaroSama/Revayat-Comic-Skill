@@ -255,16 +255,17 @@ def _erode_interior(mask, radius: int):
     return cv2.erode(mask, kernel, borderType=cv2.BORDER_CONSTANT, borderValue=0).astype(np.uint8)
 
 
-def local_white_enclosure(cleaned_rgb, bbox, polarity, page_size, inset=BALLOON_TEXT_INSET):
-    """Return an inset paper component seeded by the text box, or None for open artwork."""
+def local_white_enclosure(cleaned_rgb, bbox, polarity, page_size, inset=BALLOON_TEXT_INSET, *, panel=None):
+    """Find seeded paper bounded by walls and at most two panel or page edges."""
     cv2, np = mask_tools._cv2(), mask_tools._numpy()
     width, height = page_size
-    x, y, w, h = ir.clamp_bbox(bbox, width, height)
+    px, py, pw, ph = ir.clamp_bbox(panel or (0, 0, width, height), width, height)
+    entire = (px, py, px + pw, py + ph)
+    x, y, w, h = ir.clamp_bbox(ir.bbox_intersection(bbox, (px, py, pw, ph)), width, height)
     if not w or not h:
         return None
     pad = max(w, h, 32)
-    nearby = (max(0, x - pad), max(0, y - pad), min(width, x + w + pad), min(height, y + h + pad))
-    entire = (0, 0, width, height)
+    nearby = (max(px, x - pad), max(py, y - pad), min(px + pw, x + w + pad), min(py + ph, y + h + pad))
     for left, top, right, bottom in dict.fromkeys((nearby, entire)):
         crop = cleaned_rgb[top:bottom, left:right]
         gray = cv2.cvtColor(crop, cv2.COLOR_RGB2GRAY)
@@ -281,22 +282,30 @@ def local_white_enclosure(cleaned_rgb, bbox, polarity, page_size, inset=BALLOON_
         if area >= 0.22 * width * height:
             return None
         edges = (bx == 0, by == 0, bx + bw == right - left, by + bh == bottom - top)
-        if any(edge and a == b for edge, a, b in zip(edges, (left, top, right, bottom), entire)):
-            return None
-        if any(edges):
+        if any(edge and a != b for edge, a, b in zip(edges, (left, top, right, bottom), entire)):
             continue
+        opened = sum(edges)
+        if opened > 2:
+            return None
         inside = (labels == component).astype(np.uint8)
         ring = cv2.dilate(inside, np.ones((3, 3), np.uint8)) > inside
-        if not ring.any() or np.count_nonzero((gray < 190) & ring) < 0.55 * ring.sum():
+        wall_luma = 215 if opened else 190
+        if not ring.any() or np.count_nonzero((gray < wall_luma) & ring) < 0.55 * ring.sum():
             return None
-        safe = _erode_interior(inside[by:by + bh, bx:bx + bw], max(5, round(inset * min(bw, bh))))
+        if opened:
+            # A clip edge is not a wall. Outside the crop counts as paper during erosion.
+            radius = max(1, round(inset * min(bw, bh)))
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * radius + 1, 2 * radius + 1))
+            safe = cv2.erode(inside, kernel, borderType=cv2.BORDER_CONSTANT, borderValue=1)
+        else:
+            safe = _erode_interior(inside, max(5, round(inset * min(bw, bh))))
         result = np.zeros((height, width), np.uint8)
-        result[top + by:top + by + bh, left + bx:left + bx + bw] = safe * 255
-        return result
+        result[top:bottom, left:right] = safe * 255
+        return result if safe.any() else None
     return None
 
 
-def balloon_text_interior(cleaned_rgb, region, page_size):
+def balloon_text_interior(cleaned_rgb, region, page_size, *, panel=None):
     """Use the same wall clearance for fitting and the artwork check."""
     polarity = region.get("polarity", "light")
     bbox = region.get("bbox")
@@ -309,7 +318,7 @@ def balloon_text_interior(cleaned_rgb, region, page_size):
                 interior[y:y + h, x:x + w], max(5, round(BALLOON_TEXT_INSET * min(w, h))))
         return interior
     if bbox and region.get("kind") in BALLOON_TEXT_KINDS:
-        return local_white_enclosure(cleaned_rgb, bbox, polarity, page_size)
+        return local_white_enclosure(cleaned_rgb, bbox, polarity, page_size, panel=panel)
     return None
 
 
@@ -334,6 +343,7 @@ def text_crosses_outline(
         ).max(axis=2) > 25
 
     offenders: list[tuple[str, int]] = []
+    panels = {panel["id"]: panel["bbox"] for panel in page.get("panels", [])}
     for region in page.get("regions", []):
         if region.get("dropped"):
             continue
@@ -345,7 +355,7 @@ def text_crosses_outline(
             continue
 
         polarity = region.get("polarity", "light")
-        safe = balloon_text_interior(cleaned_rgb, region, page_size)
+        safe = balloon_text_interior(cleaned_rgb, region, page_size, panel=panels.get(region.get("panel")))
         if safe is None:
             continue
         if use_rust:

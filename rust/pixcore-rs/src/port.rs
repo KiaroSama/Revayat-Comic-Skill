@@ -214,5 +214,140 @@ mod tests {
             clamp_box(&json!([1, -2, i64::MAX, 4]), 8, 5),
             Ok([1, 0, 8, 2])
         );
+        assert_eq!(
+            clamp_box(&json!([i64::MIN, i64::MIN, 5, 5]), 8, 5),
+            Ok([0, 0, 0, 0])
+        );
+        assert_eq!(clamp_box(&json!([2, 1, 0, 4]), 8, 5), Ok([2, 1, 2, 5]));
+    }
+
+    #[test]
+    fn outside_mask_diff_tracks_strict_threshold_and_maximum() {
+        let orig = [10, 20, 30, 100, 100, 100, 200, 200, 200];
+        let edited = [10, 28, 30, 109, 100, 100, 0, 200, 200];
+        let mask = [0, 0, 255];
+        assert_eq!(
+            outside_mask_diff(&orig, &edited, &mask, 3, 1, 8),
+            Ok(vec![1, 9])
+        );
+        assert_eq!(
+            outside_mask_diff(&orig, &edited, &mask, 3, 1, 9),
+            Ok(vec![0, 9])
+        );
+        assert_eq!(
+            outside_mask_diff(&orig, &edited, &[255, 255, 255], 3, 1, 0),
+            Ok(vec![0, 0])
+        );
+    }
+
+    #[test]
+    fn outside_mask_diff_rejects_bad_dimensions_and_buffers() {
+        assert_eq!(outside_mask_diff(&[], &[], &[], 0, 1, 8), Ok(vec![0, 0]));
+        assert!(outside_mask_diff(&[], &[], &[], -1, 2, 8).is_err());
+        assert!(outside_mask_diff(&[0, 0, 0], &[0, 0], &[0], 1, 1, 8).is_err());
+        assert!(outside_mask_diff(&[0, 0, 0], &[0, 0, 0], &[], 1, 1, 8).is_err());
+    }
+
+    #[test]
+    fn overlap_changed_pixels_orders_pairs_and_clips_boxes() {
+        let changed = [0, 255, 0, 0, 128, 0, 0, 0, 255];
+        let boxes = json!([
+            [-1, -1, 3, 3],
+            [1, 0, 3, 3],
+            [0, 1, 3, 3],
+            [5, 5, 2, 2],
+            [2, 2, -1, -1]
+        ]);
+        assert_eq!(
+            overlap_changed_pixels(&changed, 3, 3, boxes),
+            Ok(vec![vec![0, 1, 2], vec![0, 2, 1], vec![1, 2, 2]])
+        );
+        assert_eq!(
+            overlap_changed_pixels(&[0; 9], 3, 3, json!([[0, 0, 3, 3], [0, 0, 3, 3]])),
+            Ok(vec![])
+        );
+    }
+
+    #[test]
+    fn outline_crossing_pixels_respects_polarity_safe_mask_and_threshold() {
+        // 3x1 image: pixel 0 dark wall (10,10,10), pixel 1 paper (250,250,250), pixel 2 light wall (240,240,240)
+        let orig = [10, 10, 10, 250, 250, 250, 240, 240, 240];
+        let clean = [255, 255, 255, 255, 255, 255, 255, 255, 255];
+        let final_rgb = [200, 255, 255, 200, 255, 255, 200, 255, 255];
+        // Light balloon: dark wall pixel 0 outside safe mask counts; paper/light pixels >=645 do not.
+        assert_eq!(
+            outline_crossing_pixels(
+                &orig,
+                &clean,
+                &final_rgb,
+                &[0, 0, 0],
+                3,
+                1,
+                json!([0, 0, 3, 1]),
+                false,
+                10,
+            ),
+            Ok(1)
+        );
+        // Safe mask protects pixel 0 from being flagged.
+        assert_eq!(
+            outline_crossing_pixels(
+                &orig,
+                &clean,
+                &final_rgb,
+                &[255, 0, 0],
+                3,
+                1,
+                json!([0, 0, 3, 1]),
+                false,
+                10,
+            ),
+            Ok(0)
+        );
+        // Dark balloon: light pixels (sum > 120) outside safe mask count (pixels 1 and 2).
+        assert_eq!(
+            outline_crossing_pixels(
+                &orig,
+                &clean,
+                &final_rgb,
+                &[0, 0, 0],
+                3,
+                1,
+                json!([0, 0, 3, 1]),
+                true,
+                10,
+            ),
+            Ok(2)
+        );
+        // High diff_threshold filters out delta=55.
+        assert_eq!(
+            outline_crossing_pixels(
+                &orig,
+                &clean,
+                &final_rgb,
+                &[0, 0, 0],
+                3,
+                1,
+                json!([0, 0, 3, 1]),
+                true,
+                55,
+            ),
+            Ok(0)
+        );
+        // Out-of-bounds box safely returns 0.
+        assert_eq!(
+            outline_crossing_pixels(
+                &orig,
+                &clean,
+                &final_rgb,
+                &[0, 0, 0],
+                3,
+                1,
+                json!([10, 10, 5, 5]),
+                false,
+                10,
+            ),
+            Ok(0)
+        );
     }
 }

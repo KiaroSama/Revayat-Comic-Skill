@@ -113,7 +113,8 @@ def _tokens(text: str) -> list[list[str]]:
     """
     if not text.strip():
         return []
-    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    # RAQM expects one paragraph per shaped line (Pillow #10317).
+    lines = re.split(r"\r\n|[\r\n\u0085\u2028\u2029]", text)
     paragraphs = []
     for line in lines:
         tokens = [token for token

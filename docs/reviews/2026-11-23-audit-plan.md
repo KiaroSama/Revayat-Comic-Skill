@@ -92,6 +92,20 @@ regressions on PyMuPDF 1.24.3 and 2.1, full lint and actionlint. Final full-suit
 counts and hosted matrix outcomes are recorded against the published SHA in
 the PR and handoff, rather than being inferred from an earlier run.
 
+## Follow-up integration (v1.2.0)
+
+After merging PR #21 into `main`, two remaining boundary gaps from independent
+audit were closed: `pagegeometry.pdf_points` now rejects out-of-float-range JSON
+integers as `ValueError` instead of raising `OverflowError` during PDF package
+evidence preflight (F03), and `batch.merge_shards` returns without calling
+`_publish` on exact byte-identical replays (F06). Dependabot PR #18 (`pillow>=13.0.0`,
+synced with the literal CI floor pin and Unicode paragraph-separator normalization
+before RAQM shaping) and PR #19 (`pytest-timeout>=2.4.0`) were integrated. Four
+additional safe Rust PyO3 crates (`maskcore-rs`, `textcore-rs`, `detectcore-rs`,
+`qacore-rs`) were ported via `rust-anything` alongside root-cause balloon outline
+preservation, panel-clipped open-balloon enclosure, free-lettering collision
+guards, and `references/sfx-glossary.md`.
+
 ## Primary research
 
 - [GitHub required checks](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks)

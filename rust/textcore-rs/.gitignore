@@ -1,0 +1,13 @@
+target/
+*.node
+pkg/
+.rust-anything/
+*.so
+*.pyd
+__pycache__/
+_native.pyd
+cases.jsonl
+extra-inputs.jsonl
+recorded-from.json
+rust-anything.json
+shadow/

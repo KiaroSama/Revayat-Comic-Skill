@@ -141,8 +141,8 @@ jobs:
           PYTHONIOENCODING: utf-8
         run: python skills/revayat-comic/scripts/revayat-comic.py doctor
 
-  # The floors in `requirements.txt` are a promise: `pillow>=10.0` says the
-  # project works on Pillow 10. Nothing tested that — CI resolved the latest of
+  # The floors in `requirements.txt` are a promise: `pillow>=13.0.0` says the
+  # project works on Pillow 13.0.0. Nothing tested that — CI resolved the latest of
   # everything, so the floors could drift years out of date and no build would
   # notice until a user on an older wheel hit it.
   minimum-dependencies:
@@ -164,9 +164,9 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             fonts-noto-core fonts-noto-cjk unar libarchive-tools
 
-      # The LITERAL lowest version each requirement declares. `==10.0.*` is a
-      # patch SERIES — pip resolves it to the newest 10.0.x — so this job was
-      # not testing the floor `pillow>=10.0` states, it was testing whichever
+      # The LITERAL lowest version each requirement declares. `==13.0.*` is a
+      # patch SERIES — pip resolves it to the newest 13.0.x — so this job was
+      # not testing the floor `pillow>=13.0.0` states, it was testing whichever
       # patch of that series happened to be last. These are the versions a
       # user who installs the declared minimum actually gets, and
       # `floor-versions.txt` records exactly what resolved.
@@ -174,7 +174,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install --only-binary=:all: \
-            "pillow==10.0.0" "numpy==2.5.5" "opencv-python-headless==4.10.0.84" \
+            "pillow==13.0.0" "numpy==2.5.5" "opencv-python-headless==4.10.0.84" \
             "pymupdf==1.24.3" "arabic-reshaper==3.1.0" "python-bidi==0.4.0" \
             rarfile
           python -m pip install -r tests/requirements.txt
@@ -582,7 +582,7 @@ jobs:
   rust-crates:
     name: ${{ matrix.label }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -604,19 +604,19 @@ jobs:
       - name: Install the selected Rust toolchain
         run: rustup toolchain install ${{ matrix.toolchain }} --profile minimal --component rustfmt --component clippy
 
-      - name: Verify hotcore-rs and pixcore-rs
+      - name: Verify all Rust crates
         run: |
-          for crate in rust/hotcore-rs rust/pixcore-rs; do
+          for crate in rust/hotcore-rs rust/pixcore-rs rust/maskcore-rs rust/textcore-rs rust/detectcore-rs rust/qacore-rs rust/cleancore-rs rust/layoutcore-rs rust/packcore-rs; do
             echo "=== $crate ==="
             cargo fmt --manifest-path "$crate/Cargo.toml" -- --check
-            cargo clippy --manifest-path "$crate/Cargo.toml" -- -D warnings
-            cargo test --manifest-path "$crate/Cargo.toml"
+            cargo clippy --manifest-path "$crate/Cargo.toml" --locked -- -D warnings
+            cargo test --manifest-path "$crate/Cargo.toml" --locked
           done
 
   native-python:
     name: native Python (${{ matrix.os }}, py${{ matrix.python }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -637,31 +637,47 @@ jobs:
           rustup default stable
 
       - name: Install the runtime and actual Python extension wheels
+        shell: bash
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r skills/revayat-comic/requirements.txt -r tests/requirements.txt "maturin>=1.12,<2"
-          python -m pip install --no-build-isolation ./rust/hotcore-rs ./rust/pixcore-rs
+          if [ "${{ matrix.os }}" = "ubuntu-latest" ] && [ "${{ matrix.python }}" = "3.12" ]; then
+            MATURIN_SPEC="maturin==1.12.0"
+          else
+            MATURIN_SPEC="maturin>=1.12,<2"
+          fi
+          python -m pip install -r skills/revayat-comic/requirements.txt -r tests/requirements.txt "$MATURIN_SPEC"
+          python -m pip install --no-build-isolation \
+            ./rust/hotcore-rs ./rust/pixcore-rs ./rust/maskcore-rs \
+            ./rust/textcore-rs ./rust/detectcore-rs ./rust/qacore-rs \
+            ./rust/cleancore-rs ./rust/layoutcore-rs ./rust/packcore-rs
           python -m pip check
           python -m pip list --format=freeze > native-versions.txt
 
-      - name: Require both real native backends before parity checks
+      - name: Require all real native backends before parity checks
         shell: python {0}
         run: |
           import logging, sys, time
           logging.Formatter.converter = time.gmtime
           logging.basicConfig(level=logging.INFO, format='%(asctime)sZ [%(levelname)s] %(message)s')
           sys.path.insert(0, 'skills/revayat-comic/scripts')
-          import hotcore, pixcore
+          import cleancore, detectcore, hotcore, layoutcore, maskcore, packcore, pixcore, qacore, textcore
           assert hotcore.BACKEND == pixcore.BACKEND == 'rust', 'native wheels did not load'
-          logging.info('Both geometry and pixel kernels loaded from installed Rust extensions')
+          modules = (hotcore, pixcore, maskcore, textcore, detectcore, qacore, cleancore, layoutcore, packcore)
+          missing = [m.__name__ for m in modules if m.BACKEND != 'rust']
+          assert not missing, f'native wheels did not load: {missing}'
+          logging.info('All %d Rust PyO3 kernel extensions loaded natively', len(modules))
 
       - name: Exercise native kernels and boundary regressions
         env:
           PYTHONIOENCODING: utf-8
         run: >
-          python -m pytest tests/test_hotcore_parity.py tests/test_pixcore_parity.py
-          tests/test_native_geometry_boundaries.py -q -rs --timeout=120
-          --junitxml=junit-native.xml
+          python -m pytest
+          tests/test_hotcore_parity.py tests/test_pixcore_parity.py
+          tests/test_maskcore_parity.py tests/test_textcore_parity.py
+          tests/test_detectcore_parity.py tests/test_qacore_parity.py
+          tests/test_cleancore_parity.py tests/test_layoutcore_parity.py
+          tests/test_packcore_parity.py tests/test_native_geometry_boundaries.py
+          -q -rs --timeout=120 --junitxml=junit-native.xml
 
       - name: Refuse missing or skipped native evidence
         if: always()

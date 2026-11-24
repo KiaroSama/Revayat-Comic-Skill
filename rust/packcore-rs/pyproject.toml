@@ -1,0 +1,13 @@
+[build-system]
+requires = ["maturin>=1.12.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "packcore-rs"
+version = "0.1.0"
+description = "Optional native archive and raster kernels for Revayat Comic"
+requires-python = ">=3.12"
+
+[tool.maturin]
+python-source = "python"
+module-name = "packcore_rs._native"

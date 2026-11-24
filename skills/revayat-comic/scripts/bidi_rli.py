@@ -5,6 +5,11 @@ from __future__ import annotations
 import re
 import unicodedata
 
+try:
+    import textcore as _textcore
+except ImportError:
+    _textcore = None
+
 RLM = "‏"
 RLI = "⁧"
 PDI = "⁩"
@@ -32,6 +37,8 @@ def _leading(character: str) -> bool:
 
 def starts_with_latin_in_persian(sentence: str) -> bool:
     """Does the first token start with an ASCII letter in mixed-script text?"""
+    if _textcore is not None and _textcore.BACKEND == "rust":
+        return _textcore.starts_with_latin_in_persian(sentence)
     for character in sentence:
         if _leading(character):
             continue
@@ -143,6 +150,8 @@ def with_rli_pdi(text: str) -> tuple[str, int]:
 
 def ensure_rli_pdi(text: str) -> str:
     """Isolate each matching sentence without altering surrounding text."""
+    if _textcore is not None and _textcore.BACKEND == "rust":
+        return _textcore.ensure_rli_pdi(text)
     return with_rli_pdi(text)[0]
 
 
@@ -151,8 +160,11 @@ def ensure_rlm_rli_pdi(text: str) -> str:
 
     Prepends RLM (U+200F) + RLI (U+2067) at the start of each line containing
     Persian characters and closes it with PDI (U+2069), keeping purely LTR/non-
-    Persian lines untouched (UAX #9 P2/P3 safe for `dir="auto"` renderers).
+    Persian lines and CommonMark fenced code blocks untouched (UAX #9 P2/P3
+    safe for `dir="auto"` renderers).
     """
+    if _textcore is not None:
+        return _textcore.ensure_rlm_rli_pdi(text)
     if not _PERSIAN.search(text):
         return text
     parts = _LINE_BREAK.split(text)

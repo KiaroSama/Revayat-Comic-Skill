@@ -82,18 +82,18 @@ with a guess trades a thing readers understand for a mistake.
 An SFX is a *sound*, not a description. `ドドド` is `دادادا` or `غرش` — not
 `صدای پای سنگین`.
 
-Some usable equivalents:
+Some usable equivalents (see `references/sfx-glossary.md` for the full manga SFX table and common mistranslation traps):
 
 | Japanese | Sense | Persian |
 | --- | --- | --- |
-| ドン | a heavy impact | دام |
-| ドドド | rumbling, approach | دادادا / غرش |
+| ドン | a heavy impact | بوم / دام |
+| ドドド | rumbling, approach | غرررش / غرش |
 | バン | a bang, a slam | بنگ |
 | ゴゴゴ | ominous pressure | غررر |
-| ザッ | a sudden movement, footsteps | شرررق |
+| ザッ | a sudden step, rush, footsteps | قدم / تَقِ قدم / خِش |
 | キラ | a sparkle | برق |
 | シーン | *silence* — the sound of nothing | سکوت |
-| ドキドキ | a heartbeat | تاپ تاپ |
+| ドキドキ | a heartbeat | تُپ‌تُپ / تپش |
 | ガシャン | breaking glass | شترق |
 
 `シーン` is the one worth knowing: Japanese has a sound effect for silence, and

@@ -300,6 +300,8 @@ assignment/snapshot contract from `references/parallel-workflow.md`:**
 >
 > Read `$SKILL_DIR/references/translation-policy.md` first and follow it.
 > Read the common pass and matching section in `references/source-languages.md`.
+> For sound effects, use `references/sfx-glossary.md`. Verify unfamiliar readings
+> against the scene and record recurring choices in `$WORK/glossary.json`.
 > Translate directly into Persian; retain the book's established voices and
 > glossary. Report reading/revision events to the coordinator for the mandatory
 > output-side activity log described in `references/translation-log.md`.
@@ -682,6 +684,7 @@ Read these only when the step points at them:
 - `references/detection.md` — thresholds, difficult pages, correcting a region
 - `references/artwork-preservation.md` — masks, cleaning tiers, what QA proves
 - `references/sound-effects.md` — the four policies and how to choose
+- `references/sfx-glossary.md`: Japanese and English effects, Persian equivalents, and lookup rules
 - `references/watermarks.md` — erasing a mark, and whether it is yours to erase
 - `references/ocr.md` — reading with your own eyes, and when a model helps
 - `references/serving.md` — MCP and HTTP, for a host that cannot run this CLI

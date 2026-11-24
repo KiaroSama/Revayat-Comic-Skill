@@ -287,3 +287,105 @@ def test_connected_double_balloon_preserves_lobe_order_without_swapping(tmp_path
     assert uy < 190
     assert ly >= 175
 
+
+def test_full_balloon_clean_keeps_thin_gray_outline(tmp_path):
+    image = Image.new("RGB", (240, 180), "white")
+    draw = ImageDraw.Draw(image)
+    draw.ellipse((45, 40, 194, 139), outline=(228,) * 3, width=2)
+    draw.ellipse((46, 41, 193, 138), outline=(180,) * 3)
+    outline = np.asarray(image).copy()[:, :, 0] < 255
+    draw.rectangle((65, 82, 87, 96), fill=(48,) * 3)
+    source = np.asarray(image)
+    image.save(tmp_path / "page.png")
+    region = ir.new_region("r1", [65, 82, 23, 15], kind="speech")
+    region.update(balloon=[40, 35, 160, 110], target_text="سلام")
+    page = ir.new_page("p0001", 0, "page.png", *image.size, ir.sha256_file(tmp_path / "page.png"))
+    page["regions"] = [region]
+    doc = ir.new_doc()
+    doc["pages"] = [page]
+    doc_path = tmp_path / "comic.json"
+    ir.save_doc(doc, doc_path)
+
+    mask_tools.build_document(doc_path, grow=0.12)
+    page = ir.load_doc(doc_path)["pages"][0]
+    mask = mask_tools.load_mask(tmp_path / page["mask"])
+    clean.clean_page(doc_path, page, policy="translate")
+    cleaned = np.asarray(Image.open(tmp_path / page["clean"]))
+    assert not mask[outline].any()
+    assert np.array_equal(cleaned[outline], source[outline])
+    assert np.all(cleaned[84:95, 67:86] >= 250)
+
+
+@pytest.mark.parametrize("top", [55, -5])
+def test_panel_clipped_balloon_recovers_curved_paper(tmp_path, top):
+    image = Image.new("RGB", (400, 290), (160,) * 3)
+    draw = ImageDraw.Draw(image)
+    draw.ellipse((220, top, 435, 165), outline=(185,) * 3, fill="white", width=2)
+    rgb = np.asarray(image)
+    image.save(tmp_path / "page.png")
+    region = {"id": "r1", "kind": "speech", "panel": "panel", "bbox": [227, 70, 84, 53],
+              "mask_box": [227, 70, 84, 53], "target_text": "بیا بریم!"}
+    panel = [20, 20, 300, 250]
+    page = {"id": "p0001", "width": 400, "height": 290, "image": "page.png", "regions": [region],
+            "panels": [{"id": "panel", "bbox": panel}]}
+    safe = qachecks.balloon_text_interior(rgb, region, image.size, panel=panel)
+    assert safe is not None
+    assert safe[:, 319].any() and not safe[:, 320:].any()
+    if top < 0:
+        assert safe[20, :].any() and not safe[:20, :].any()
+    assert not safe[rgb[:, :, 0] != 255].any()
+    typeset.typeset_page(tmp_path / "comic.json", page, typefont.Shaper(),
+                         typefont.find_font(), policy="translate", max_size=40, min_size=13)
+    result = np.asarray(Image.open(tmp_path / page["final"]))
+    changed = (result != rgb).any(axis=2)
+    assert region["typeset"]["status"] == "ok" and changed.any()
+    assert not changed[safe == 0].any()
+
+
+@pytest.mark.parametrize("obstacle", ["hair", "balloon", "transformed_hair"])
+def test_free_light_lettering_does_not_touch_neighbor(tmp_path, monkeypatch, obstacle):
+    rgb = np.full((140, 240, 3), 255, np.uint8)
+    region = {"id": "r1", "kind": "sign", "bbox": [30, 31, 180, 74],
+              "mask_box": [30, 31, 180, 74], "target_text": "چه دوره!"}
+    page = {"id": "p0001", "width": 240, "height": 140, "image": "page.png", "regions": [region]}
+    if obstacle in {"hair", "transformed_hair"}:
+        rgb[:, 111:127] = 40
+        left, right = 108, 130
+    else:
+        page["regions"].append({"id": "r2", "kind": "speech",
+                                "bbox": [112, 110, 12, 10], "balloon": [97, 25, 43, 100]})
+        left, right = 94, 143
+    if obstacle == "transformed_hair":
+        region["lettering"] = {"verdict": "rotated"}
+
+        def displaced(canvas, *_args, **_kwargs):
+            canvas.putpixel((120, 65), (10, 10, 10))
+            return {"box": [120, 65, 121, 66], "style": "rotated"}
+
+        monkeypatch.setattr(typeset.lettering, "render", displaced)
+    Image.fromarray(rgb).save(tmp_path / "page.png")
+    typeset.typeset_page(tmp_path / "comic.json", page, typefont.Shaper(),
+                         typefont.find_font(), policy="translate", max_size=40, min_size=13)
+    result = np.asarray(Image.open(tmp_path / page["final"]))
+    changed = (result != rgb).any(axis=2)
+    assert region["typeset"]["status"] == "ok" and changed.any()
+    assert not changed[:, left:right].any()
+
+
+def test_unicode_paragraph_separators_render_like_newlines(tmp_path):
+    shaper = typefont.Shaper()
+    rendered = []
+    for name, text in [("unicode", "سلام\u2029بیا\u0085بریم\u2028حالا"),
+                       ("lf", "سلام\nبیا\nبریم\nحالا")]:
+        box = [20, 20, 260, 180]
+        region = {"id": "r1", "kind": "speech", "bbox": box, "mask_box": box, "target_text": text}
+        page_id = f"p_{name}"
+        page = {"id": page_id, "width": 300, "height": 220, "image": f"{name}.png", "regions": [region]}
+        Image.new("RGB", (300, 220), "white").save(tmp_path / page["image"])
+        typeset.typeset_page(tmp_path / "comic.json", page, shaper,
+                             typefont.find_font(), policy="translate", max_size=36, min_size=13)
+        assert region["typeset"]["status"] == "ok"
+        assert region["typeset"]["lines"] == 4
+        rendered.append(np.asarray(Image.open(tmp_path / page["final"])))
+    assert np.array_equal(*rendered)
+
