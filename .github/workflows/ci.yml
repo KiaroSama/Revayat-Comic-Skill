@@ -589,8 +589,8 @@ jobs:
         include:
           - toolchain: stable
             label: rust crates (fmt, clippy, test)
-          - toolchain: "1.97.0"
-            label: Rust 1.97 minimum (fmt, clippy, test)
+          - toolchain: "1.100.0"
+            label: Rust 1.100.0 minimum (fmt, clippy, test)
     env:
       RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
 
@@ -609,14 +609,45 @@ jobs:
           for crate in rust/hotcore-rs rust/pixcore-rs rust/maskcore-rs rust/textcore-rs rust/detectcore-rs rust/qacore-rs rust/cleancore-rs rust/layoutcore-rs rust/packcore-rs; do
             echo "=== $crate ==="
             cargo fmt --manifest-path "$crate/Cargo.toml" -- --check
-            cargo clippy --manifest-path "$crate/Cargo.toml" --locked -- -D warnings
+            cargo clippy --manifest-path "$crate/Cargo.toml" --all-targets --locked -- -D warnings
+            cargo clippy --manifest-path "$crate/Cargo.toml" --no-default-features --all-targets --locked -- -D warnings
             cargo test --manifest-path "$crate/Cargo.toml" --locked
+            cargo test --manifest-path "$crate/Cargo.toml" --no-default-features --locked
           done
+
+      - name: Verify the standalone Rust CLI
+        run: |
+          manifest=rust/revayat-comic-cli/Cargo.toml
+          cargo fmt --manifest-path "$manifest" -- --check
+          cargo clippy --manifest-path "$manifest" --all-targets --locked -- -D warnings
+          cargo test --manifest-path "$manifest" --locked
+          tree=$(cargo tree --manifest-path "$manifest" --locked)
+          if grep -Eq '\bpyo3 v' <<< "$tree"; then
+            echo 'The standalone CLI depends on PyO3' >&2
+            exit 1
+          fi
+          cargo build --release --manifest-path "$manifest" --locked
+          python - <<'PY'
+          import json
+          import subprocess
+
+          report = json.loads(subprocess.check_output([
+              "./rust/revayat-comic-cli/target/release/revayat-comic", "doctor", "--json",
+          ]))
+          expected = {
+              "hotcore-rs", "pixcore-rs", "maskcore-rs", "textcore-rs", "detectcore-rs",
+              "qacore-rs", "cleancore-rs", "layoutcore-rs", "packcore-rs",
+          }
+          assert report["ok"] is True and report["kernels"].keys() == expected, report
+          assert all(result is True for result in report["kernels"].values()), report
+          PY
 
   native-python:
     name: native Python (${{ matrix.os }}, py${{ matrix.python }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    env:
+      RUSTUP_TOOLCHAIN: stable
     strategy:
       fail-fast: false
       matrix:

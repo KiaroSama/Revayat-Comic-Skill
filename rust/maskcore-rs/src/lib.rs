@@ -1,12 +1,16 @@
 //! PyO3 bridge for `maskcore`, scaffolded by rust-anything.
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "python")]
 use pyo3::exceptions::PyValueError;
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
+#[cfg(feature = "python")]
 use pyo3::types::{PyBytes, PyBytesMethods, PyFloat, PyInt, PyList, PyListMethods, PyTuple};
 
-mod port;
+pub mod port;
 
+#[cfg(feature = "python")]
 fn error(message: String) -> PyErr {
     PyValueError::new_err(
         message
@@ -16,10 +20,12 @@ fn error(message: String) -> PyErr {
     )
 }
 
+#[cfg(feature = "python")]
 fn bytes<'a>(value: &'a Bound<'_, PyAny>) -> Option<&'a [u8]> {
     value.cast::<PyBytes>().ok().map(PyBytesMethods::as_bytes)
 }
 
+#[cfg(feature = "python")]
 fn integer(value: &Bound<'_, PyAny>) -> i128 {
     // Keep validation order in the port. Only nonnegative radii/margins may saturate.
     if value.is_instance_of::<PyInt>() {
@@ -33,6 +39,7 @@ fn integer(value: &Bound<'_, PyAny>) -> i128 {
     i128::MIN
 }
 
+#[cfg(feature = "python")]
 fn ratio(value: &Bound<'_, PyAny>) -> f64 {
     if value.is_instance_of::<PyFloat>() || value.is_instance_of::<PyInt>() {
         value.extract::<f64>().unwrap_or(f64::NAN)
@@ -41,6 +48,7 @@ fn ratio(value: &Bound<'_, PyAny>) -> f64 {
     }
 }
 
+#[cfg(feature = "python")]
 fn box_list(value: &Bound<'_, PyAny>) -> Result<Vec<[i64; 4]>, &'static str> {
     let values = value.cast::<PyList>().map_err(|_| port::BOXES)?;
     let mut result = Vec::with_capacity(values.len());
@@ -62,6 +70,7 @@ fn box_list(value: &Bound<'_, PyAny>) -> Result<Vec<[i64; 4]>, &'static str> {
     Ok(result)
 }
 
+#[cfg(feature = "python")]
 #[pyfunction]
 #[expect(
     clippy::too_many_arguments,
@@ -92,6 +101,7 @@ fn flood_balloon_interior<'py>(
     Ok(PyBytes::new(py, &mask))
 }
 
+#[cfg(feature = "python")]
 #[pyfunction]
 fn erode_linf<'py>(
     py: Python<'py>,
@@ -110,6 +120,7 @@ fn erode_linf<'py>(
     Ok(PyBytes::new(py, &mask))
 }
 
+#[cfg(feature = "python")]
 #[pyfunction]
 fn dilate_linf<'py>(
     py: Python<'py>,
@@ -128,6 +139,7 @@ fn dilate_linf<'py>(
     Ok(PyBytes::new(py, &mask))
 }
 
+#[cfg(feature = "python")]
 #[pyfunction]
 fn partition_voronoi_lobes(
     union_mask: &Bound<'_, PyAny>,
@@ -150,6 +162,7 @@ fn partition_voronoi_lobes(
     .map_err(error)
 }
 
+#[cfg(feature = "python")]
 #[pyfunction]
 fn strip_perimeter_contours<'py>(
     py: Python<'py>,
@@ -170,6 +183,7 @@ fn strip_perimeter_contours<'py>(
     Ok((PyBytes::new(py, &kept), PyBytes::new(py, &stripped)))
 }
 
+#[cfg(feature = "python")]
 #[pymodule]
 #[pyo3(name = "_native")]
 fn native_module(m: &Bound<'_, PyModule>) -> PyResult<()> {

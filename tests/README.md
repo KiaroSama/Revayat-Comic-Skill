@@ -61,13 +61,36 @@ Main CI runs automatically for pull requests and pushes to `main`, so checks
 belong to the current revision. Manual dispatch remains available. The optional
 integration and source-evidence workflows remain manual.
 
-Six additional native Python lanes install both crates as actual wheels on
-Linux, macOS and Windows with Python 3.12 and 3.14. They require both loaders to
-report `rust` before running parity and geometry-boundary tests; successful
-Cargo compilation alone does not prove that Python loaded the extension.
-Native JUnit and resolved dependency versions are retained on failure too.
-The Rust source checks also exercise the declared Rust 1.97 minimum, alongside
-the current stable compiler, without changing the existing stable check name.
+Six native Python lanes install all nine kernel crates as wheels on Linux,
+macOS, and Windows with Python 3.12 and 3.14. They use the stable Rust toolchain
+and require all nine loaders to report `rust` before running parity and
+geometry tests. CI retains native JUnit reports and resolved dependency
+versions even on failure.
+
+The Rust jobs run on stable and on the Rust 1.100.0 minimum. For each kernel
+crate, run these commands from the repository root with `manifest` set to its
+`rust/<crate>-rs/Cargo.toml` path:
+
+```sh
+cargo fmt --manifest-path "$manifest" -- --check
+cargo clippy --manifest-path "$manifest" --all-targets --locked -- -D warnings
+cargo clippy --manifest-path "$manifest" --no-default-features --all-targets --locked -- -D warnings
+cargo test --manifest-path "$manifest" --locked
+cargo test --manifest-path "$manifest" --no-default-features --locked
+```
+
+For `rust/revayat-comic-cli/Cargo.toml`, CI runs the format, Clippy, and locked
+test checks in the default mode, then `cargo tree --locked` and
+`cargo build --release --locked` against that manifest. The tree must contain
+no PyO3, and the built CLI must exit `0` for `doctor --json`, reporting `ok`
+and all nine kernel results as `true`.
+
+[The release workflow](../.github/workflows/release.yml) builds on native x64
+and Arm64 Linux and Windows runners. It inspects dynamic imports and runs the
+same smoke check on the staged binary. The `main` run checks the ZIP members,
+public key, and checksums without loading the signing key. Annotated `v*` tags
+also run protected signing, tamper checks, provenance attestation, and
+verification of the published assets.
 
 For a local proxy-configured machine, bypass the proxy for `localhost`,
 `127.0.0.1`, `::1` and `[::1]` while exercising loopback HTTP tests. Python's

@@ -10,12 +10,14 @@ Set `REVAYAT_PIXCORE=python` before importing `pixcore` to use the references in
 
 ## Build and install
 
-Use Python 3.12 or later and Rust 1.97 or later with a working platform linker.
+Use Python 3.12 or later and Rust 1.100.0 or later with a working platform linker.
 From the repository root, in the Python environment that runs Revayat Comic:
 
 ```console
 python -m pip install ./rust/pixcore-rs
 ```
+
+Build with `--no-default-features` for a pure Rust `rlib`. The `port` module does not require Python.
 
 The PEP 517 build installs a wheel containing `pixcore_rs._native` and its
 Python package. A plain `cargo build` does not install an importable Python

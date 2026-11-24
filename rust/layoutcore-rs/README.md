@@ -19,7 +19,7 @@ ties favor the topmost, then leftmost position.
 
 ## Build and verify
 
-Use Python 3.12 or later, Rust 1.97.0 or later, and a platform linker. From the
+Use Python 3.12 or later, Rust 1.100.0 or later, and a platform linker. From the
 repository root, run these commands in the intended Python environment:
 
 ```console

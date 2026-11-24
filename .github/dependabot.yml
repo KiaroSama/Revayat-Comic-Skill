@@ -18,18 +18,28 @@ updates:
       - /rust/hotcore-rs
       - /rust/pixcore-rs
       - /rust/maskcore-rs
-      - /rust/textcore-rs
       - /rust/detectcore-rs
       - /rust/qacore-rs
       - /rust/cleancore-rs
       - /rust/layoutcore-rs
       - /rust/packcore-rs
+      - /rust/revayat-comic-cli
     schedule:
       interval: weekly
     open-pull-requests-limit: 1
     groups:
       rust-crates:
         patterns: ["*"]
+
+  - package-ecosystem: cargo
+    directory: /rust/textcore-rs
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 1
+    ignore:
+      # PyO3 0.30.1 pins num-bigint 0.4.x.
+      - dependency-name: num-bigint
+        versions: [">= 0.5.0"]
 
   - package-ecosystem: pip
     directories:

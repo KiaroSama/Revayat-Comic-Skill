@@ -6,14 +6,14 @@
 
 [![GitHub Actions CI workflow on push, pull requests, and manual dispatch](https://img.shields.io/badge/CI-GitHub%20Actions-16a34a)](.github/workflows/ci.yml)
 [![GNU General Public License v3.0 or later](https://img.shields.io/badge/license-GPL--3.0--or--later-2563eb)](LICENSE)
-[![Plugin version 1.2.0 across five manifest formats](https://img.shields.io/badge/plugin-v1.2.0-ea580c)](plugin.json)
+[![Latest GitHub version tag](https://img.shields.io/github/v/tag/KiaroSama/Revayat-Comic-Skill?label=version&color=ea580c)](https://github.com/KiaroSama/Revayat-Comic-Skill/tags)
 [![Automated pytest suite across CI matrices](https://img.shields.io/badge/tests-pytest%20suite-0d9488)](tests/README.md)
 [![Python 3.13.15 measured locally, requires Python 3.12 or newer](https://img.shields.io/badge/Python-3.13.15-8b5cf6)](skills/revayat-comic/requirements.txt)
-[![Rust 1.99.1 measured locally for nine optional PyO3 kernel crates](https://img.shields.io/badge/Rust-1.99.1-9a3412)](rust/hotcore-rs/Cargo.toml)
+[![Rust 1.100.0 pinned for the kernel crates and standalone CLI](https://img.shields.io/badge/Rust-1.100.0-9a3412)](rust-toolchain.toml)
 [![Runs on Windows, Linux, and macOS](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-0891b2)](.github/workflows/ci.yml)
 [![Install via five plugin formats or standalone scripts](https://img.shields.io/badge/install-5%20plugins%20%7C%20standalone-4f46e5)](#install)
 [![Documentation in English and Persian](https://img.shields.io/badge/docs-English%20%7C%20Persian-0284c7)](README.fa.md)
-[![Published tree measured via git ls-files is 3.5 MB](https://img.shields.io/badge/repo%20size-3.5%20MB-ca8a04)](#development)
+[![Repository files total 3.6 MB](https://img.shields.io/badge/repo%20size-3.6%20MB-ca8a04)](#development)
 [![Pillow image IO and Persian text rendering with bundled SIL OFL Vazir fonts](https://img.shields.io/badge/typography-Vazir%20%7C%20Pillow-15803d)](skills/revayat-comic/assets/fonts/OFL.txt)
 [![PyMuPDF PDF import and export](https://img.shields.io/badge/pdf-PyMuPDF-b45309)](skills/revayat-comic/requirements.txt)
 [![OpenCV balloon detection, masks, and inpainting](https://img.shields.io/badge/vision-OpenCV-334155)](skills/revayat-comic/requirements.txt)
@@ -131,6 +131,75 @@ output is *correct* rather than merely present:
   Windows. On Linux and macOS, install `libfribidi`. Without it the
   `arabic-reshaper` + `python-bidi` fallback runs and the pages are still
   correct to read.
+
+### Standalone Rust CLI
+
+`bin/revayat-comic` (`bin/revayat-comic.exe` on Windows) runs the nine Rust
+kernels without a Python runtime. Use the Python skill for full comic
+translation. The release ZIPs target 64-bit Linux and Windows on x64 and Arm64.
+
+To build from the repository root, install [Rust 1.100.0](rust-toolchain.toml)
+and the host linker. Use PowerShell 7 and the MSVC build tools on Windows:
+
+```powershell
+cargo build --release --locked --manifest-path rust/revayat-comic-cli/Cargo.toml
+New-Item -ItemType Directory -Force bin | Out-Null
+Copy-Item rust/revayat-comic-cli/target/release/revayat-comic.exe bin/revayat-comic.exe
+./bin/revayat-comic.exe doctor --json
+```
+
+On Linux:
+
+```sh
+cargo build --release --locked --manifest-path rust/revayat-comic-cli/Cargo.toml
+mkdir -p bin
+cp rust/revayat-comic-cli/target/release/revayat-comic bin/revayat-comic
+./bin/revayat-comic doctor --json
+```
+
+| Command | What it does |
+| --- | --- |
+| `doctor --json` | Reports the version and verifies all nine kernels. |
+| `normalize-persian` | Normalizes UTF-8 Persian text from standard input. |
+| `wrap-lines` | Takes word, space, and band widths as JSON and returns word-index ranges. |
+| `sort-pages` | Sorts a JSON array of page names naturally without renaming any files. |
+| `check-geometry` | Checks JSON page dimensions against the limits you supply. |
+
+See the [CLI reference](rust/revayat-comic-cli/README.md) for input examples,
+limits, and exit codes.
+
+Each run writes a private UTF-8 `logs/revayat-comic_YYYY-MM-DD_HH-mm-ss_UTC.log`
+beside `bin/`, or under the executable's directory if it is not in `bin/`.
+Entries use `[YYYY-MM-DD HH:mm:ss UTC] [LEVEL] [revayat-comic]`. The CLI
+records the command name, version, run ID, exit code, and duration. It omits
+arguments, input, filenames, and credentials. It does not rotate or delete logs.
+Restrict access to the install directory, remove logs you no longer need, and
+review a log before sharing it.
+
+#### Verify a release ZIP
+
+From the [tagged source](https://github.com/KiaroSama/Revayat-Comic-Skill/tags)
+for the release, obtain [`docs/signing/publisher.json`](docs/signing/publisher.json).
+Use that copy to establish trust before opening the ZIP. Download the ZIP, its
+`.sig`, `SHA256SUMS`, and `SHA256SUMS.sig` from the matching
+[GitHub release](https://github.com/KiaroSama/Revayat-Comic-Skill/releases). In
+the download directory, set `METADATA` to the trusted JSON file's path; set
+`ZIP`, `TAG`, and `SHA` to the archive filename, its tag, and the full commit
+SHA the annotated tag points to. In Bash with OpenSSL, Python 3, and GitHub CLI:
+
+```sh
+python3 -c 'import json,sys; from pathlib import Path; p=Path(sys.argv[1]); Path("publisher.pem").write_bytes(json.loads(p.read_text(encoding="utf-8"))["public_key_pem"].encode("ascii"))' "$METADATA"
+openssl dgst -sha256 -verify publisher.pem -signature SHA256SUMS.sig SHA256SUMS
+openssl dgst -sha256 -verify publisher.pem -signature "$ZIP.sig" "$ZIP"
+gh attestation verify "$ZIP" --repo KiaroSama/Revayat-Comic-Skill \
+  --signer-workflow KiaroSama/Revayat-Comic-Skill/.github/workflows/release.yml \
+  --source-ref "refs/tags/$TAG" --source-digest "$SHA" --deny-self-hosted-runners
+```
+
+Require every command to succeed, and compare the ZIP's SHA-256 digest with
+its entry in the signed `SHA256SUMS`. The project signs with its own self-signed
+publisher key. This is a detached signature, not commercial Windows
+Authenticode or Apple notarization.
 
 ## Use
 

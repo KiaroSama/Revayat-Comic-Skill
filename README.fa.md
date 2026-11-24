@@ -8,14 +8,14 @@
 
 [![گردش‌کار CI در GitHub Actions روی push، پول‌ریکوئست و اجرای دستی](https://img.shields.io/badge/CI-GitHub%20Actions-16a34a)](.github/workflows/ci.yml)
 [![مجوز GPL نسخهٔ ۳ یا بالاتر](https://img.shields.io/badge/license-GPL--3.0--or--later-2563eb)](LICENSE)
-[![نسخهٔ 1.2.0 افزونه در پنج قالب مانیفست](https://img.shields.io/badge/plugin-v1.2.0-ea580c)](plugin.json)
+[![آخرین برچسب نسخه در گیت‌هاب](https://img.shields.io/github/v/tag/KiaroSama/Revayat-Comic-Skill?label=version&color=ea580c)](https://github.com/KiaroSama/Revayat-Comic-Skill/tags)
 [![مجموعهٔ آزمون خودکار pytest در ماتریس CI](https://img.shields.io/badge/tests-pytest%20suite-0d9488)](tests/README.md)
 [![پایتون 3.13.15 در آزمون محلی، حداقل پایتون 3.12 یا بالاتر](https://img.shields.io/badge/Python-3.13.15-8b5cf6)](skills/revayat-comic/requirements.txt)
-[![راست 1.99.1 اندازه‌گیری‌شده برای نه هستهٔ اختیاری PyO3](https://img.shields.io/badge/Rust-1.99.1-9a3412)](rust/hotcore-rs/Cargo.toml)
+[![نسخهٔ ثابت Rust 1.100.0 برای هسته‌ها و ابزار مستقل](https://img.shields.io/badge/Rust-1.100.0-9a3412)](rust-toolchain.toml)
 [![اجرا روی ویندوز، لینوکس و مک](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-0891b2)](.github/workflows/ci.yml)
 [![نصب با پنج قالب افزونه یا اسکریپت مستقل](https://img.shields.io/badge/install-5%20plugins%20%7C%20standalone-4f46e5)](#نصب)
 [![مستندات فارسی و انگلیسی](https://img.shields.io/badge/docs-English%20%7C%20Persian-0284c7)](README.md)
-[![حجم درخت ردیابی‌شدهٔ مخزن حدود ۳٫۵ مگابایت است](https://img.shields.io/badge/repo%20size-3.5%20MB-ca8a04)](#توسعه)
+[![حجم فایل‌های مخزن ۳٫۶ مگابایت است](https://img.shields.io/badge/repo%20size-3.6%20MB-ca8a04)](#توسعه)
 [![حروف‌چینی فارسی با قلم وزیرِ همراه مخزن و Pillow](https://img.shields.io/badge/typography-Vazir%20%7C%20Pillow-15803d)](skills/revayat-comic/assets/fonts/OFL.txt)
 [![ورودی و خروجی PDF با PyMuPDF](https://img.shields.io/badge/pdf-PyMuPDF-b45309)](skills/revayat-comic/requirements.txt)
 [![تشخیص حباب، ماسک و ترمیم با OpenCV](https://img.shields.io/badge/vision-OpenCV-334155)](skills/revayat-comic/requirements.txt)
@@ -164,8 +164,65 @@ python skills/revayat-comic/scripts/revayat-comic.py doctor
 
 اگر `"ready": true` بود، کار تمام است. دو فیلد زیر `persian` تعیین می‌کنند خروجی *درست* است یا فقط *موجود*:
 
-- **`"font"`** و **`"vazir"`** — قلمی که فارسی با آن کشیده می‌شود، و اینکه همان قلمِ خانگی است یا نه. **فارسی در این پروژه به‌صورت پیش‌فرض با قلم وزیر حروف‌چینی می‌شود**؛ وزن‌های رسمی `Vazir-Regular.ttf`، `Vazir-Medium.ttf` و `Vazir-Bold.ttf` (با مجوز `SIL OFL-1.1` در `skills/revayat-comic/assets/fonts/`) داخل خود مخزن قرار دارند و روی ویندوز، لینوکس و مک به‌صورت خودکار انتخاب می‌شوند. همچنین افکت‌های متنی `bold`، `italic`، `bold-italic`، `outline`، `shadow` و `shout`، یکدست‌سازی اندازهٔ قلم در سطح صفحه، ایزولهٔ یونیکد `RLI/PDI` (`U+2067`/`U+2069`)، دو هستهٔ اختیاری راست (`rust/hotcore-rs` و `rust/pixcore-rs` با بازگشت خودکار پایتون) و هماهنگی چندایجنتی `batch` پشتیبانی می‌شوند. تاهوما، نوتو نسخ عربی و Geeza Pro هم در صورت انتخاب دستی با `--font` کار می‌کنند و وقتی قلمی غیر از وزیر انتخاب شود، `"vazir": false` گزارش می‌شود.
+- **`"font"`** و **`"vazir"`** — قلمی که فارسی با آن کشیده می‌شود، و اینکه همان قلمِ خانگی است یا نه. **فارسی در این پروژه به‌صورت پیش‌فرض با قلم وزیر حروف‌چینی می‌شود**؛ وزن‌های رسمی `Vazir-Regular.ttf`، `Vazir-Medium.ttf` و `Vazir-Bold.ttf` (با مجوز `SIL OFL-1.1` در `skills/revayat-comic/assets/fonts/`) داخل خود مخزن قرار دارند و روی ویندوز، لینوکس و مک به‌صورت خودکار انتخاب می‌شوند. همچنین افکت‌های متنی `bold`، `italic`، `bold-italic`، `outline`، `shadow` و `shout`، یکدست‌سازی اندازهٔ قلم در سطح صفحه، ایزولهٔ یونیکد `RLI/PDI` (`U+2067`/`U+2069`)، نه هستهٔ اختیاری راست (با مسیر جایگزین خودکار پایتون) و هماهنگی چندایجنتی `batch` پشتیبانی می‌شوند. تاهوما، نوتو نسخ عربی و Geeza Pro هم در صورت انتخاب دستی با `--font` کار می‌کنند و وقتی قلمی غیر از وزیر انتخاب شود، `"vazir": false` گزارش می‌شود.
 - **`"raqm"`** — اینکه Pillow خودش خط عربی را shape می‌کند یا نه. **این محدودیتِ پلتفرم نیست.** Pillow در wheel هر پلتفرمی libraqm را می‌فرستد؛ آنچه libraqm در زمان اجرا لود می‌کند **FriBiDi** است، و لینوکس معمولاً آن را دارد و ویندوز و مک معمولاً نه. یک `fribidi.dll` — `fribidi-0.dll` یا `libfribidi-0.dll` هم کار می‌کنند — در پوشه‌ای که روی `PATH` است بگذارید (پوشه‌ای در مسیرِ جستجوی DLL؛ کنار `python.exe` کافی نیست) تا `raqm` در ویندوز true شود. در لینوکس و مک، `libfribidi` را نصب کنید. بدون آن، مسیر جایگزین `arabic-reshaper` + `python-bidi` اجرا می‌شود و صفحه‌ها باز هم برای خواندن درست‌اند.
+
+<h3>
+‏⁧ابزار مستقل Rust⁩
+</h3>
+
+‏⁧فایل `bin/revayat-comic` (در ویندوز `bin/revayat-comic.exe`) هر ۹ هستهٔ Rust را بدون پایتون اجرا می‌کند. برای ترجمهٔ کامل کمیک از مهارت پایتون استفاده کنید. بسته‌های انتشار برای ویندوز و لینوکس ۶۴ بیتی، روی معماری‌های x64 و Arm64 هستند.⁩
+
+‏⁧برای ساخت از ریشهٔ مخزن، [Rust 1.100.0](rust-toolchain.toml) و پیونددهندهٔ سیستم را نصب کنید. در ویندوز از PowerShell ۷ و ابزارهای ساخت MSVC استفاده کنید:⁩
+
+<div dir="ltr">
+
+```powershell
+cargo build --release --locked --manifest-path rust/revayat-comic-cli/Cargo.toml
+New-Item -ItemType Directory -Force bin | Out-Null
+Copy-Item rust/revayat-comic-cli/target/release/revayat-comic.exe bin/revayat-comic.exe
+./bin/revayat-comic.exe doctor --json
+```
+
+</div>
+
+‏⁧در لینوکس:⁩
+
+<div dir="ltr">
+
+```sh
+cargo build --release --locked --manifest-path rust/revayat-comic-cli/Cargo.toml
+mkdir -p bin
+cp rust/revayat-comic-cli/target/release/revayat-comic bin/revayat-comic
+./bin/revayat-comic doctor --json
+```
+
+</div>
+
+‏⁧`doctor --json` نسخه را گزارش می‌کند و هر ۹ هسته را می‌آزماید. `normalize-persian` متن فارسی را از ورودی استاندارد با کدگذاری UTF-8 می‌خواند و یکدست می‌کند. `wrap-lines` عرض واژه‌ها، فاصله و سطرها را از JSON می‌گیرد و بازهٔ واژه‌ها را برمی‌گرداند. `sort-pages` نام صفحه‌ها را از یک آرایهٔ JSON به‌ترتیب طبیعی مرتب می‌کند و نام هیچ فایلی را عوض نمی‌کند. `check-geometry` ابعاد صفحه‌ها را از JSON می‌گیرد و با حدهایی که تعیین کرده‌اید می‌سنجد. برای نمونهٔ ورودی، محدودیت‌ها و کدهای خروج، [راهنمای ابزار](rust/revayat-comic-cli/README.md) را ببینید.⁩
+
+‏⁧هر اجرا گزارش خصوصی UTF-8 با نام `logs/revayat-comic_YYYY-MM-DD_HH-mm-ss_UTC.log` می‌نویسد. پوشهٔ `logs/` کنار `bin/` است؛ اگر فایل اجرایی در `bin/` نباشد، ابزار پوشهٔ گزارش را در دایرکتوری فایل اجرایی می‌سازد. هر سطر با `[YYYY-MM-DD HH:mm:ss UTC] [LEVEL] [revayat-comic]` شروع می‌شود. گزارش شامل نام فرمان، نسخه، شناسهٔ اجرا، کد خروج و مدت اجراست. آرگومان‌ها، متن ورودی، نام فایل‌ها و اطلاعات ورود را ثبت نمی‌کند. ابزار گزارش‌های قدیمی را حذف یا بایگانی نمی‌کند. دسترسی به پوشهٔ نصب را محدود کنید، گزارش‌های بی‌استفاده را پاک کنید و پیش از فرستادن گزارش برای پشتیبانی آن را بخوانید.⁩
+
+<h4>
+‏⁧بررسی امضای بستهٔ انتشار⁩
+</h4>
+
+‏⁧فایل [`docs/signing/publisher.json`](docs/signing/publisher.json) را از [کد منبع همان برچسب](https://github.com/KiaroSama/Revayat-Comic-Skill/tags) بردارید و پیش از باز کردن ZIP به کلید عمومی همان فایل تکیه کنید. ZIP، فایل `.sig` آن، `SHA256SUMS` و `SHA256SUMS.sig` را از [صفحهٔ همان انتشار](https://github.com/KiaroSama/Revayat-Comic-Skill/releases) بگیرید. در پوشهٔ دانلود، `METADATA` را روی مسیر فایل JSON مورد اعتماد بگذارید و `ZIP`، `TAG` و `SHA` را به‌ترتیب روی نام بسته، برچسب انتشار و شناسهٔ کامل کامیتی که برچسب توضیح‌دار به آن اشاره می‌کند تنظیم کنید. فرمان‌ها را در Bash، با OpenSSL، Python ۳ و GitHub CLI اجرا کنید:⁩
+
+<div dir="ltr">
+
+```sh
+python3 -c 'import json,sys; from pathlib import Path; p=Path(sys.argv[1]); Path("publisher.pem").write_bytes(json.loads(p.read_text(encoding="utf-8"))["public_key_pem"].encode("ascii"))' "$METADATA"
+openssl dgst -sha256 -verify publisher.pem -signature SHA256SUMS.sig SHA256SUMS
+openssl dgst -sha256 -verify publisher.pem -signature "$ZIP.sig" "$ZIP"
+gh attestation verify "$ZIP" --repo KiaroSama/Revayat-Comic-Skill \
+  --signer-workflow KiaroSama/Revayat-Comic-Skill/.github/workflows/release.yml \
+  --source-ref "refs/tags/$TAG" --source-digest "$SHA" --deny-self-hosted-runners
+```
+
+</div>
+
+‏⁧همهٔ فرمان‌ها باید موفق شوند. چکیدهٔ SHA-256 بسته را هم با سطر همان فایل در `SHA256SUMS` امضاشده مقایسه کنید. پروژه بسته را با کلید خودامضای ناشر امضا می‌کند. این امضای جداگانه، گواهی تجاری Authenticode ویندوز یا تأییدیهٔ اپل نیست.⁩
 
 ## استفاده
 

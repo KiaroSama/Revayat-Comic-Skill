@@ -16,12 +16,14 @@ only if it touches the border and meets both the area and either span cutoff.
 
 ## Build and install
 
-Use Python 3.12 or later, Rust 1.97.0 or later, and a platform linker. Run from
+Use Python 3.12 or later, Rust 1.100.0 or later, and a platform linker. Run from
 this repository's root in the Python environment that runs Revayat Comic:
 
 ```console
 python -m pip install ./rust/maskcore-rs
 ```
+
+Build with `--no-default-features` for a pure Rust `rlib`. The `port` module does not require Python.
 
 The PEP 517 build uses Maturin and installs `maskcore_rs._native`. A plain
 `cargo build` does not install the Python package. The Rust bridge borrows

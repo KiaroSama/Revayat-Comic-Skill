@@ -1,12 +1,16 @@
 //! PyO3 bridge scaffolded by rust-anything and adapted to borrow image bytes.
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "python")]
 use pyo3::exceptions::PyValueError;
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
+#[cfg(feature = "python")]
 use pyo3::types::{PyBool, PyBytes, PyFloat, PyInt, PyList};
 
-mod port;
+pub mod port;
 
+#[cfg(feature = "python")]
 fn error(message: String) -> PyErr {
     PyValueError::new_err(
         message
@@ -16,10 +20,12 @@ fn error(message: String) -> PyErr {
     )
 }
 
+#[cfg(feature = "python")]
 fn bytes<'a>(value: &'a Bound<'_, PyAny>) -> Option<&'a [u8]> {
     value.cast::<PyBytes>().ok().map(PyBytesMethods::as_bytes)
 }
 
+#[cfg(feature = "python")]
 fn integer(value: &Bound<'_, PyAny>) -> i64 {
     // The port rejects negative dimensions, coordinates and parameters in validation order.
     value
@@ -29,6 +35,7 @@ fn integer(value: &Bound<'_, PyAny>) -> i64 {
         .unwrap_or(-1)
 }
 
+#[cfg(feature = "python")]
 fn ratio(value: &Bound<'_, PyAny>) -> f64 {
     if value.is_exact_instance_of::<PyInt>() || value.is_exact_instance_of::<PyFloat>() {
         value.extract().unwrap_or(f64::NAN)
@@ -37,6 +44,7 @@ fn ratio(value: &Bound<'_, PyAny>) -> f64 {
     }
 }
 
+#[cfg(feature = "python")]
 fn rect(value: &Bound<'_, PyAny>) -> Option<[i64; 4]> {
     let values = value.cast::<PyList>().ok()?;
     if values.len() != 4 {
@@ -49,6 +57,7 @@ fn rect(value: &Bound<'_, PyAny>) -> Option<[i64; 4]> {
     Some(rect)
 }
 
+#[cfg(feature = "python")]
 fn rects(value: &Bound<'_, PyAny>) -> Option<Vec<[i64; 4]>> {
     value
         .cast::<PyList>()
@@ -58,6 +67,7 @@ fn rects(value: &Bound<'_, PyAny>) -> Option<Vec<[i64; 4]>> {
         .collect()
 }
 
+#[cfg(feature = "python")]
 #[pyfunction]
 fn find_panel_gutters(
     py: Python<'_>,
@@ -80,6 +90,7 @@ fn find_panel_gutters(
         .map_err(error)
 }
 
+#[cfg(feature = "python")]
 #[pyfunction]
 fn connected_components_boxes(
     py: Python<'_>,
@@ -100,6 +111,7 @@ fn connected_components_boxes(
         .map_err(error)
 }
 
+#[cfg(feature = "python")]
 #[pyfunction]
 #[expect(
     clippy::too_many_arguments,
@@ -130,6 +142,7 @@ fn detect_speech_balloons(
     .map_err(error)
 }
 
+#[cfg(feature = "python")]
 #[pyfunction]
 fn merge_text_lines(
     py: Python<'_>,
@@ -148,6 +161,7 @@ fn merge_text_lines(
         .map_err(error)
 }
 
+#[cfg(feature = "python")]
 #[pyfunction]
 fn sort_reading_order(
     py: Python<'_>,
@@ -164,6 +178,7 @@ fn sort_reading_order(
         .map_err(error)
 }
 
+#[cfg(feature = "python")]
 #[pyfunction]
 fn estimate_stroke_width(
     py: Python<'_>,
@@ -177,6 +192,7 @@ fn estimate_stroke_width(
         .map_err(error)
 }
 
+#[cfg(feature = "python")]
 #[pymodule]
 #[pyo3(name = "_native")]
 fn native_module(module: &Bound<'_, PyModule>) -> PyResult<()> {

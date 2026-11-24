@@ -19,7 +19,7 @@ threshold, non-identical images return the full image bounds and pixel count.
 
 ## Build and install
 
-Use Python 3.12 or later, Rust 1.97.0 or later, and a platform linker. Run this
+Use Python 3.12 or later, Rust 1.100.0 or later, and a platform linker. Run this
 from the repository root in the Python environment that runs Revayat Comic:
 
 ```console

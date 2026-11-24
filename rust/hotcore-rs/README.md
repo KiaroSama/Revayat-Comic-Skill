@@ -13,12 +13,14 @@ Rust port of `skills/revayat-comic/scripts/hotcore/`, bridged with PyO3. Generat
 
 ## Build and install
 
-Use Python 3.12 or later and Rust 1.97 or later with a working platform linker.
+Use Python 3.12 or later and Rust 1.100.0 or later with a working platform linker.
 From the repository root, in the Python environment that runs Revayat Comic:
 
 ```console
 python -m pip install ./rust/hotcore-rs
 ```
+
+Build with `--no-default-features` for a pure Rust `rlib`. The `port` module does not require Python.
 
 The PEP 517 build installs a wheel containing `hotcore_rs._native` and its
 Python package. A plain `cargo build` only produces the Rust library; it does

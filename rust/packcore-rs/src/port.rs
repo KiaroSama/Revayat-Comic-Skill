@@ -1,14 +1,22 @@
 //! Archive order, page geometry and raster kernels.
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "python")]
 pub(crate) const NAMES_ERROR: &str = "names must be a list of strings";
+#[cfg(feature = "python")]
 pub(crate) const ROW_ERROR: &str = "dims must be a list of two-element lists";
+#[cfg(feature = "python")]
 pub(crate) const BOUNDS_ERROR: &str =
     "dimension bounds must have a finite aspect ratio >= 1 and positive integer edges and area";
+#[cfg(feature = "python")]
 pub(crate) const RGB_DIMENSIONS_ERROR: &str = "width and height must be positive integers";
+#[cfg(any(feature = "python", test))]
 const RGB_BUFFER_ERROR: &str = "RGB buffer must contain exactly width * height * 3 bytes";
+#[cfg(feature = "python")]
 pub(crate) const PDF_DIMENSIONS_ERROR: &str = "page dimensions must be positive integers";
+#[cfg(feature = "python")]
 pub(crate) const TILE_ERROR: &str = "tile_size must be a positive integer";
+#[cfg(feature = "python")]
 pub(crate) const TOL_ERROR: &str = "tol must be an integer between 0 and 255";
 
 #[derive(Ord, PartialOrd, Eq, PartialEq)]
@@ -50,7 +58,7 @@ fn sort_key(mut bytes: &[u8]) -> Vec<Run> {
     key
 }
 
-pub(crate) fn natural_sort_order(names: Vec<Vec<u8>>) -> Vec<usize> {
+pub fn natural_sort_order(names: Vec<Vec<u8>>) -> Vec<usize> {
     let mut keys: Vec<_> = names
         .into_iter()
         .enumerate()
@@ -60,7 +68,7 @@ pub(crate) fn natural_sort_order(names: Vec<Vec<u8>>) -> Vec<usize> {
     keys.into_iter().map(|(_, _, i)| i).collect()
 }
 
-pub(crate) fn validate_page_dimensions(
+pub fn validate_page_dimensions(
     w: i128,
     h: i128,
     ratio: f64,
@@ -75,7 +83,7 @@ pub(crate) fn validate_page_dimensions(
     (long <= 1_i128 << f64::MANTISSA_DIGITS).then(|| long as f64 / short as f64 <= ratio)
 }
 
-pub(crate) fn compute_pdf_page_layout(
+pub fn compute_pdf_page_layout(
     w: f64,
     h: f64,
     dpi: f64,
@@ -102,6 +110,7 @@ pub(crate) fn compute_pdf_page_layout(
     Ok(layout)
 }
 
+#[cfg(any(feature = "python", test))]
 pub(crate) fn check_rgb(
     rgb: Option<&[u8]>,
     width: usize,
@@ -117,7 +126,7 @@ fn luma(r: u8, g: u8, b: u8) -> u8 {
     ((77 * u16::from(r) + 150 * u16::from(g) + 29 * u16::from(b)) >> 8) as u8
 }
 
-pub(crate) fn analyze_rgb_page(rgb: &[u8]) -> [u64; 5] {
+pub fn analyze_rgb_page(rgb: &[u8]) -> [u64; 5] {
     let mut digest = 2_166_136_261_u32;
     let (mut min, mut max, mut sum, mut nonwhite) = (255, 0, 0_u64, 0_u64);
     for &[r, g, b] in rgb.as_chunks::<3>().0 {
@@ -141,7 +150,7 @@ pub(crate) fn analyze_rgb_page(rgb: &[u8]) -> [u64; 5] {
     ]
 }
 
-pub(crate) fn diff_raster_tiles(
+pub fn diff_raster_tiles(
     orig: &[u8],
     final_rgb: &[u8],
     width: usize,
@@ -184,7 +193,7 @@ pub(crate) fn diff_raster_tiles(
     changed
 }
 
-pub(crate) fn compute_grayscale_histogram(rgb: &[u8]) -> [usize; 256] {
+pub fn compute_grayscale_histogram(rgb: &[u8]) -> [usize; 256] {
     let mut histogram = [0; 256];
     for &[r, g, b] in rgb.as_chunks::<3>().0 {
         histogram[usize::from(luma(r, g, b))] += 1;

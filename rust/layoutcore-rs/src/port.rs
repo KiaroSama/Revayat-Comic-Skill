@@ -3,9 +3,9 @@
 
 use std::collections::VecDeque;
 
-pub(crate) type Pixels = Option<usize>;
-pub(crate) type Span = [usize; 2];
-pub(crate) type KernelResult<T> = Result<T, &'static str>;
+pub type Pixels = Option<usize>;
+pub type Span = [usize; 2];
+pub type KernelResult<T> = Result<T, &'static str>;
 
 const DIMENSIONS: &str = "invalid image dimensions";
 const MASK: &str = "mask buffer must be bytes and match image dimensions";
@@ -27,7 +27,7 @@ fn mask_buffer(mask: Option<&[u8]>, size: usize) -> KernelResult<&[u8]> {
     mask.filter(|m| m.len() == size).ok_or(MASK)
 }
 
-pub(crate) fn scan_mask_spans(
+pub fn scan_mask_spans(
     mask: Option<&[u8]>,
     width: Pixels,
     height: Pixels,
@@ -187,7 +187,7 @@ fn wrap(
     result
 }
 
-pub(crate) fn fit_lines_to_spans(
+pub fn fit_lines_to_spans(
     word_widths: Option<Vec<usize>>,
     space_width: Pixels,
     line_height: Pixels,
@@ -233,7 +233,7 @@ pub(crate) fn fit_lines_to_spans(
     ))
 }
 
-pub(crate) fn harmonize_font_sizes(
+pub fn harmonize_font_sizes(
     sizes: Option<Vec<usize>>,
     areas: Option<Vec<usize>>,
     max_step: Pixels,
@@ -312,7 +312,7 @@ fn sweep(distance: &mut [usize], width: usize, height: usize, backwards: bool) {
     }
 }
 
-pub(crate) fn check_ink_wall_clearance(
+pub fn check_ink_wall_clearance(
     ink: Option<&[u8]>,
     walls: Option<&[u8]>,
     width: Pixels,
@@ -348,7 +348,7 @@ pub(crate) fn check_ink_wall_clearance(
     Ok(result)
 }
 
-pub(crate) fn select_largest_inscribed_band(
+pub fn select_largest_inscribed_band(
     spans: Option<Vec<Span>>,
     min_width: Pixels,
     min_height: Pixels,
@@ -380,7 +380,7 @@ pub(crate) fn select_largest_inscribed_band(
     Ok(best)
 }
 
-pub(crate) fn align_lines_rtl(
+pub fn align_lines_rtl(
     line_widths: Option<Vec<usize>>,
     band_lefts: Option<Vec<usize>>,
     band_rights: Option<Vec<usize>>,

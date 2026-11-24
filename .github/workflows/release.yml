@@ -1,0 +1,445 @@
+name: Release CLI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+
+jobs:
+  build:
+    name: Build CLI (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            os: ubuntu-24.04
+            bin_name: revayat-comic
+          - platform: linux-arm64
+            os: ubuntu-24.04-arm
+            bin_name: revayat-comic
+          - platform: windows-x64
+            os: windows-2025
+            bin_name: revayat-comic.exe
+          - platform: windows-arm64
+            os: windows-11-arm
+            bin_name: revayat-comic.exe
+    defaults:
+      run:
+        shell: bash
+    env:
+      BIN_NAME: ${{ matrix.bin_name }}
+      PLATFORM: ${{ matrix.platform }}
+      RUSTUP_TOOLCHAIN: '1.100.0'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+
+      - name: Install the pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.100.0 --profile minimal --component rustfmt --component clippy && rustup default 1.100.0
+          rustc --version | grep -E '^rustc 1\.100\.0 '
+
+      - name: Test and build without PyO3
+        run: |
+          manifest=rust/revayat-comic-cli/Cargo.toml
+          tree=$(cargo tree --manifest-path "$manifest" --locked)
+          if grep -Eq '\bpyo3 v' <<< "$tree"; then
+            echo 'The standalone CLI depends on PyO3' >&2
+            exit 1
+          fi
+          cargo test --manifest-path "$manifest" --locked
+          cargo build --release --manifest-path "$manifest" --locked
+
+      - name: Verify imports and smoke-test the staged binary
+        run: |
+          mkdir -p bin
+          cp "rust/revayat-comic-cli/target/release/$BIN_NAME" "bin/$BIN_NAME"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import struct
+          import subprocess
+
+          binary = Path("bin", os.environ["BIN_NAME"]).resolve()
+          platform = os.environ["PLATFORM"]
+          if os.name == "nt":
+              # PE32+ has separate directories for normal and delay-loaded imports.
+              pe = binary.read_bytes()
+              header = struct.unpack_from("<I", pe, 0x3C)[0]
+              machine, sections = struct.unpack_from("<HH", pe, header + 4)
+              optional_size = struct.unpack_from("<H", pe, header + 20)[0]
+              optional = header + 24
+              assert pe[:2] == b"MZ" and pe[header:header + 4] == b"PE\0\0"
+              assert machine == {"windows-x64": 0x8664, "windows-arm64": 0xAA64}[platform]
+              assert struct.unpack_from("<H", pe, optional)[0] == 0x20B
+              table = optional + optional_size
+
+              def file_offset(rva):
+                  for index in range(sections):
+                      address, size, pointer = struct.unpack_from("<III", pe, table + 40 * index + 12)
+                      if address <= rva < address + size:
+                          return pointer + rva - address
+                  raise ValueError(f"Unmapped PE import RVA: {rva:#x}")
+
+              imports = []
+              directories = struct.unpack_from("<I", pe, optional + 108)[0]
+              for index, stride, name_field in ((1, 20, 12), (13, 32, 4)):
+                  if directories <= index:
+                      continue
+                  rva, size = struct.unpack_from("<II", pe, optional + 112 + 8 * index)
+                  if not rva:
+                      continue
+                  descriptors = file_offset(rva)
+                  for offset in range(descriptors, descriptors + size - stride + 1, stride):
+                      fields = pe[offset:offset + stride]
+                      if not any(fields):
+                          break
+                      if index == 13:
+                          assert struct.unpack_from("<I", fields)[0] == 1, "Expected delay import RVAs"
+                      name_rva = struct.unpack_from("<I", fields, name_field)[0]
+                      name = file_offset(name_rva)
+                      imports.append(pe[name:pe.index(b"\0", name)].decode("ascii").lower())
+                  else:
+                      raise ValueError("Unterminated PE import directory")
+              assert not [dll for dll in imports if dll.startswith("python3") and dll.endswith(".dll")], imports
+          else:
+              linked = subprocess.check_output(["ldd", str(binary)], text=True, encoding="utf-8")
+              assert "libpython" not in linked.lower() and "not found" not in linked, linked
+
+          logs = binary.parent.parent / "logs"
+          existing = set(logs.glob("revayat-comic_*.log"))
+          try:
+              report = json.loads(subprocess.check_output([str(binary), "doctor", "--json"]))
+              expected = {
+                  "hotcore-rs", "pixcore-rs", "maskcore-rs", "textcore-rs", "detectcore-rs",
+                  "qacore-rs", "cleancore-rs", "layoutcore-rs", "packcore-rs",
+              }
+              assert report["ok"] is True and report["kernels"].keys() == expected, report
+              assert all(result is True for result in report["kernels"].values()), report
+              print(json.dumps(report, sort_keys=True))
+          finally:
+              for log in set(logs.glob("revayat-comic_*.log")) - existing:
+                  log.unlink()
+          PY
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: revayat-comic-bin-${{ matrix.platform }}
+          path: bin/${{ matrix.bin_name }}
+          if-no-files-found: error
+
+  signing:
+    name: Package CLI (${{ matrix.platform }})
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    needs: [build]
+    runs-on: ${{ matrix.os }}
+    environment:
+      name: revayat-signing
+      url: ${{ startsWith(github.ref, 'refs/tags/v') && format('https://github.com/{0}/releases/tag/{1}', github.repository, github.ref_name) || format('https://github.com/{0}/actions/runs/{1}', github.repository, github.run_id) }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            os: ubuntu-24.04
+            bin_name: revayat-comic
+          - platform: linux-arm64
+            os: ubuntu-24.04-arm
+            bin_name: revayat-comic
+          - platform: windows-x64
+            os: windows-2025
+            bin_name: revayat-comic.exe
+          - platform: windows-arm64
+            os: windows-11-arm
+            bin_name: revayat-comic.exe
+    defaults:
+      run:
+        shell: bash
+    env:
+      BIN_NAME: ${{ matrix.bin_name }}
+      PLATFORM: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: revayat-comic-bin-${{ matrix.platform }}
+          path: bin/
+
+      - name: Validate the source and package the CLI
+        id: package
+        run: |
+          source_sha=$(git rev-parse HEAD)
+          test "$source_sha" = "$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            test "$(git cat-file -t "$GITHUB_REF")" = tag
+            test "$(git rev-parse "${GITHUB_REF}^{commit}")" = "$source_sha"
+          fi
+          printf 'source_sha=%s tag_ref=%s\n' "$source_sha" "$GITHUB_REF"
+          version=$(python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import sys
+          import tomllib
+
+          version = json.loads(Path("plugin.json").read_text(encoding="utf-8"))["version"]
+          assert re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version), version
+          cargo = tomllib.loads(Path("rust/revayat-comic-cli/Cargo.toml").read_text(encoding="utf-8"))
+          assert cargo["package"]["version"] == version, "Plugin and CLI versions differ"
+          tag = f"v{version}"
+          if os.environ["GITHUB_REF"].startswith("refs/tags/"):
+              assert os.environ["GITHUB_REF_NAME"] == tag, "Tag and plugin versions differ"
+          sys.stdout.buffer.write(tag.encode("ascii") + b"\n")
+          PY
+          )
+          export ARCHIVE="dist/revayat-comic-$version-$PLATFORM.zip"
+          work=$(mktemp -d)
+          trap 'rm -rf -- "$work"' EXIT
+          python - "$work/publisher.pem" <<'PY'
+          import base64
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import sys
+          from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
+
+          members = (f"bin/{os.environ['BIN_NAME']}", "LICENSE", "README.md", "docs/signing/publisher.json")
+          metadata = Path(members[-1]).read_bytes()
+          publisher = json.loads(metadata.decode("utf-8"))
+          assert b"PRIVATE KEY" not in metadata
+          assert publisher["schema_version"] == 1 and publisher["publisher"] == "Revayat Comic"
+          assert publisher["signature_algorithm"] == "rsa-pkcs1-v1_5-sha256" and publisher["key_bits"] == 3072
+          pem = publisher["public_key_pem"]
+          assert re.fullmatch(r"-----BEGIN PUBLIC KEY-----\n(?:[A-Za-z0-9+/=]+\n)+-----END PUBLIC KEY-----\n?", pem)
+          der = base64.b64decode("".join(pem.splitlines()[1:-1]), validate=True)
+          assert hashlib.sha256(der).hexdigest() == publisher["public_key_sha256"]
+          Path(sys.argv[1]).write_bytes(pem.encode("ascii"))
+
+          archive = Path(os.environ["ARCHIVE"])
+          archive.parent.mkdir(exist_ok=True)
+          executable = os.environ["PLATFORM"].startswith("linux-")
+          with ZipFile(archive, "w", compression=ZIP_DEFLATED) as output:
+              for member in members:
+                  entry = ZipInfo(member)
+                  entry.create_system = 3
+                  mode = 0o755 if executable and member == members[0] else 0o644
+                  entry.external_attr = (0o100000 | mode) << 16
+                  output.writestr(entry, Path(member).read_bytes(), compress_type=ZIP_DEFLATED)
+          with ZipFile(archive) as output:
+              assert output.namelist() == list(members) and output.testzip() is None
+              assert output.read(members[-1]) == metadata
+              if executable:
+                  assert (output.getinfo(members[0]).external_attr >> 16) & 0o777 == 0o755
+          archive.with_suffix(".zip.sha256").write_bytes(
+              f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n".encode("ascii")
+          )
+          PY
+          openssl pkey -pubin -in "$work/publisher.pem" -pubcheck -noout
+          printf 'archive=%s\n' "$ARCHIVE" >> "$GITHUB_OUTPUT"
+
+      - name: Sign and verify the release archive
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          ARCHIVE: ${{ steps.package.outputs.archive }}
+          REVAYAT_SIGNING_PRIVATE_KEY_PEM: ${{ secrets.REVAYAT_SIGNING_PRIVATE_KEY_PEM }}
+        run: |
+          umask 077
+          work=$(mktemp -d)
+          trap 'rm -rf -- "$work"' EXIT
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            # Windows access checks use NTFS ACLs, not the shell umask.
+            owner=$(whoami.exe | tr -d '\r')
+            MSYS2_ARG_CONV_EXCL='*' icacls.exe "$(cygpath -w "$work")" /inheritance:r /grant:r "$owner:(OI)(CI)F"
+          fi
+          key="$work/private.pem"
+          pub="$work/publisher.pem"
+          printf '%s\n' "${REVAYAT_SIGNING_PRIVATE_KEY_PEM:?Missing release signing key}" > "$key"
+          unset REVAYAT_SIGNING_PRIVATE_KEY_PEM
+          python -c 'import json,sys; from pathlib import Path; sys.stdout.write(json.loads(Path("docs/signing/publisher.json").read_text(encoding="utf-8"))["public_key_pem"])' > "$pub"
+          openssl dgst -sha256 -sign "$key" -out "${ARCHIVE}.sig" "$ARCHIVE"
+          openssl dgst -sha256 -verify "$pub" -signature "${ARCHIVE}.sig" "$ARCHIVE"
+          cp "$ARCHIVE" "$work/tampered.zip"
+          printf 'X' >> "$work/tampered.zip"
+          if openssl dgst -sha256 -verify "$pub" -signature "${ARCHIVE}.sig" "$work/tampered.zip"; then
+            echo 'Modified ZIP unexpectedly verified' >&2
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v7
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          name: revayat-comic-signed-${{ matrix.platform }}
+          path: |
+            dist/*.zip
+            dist/*.sha256
+            dist/*.sig
+          if-no-files-found: error
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [signing]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment:
+      name: revayat-signing
+      url: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: revayat-comic-signed-*
+          path: dist/
+          merge-multiple: true
+
+      - name: Verify the archives and sign the release checksums
+        env:
+          REVAYAT_SIGNING_PRIVATE_KEY_PEM: ${{ secrets.REVAYAT_SIGNING_PRIVATE_KEY_PEM }}
+        run: |
+          umask 077
+          work=$(mktemp -d)
+          key="$work/private.pem"
+          trap 'if [[ -f "$key" ]]; then shred -u -- "$key"; fi; rm -rf -- "$work"' EXIT
+          files=(dist/*.zip)
+          test "${#files[@]}" -eq 4
+          printf '%s\n' "${REVAYAT_SIGNING_PRIVATE_KEY_PEM:?Missing release signing key}" > "$key"
+          unset REVAYAT_SIGNING_PRIVATE_KEY_PEM
+          pub="$work/publisher.pem"
+          python3 -c 'import json,sys; from pathlib import Path; sys.stdout.write(json.loads(Path("docs/signing/publisher.json").read_text(encoding="utf-8"))["public_key_pem"])' > "$pub"
+          : > "$work/SHA256SUMS"
+          for platform in linux-arm64 linux-x64 windows-arm64 windows-x64; do
+            name="revayat-comic-$GITHUB_REF_NAME-$platform.zip"
+            archive="dist/$name"
+            openssl dgst -sha256 -verify "$pub" -signature "$archive.sig" "$archive"
+            digest=$(sha256sum --binary -- "$archive")
+            printf '%s  %s\n' "${digest%% *}" "$name" > "$work/actual.sha256"
+            cmp "$work/actual.sha256" "$archive.sha256"
+            cat "$work/actual.sha256" >> "$work/SHA256SUMS"
+          done
+          LC_ALL=C sort -k2,2 "$work/SHA256SUMS" > dist/SHA256SUMS
+          openssl dgst -sha256 -sign "$key" -out dist/SHA256SUMS.sig dist/SHA256SUMS
+          openssl dgst -sha256 -verify "$pub" -signature dist/SHA256SUMS.sig dist/SHA256SUMS
+          cp dist/SHA256SUMS "$work/tampered"
+          printf 'X' >> "$work/tampered"
+          if openssl dgst -sha256 -verify "$pub" -signature dist/SHA256SUMS.sig "$work/tampered"; then
+            echo 'Modified SHA256SUMS unexpectedly verified' >&2
+            exit 1
+          fi
+          cp docs/signing/publisher.json dist/publisher.json
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.zip
+            dist/*.zip.sig
+            dist/SHA256SUMS
+            dist/SHA256SUMS.sig
+
+      - name: Publish and verify the release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          source_sha=$(git rev-parse HEAD)
+          tag_object=$(git rev-parse "$GITHUB_REF")
+          remote_object=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$GITHUB_REF_NAME" --jq '.object | select(.type == "tag") | .sha')
+          test "$remote_object" = "$tag_object"
+          test "$source_sha" = "$(git rev-parse "${GITHUB_REF}^{commit}")"
+          test "$source_sha" = "$(git rev-parse "${GITHUB_SHA}^{commit}")"
+          printf 'source_sha=%s tag_ref=%s tag_object=%s\n' "$source_sha" "$GITHUB_REF" "$tag_object"
+
+          assets=(dist/*.zip dist/*.zip.sha256 dist/*.zip.sig dist/SHA256SUMS dist/SHA256SUMS.sig dist/publisher.json)
+          test "${#assets[@]}" -eq 15
+          work=$(mktemp -d)
+          trap 'rm -rf -- "$work"' EXIT
+          if gh release view "$GITHUB_REF_NAME" --json tagName,targetCommitish,assets,isDraft,isPrerelease > "$work/release.json" 2> "$work/release-error"; then
+            asset_count=$(python3 - "$work/release.json" "$source_sha" "${assets[@]}" <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import sys
+
+          release = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          assert release["tagName"] == os.environ["GITHUB_REF_NAME"]
+          assert not release["isDraft"] and not release["isPrerelease"], "Unexpected release state"
+          target = release["targetCommitish"]
+          assert not re.fullmatch(r"[0-9a-fA-F]{40}", target) or target.lower() == sys.argv[2], "Release targets a different commit"
+          names = {asset["name"] for asset in release["assets"]}
+          assert names <= {Path(asset).name for asset in sys.argv[3:]}, "Unexpected existing release assets"
+          print(len(names))
+          PY
+            )
+            if ((asset_count)); then
+              gh release download "$GITHUB_REF_NAME" --dir "$work" --pattern '*'
+            fi
+            missing=()
+            for asset in "${assets[@]}"; do
+              if [[ -e "$work/${asset##*/}" ]]; then
+                cmp "$asset" "$work/${asset##*/}"
+              else
+                missing+=("$asset")
+              fi
+            done
+            if ((${#missing[@]})); then
+              gh release upload "$GITHUB_REF_NAME" "${missing[@]}"
+            fi
+          else
+            if ! grep -Fxq 'release not found' "$work/release-error"; then
+              cat "$work/release-error" >&2
+              exit 1
+            fi
+            gh release create "$GITHUB_REF_NAME" --verify-tag --target "$source_sha" \
+              --title "$GITHUB_REF_NAME" --generate-notes "${assets[@]}"
+          fi
+
+          mkdir "$work/downloaded"
+          gh release download "$GITHUB_REF_NAME" --dir "$work/downloaded" --pattern '*'
+          for asset in "${assets[@]}"; do
+            cmp "$asset" "$work/downloaded/${asset##*/}"
+          done
+          for archive in "$work"/downloaded/*.zip; do
+            gh attestation verify "$archive" --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+              --source-ref "$GITHUB_REF" --source-digest "$source_sha" --deny-self-hosted-runners
+          done

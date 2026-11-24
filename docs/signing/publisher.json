@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "publisher": "Revayat Comic",
+  "publisher_email": "Kiaro.Sama.Dev@gmail.com",
+  "signature_algorithm": "rsa-pkcs1-v1_5-sha256",
+  "key_bits": 3072,
+  "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAxQ4a7zhQu3xHLZuUvm/2\n57UmF/awzNwZkuRxb/npjntAkmDvdPM1q53A8G4CvcjzV0pQYZjcSLCEp0A1BIKO\nJ8kgBvyiuUNlTyRNNFKjEr2rYaFbjEmOrDo+/QG0farDUtk3y+kLMVk0PGojE8/I\nVnaoDBfkviVyl3Y3xLXHJEJ1Qgk83DUUUBCxcbJY7w9OfU1D+TGcHuptPWb878J8\n9JclFgwG5j1xRDkbtpmndA/SMS6FJTVleZYzBUUWzb8eCAcDBNhBeXH0npjcjTIP\nZ0tPiQbUwcPERYnuVJ5Vx72DipcmQh2EJVCB1TuczabbMRpQayPpb9PPgf1Na2FM\nfuK6auIV8bhcGotJaSVAw4hpl/cve8F/cE+INszBVVSxDdIYCLLJjf8L2Mr8Oq8O\nyMiIb3Z48sXdB8i34hP/v8ri9G7RlaDgm0LJ95UrReyloc9vwBinK4xG4g5BuHZx\nS4+tHx+Cnl84glUCB7H7EOS6/XBbyW1JBRsp7Ydcu/pLAgMBAAE=\n-----END PUBLIC KEY-----\n",
+  "public_key_sha256": "bf9c3a3c5117f4bf82749dd587657b51acb22534c2b61d11c774ba3a5a0d4415",
+  "certificate_pem": "-----BEGIN CERTIFICATE-----\nMIIEjDCCAvSgAwIBAgIUch1JEXYJsGtk6ugVmpZYfnieTRMwDQYJKoZIhvcNAQEL\nBQAwVTESMBAGA1UEAwwJS2lhcm9TYW1hMRYwFAYDVQQLDA1SZXZheWF0IENvbWlj\nMScwJQYJKoZIhvcNAQkBFhhLaWFyby5TYW1hLkRldkBnbWFpbC5jb20wHhcNMjYx\nMTI0MDgzMzM2WhcNMjgxMTIzMDgzMzM2WjBVMRIwEAYDVQQDDAlLaWFyb1NhbWEx\nFjAUBgNVBAsMDVJldmF5YXQgQ29taWMxJzAlBgkqhkiG9w0BCQEWGEtpYXJvLlNh\nbWEuRGV2QGdtYWlsLmNvbTCCAaIwDQYJKoZIhvcNAQEBBQADggGPADCCAYoCggGB\nAMUOGu84ULt8Ry2blL5v9ue1Jhf2sMzcGZLkcW/56Y57QJJg73TzNaudwPBuAr3I\n81dKUGGY3EiwhKdANQSCjifJIAb8orlDZU8kTTRSoxK9q2GhW4xJjqw6Pv0BtH2q\nw1LZN8vpCzFZNDxqIxPPyFZ2qAwX5L4lcpd2N8S1xyRCdUIJPNw1FFAQsXGyWO8P\nTn1NQ/kxnB7qbT1m/O/CfPSXJRYMBuY9cUQ5G7aZp3QP0jEuhSU1ZXmWMwVFFs2/\nHggHAwTYQXlx9J6Y3I0yD2dLT4kG1MHDxEWJ7lSeVce9g4qXJkIdhCVQgdU7nM2m\n2zEaUGsj6W/Tz4H9TWthTH7iumriFfG4XBqLSWklQMOIaZf3L3vBf3BPiDbMwVVU\nsQ3SGAiyyY3/C9jK/DqvDsjIiG92ePLF3QfIt+IT/7/K4vRu0ZWg4JtCyfeVK0Xs\npaHPb8AYpyuMRuIOQbh2cUuPrR8fgp5fOIJVAgex+xDkuv1wW8ltSQUbKe2HXLv6\nSwIDAQABo1QwUjAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB/wQEAwIHgDATBgNVHSUE\nDDAKBggrBgEFBQcDAzAdBgNVHQ4EFgQUrxGvo0dAdGBpvo58bFHbDwNiS/8wDQYJ\nKoZIhvcNAQELBQADggGBAF1vQQSi1apmRaY6fDUy1HtSWYhKTNtdExGli1W+zIx5\nKnJp6hOC3zkHKmbpXS9SJueJ+UNgN1El6YDnJ5cMNCIWXXbSNCty455ckhpFy9Q+\nBTuAGfDkhXJJDaBFVUHG7wEjrs4mSyVXxdblZInKqSwbZAgBpJZYIZLliDW1eani\nM1UHaqh7sy2LrYFQ61Eexle/mVS/9J4gObG7hulRiCvfiLvy9sCHoHlqIQ4V+mEa\nkqXky8AgaHw14kJTbjhWS0e8yunXSSYmE/mwVZlQuBD0KMbPXTCuDDwhRrxgoo4d\nMedyoDtSsg+TiZY2zPxFAmu9uhrMWqsL/v6Hsa1RUZNg5vsV79jrqtvhZBGDF8S1\nL7/3NtHBCHYh0IqnGU/J3Kx+m7u+iaPX3NWgkRBUH3KKhSXfvAMfzac7cXTAW2B8\nDBxbnoLwR1wT5m69SmeVngIIprQQqFnl2cv3EtRFkjUCVONyC97fEYxCUpl/Wbhg\nDz3vOWPdM7xd1MbZOYxGfA==\n-----END CERTIFICATE-----\n",
+  "certificate_sha256": "6024ab083106c086fe894bbf596057eb7fbf63d0dc69addbce6fe49456b10f55",
+  "not_before_utc": "2026-11-24T08:33:36Z",
+  "not_after_utc": "2028-11-23T08:33:36Z",
+  "scope": "Detached OpenSSL SHA-256 signatures for 4-target 64-bit release ZIP archives and SHA256SUMS; self-signed publisher key, not commercial OS CA Authenticode",
+  "verification_command": "openssl dgst -sha256 -verify publisher.pem -signature SHA256SUMS.sig SHA256SUMS"
+}

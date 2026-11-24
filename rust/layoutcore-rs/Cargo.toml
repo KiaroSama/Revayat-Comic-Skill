@@ -2,15 +2,19 @@
 name = "layoutcore-rs"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.97.0"
+rust-version = "1.100.0"
 publish = false
 description = "Optional native balloon layout kernels for Revayat Comic"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = ["python"]
+python = ["dep:pyo3"]
+
 [dependencies]
-pyo3 = { version = "0.30", features = ["extension-module", "abi3-py39"] }
+pyo3 = { version = "0.30.1", optional = true, features = ["extension-module", "abi3-py312"] }
 
 [profile.release]
 lto = true

@@ -2,19 +2,25 @@
 //! `rust-anything refresh` overwrites the byte adapters in this file.
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
+#[cfg(feature = "python")]
 use pyo3::types::{PyBytes, PyBytesMethods};
 
 pub mod js;
 pub mod port;
+#[cfg(feature = "python")]
 pub mod pyconv;
+#[cfg(feature = "python")]
 pub mod pynum;
 
+#[cfg(feature = "python")]
 fn error(message: String) -> PyErr {
     let text = message.strip_prefix("ValueError: ").unwrap_or(&message);
     pyo3::exceptions::PyValueError::new_err(text.to_owned())
 }
 
+#[cfg(feature = "python")]
 fn bytes<'a>(value: &'a Bound<'_, PyAny>) -> PyResult<&'a [u8]> {
     value
         .cast::<PyBytes>()
@@ -22,6 +28,7 @@ fn bytes<'a>(value: &'a Bound<'_, PyAny>) -> PyResult<&'a [u8]> {
         .map_err(|_| error(port::BUFFER.into()))
 }
 
+#[cfg(feature = "python")]
 #[pyfunction]
 fn outside_mask_diff(
     orig_rgb: Bound<'_, PyAny>,
@@ -42,6 +49,7 @@ fn outside_mask_diff(
     .map_err(error)
 }
 
+#[cfg(feature = "python")]
 #[pyfunction]
 fn changed_mask_rgb<'py>(
     py: Python<'py>,
@@ -56,6 +64,7 @@ fn changed_mask_rgb<'py>(
     Ok(PyBytes::new(py, &mask))
 }
 
+#[cfg(feature = "python")]
 #[pyfunction]
 fn overlap_changed_pixels(
     changed_mask: Bound<'_, PyAny>,
@@ -72,6 +81,7 @@ fn overlap_changed_pixels(
     .map_err(error)
 }
 
+#[cfg(feature = "python")]
 #[pyfunction]
 #[expect(
     clippy::too_many_arguments,
@@ -102,6 +112,7 @@ fn outline_crossing_pixels(
     .map_err(error)
 }
 
+#[cfg(feature = "python")]
 #[pymodule]
 #[pyo3(name = "_native")]
 fn native_module(m: &Bound<'_, PyModule>) -> PyResult<()> {

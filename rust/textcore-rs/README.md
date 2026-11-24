@@ -9,11 +9,13 @@ This optional PyO3 extension accelerates Persian text handling and balloon line 
 
 ## Build and install
 
-Use Python 3.12 or later, Rust 1.97.0 or later, and a platform linker. From the repository root in the Python environment that runs the skill:
+Use Python 3.12 or later, Rust 1.100.0 or later, and a platform linker. From the repository root in the Python environment that runs the skill:
 
 ```console
 python -m pip install ./rust/textcore-rs
 ```
+
+Build with `--no-default-features` for a pure Rust `rlib`. The `port` module does not require Python.
 
 The wheel provides `textcore_rs._native`. `textcore.BACKEND` is `rust` when the wheel loads and `python` when the reference is in use. `cargo build` alone does not install a Python package. A bridge refresh can regenerate its bindings; preserve the PyO3 integer and nested list adapters if you refresh it.
 

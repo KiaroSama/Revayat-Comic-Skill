@@ -158,3 +158,6 @@ perf.data.old
 /rust/*/cases.jsonl
 /rust/*/extra-inputs.jsonl
 
+# Binaries & private signing custody
+/bin/
+/.signing-private/
