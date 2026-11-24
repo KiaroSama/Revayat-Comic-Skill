@@ -1,10 +1,12 @@
 """Delayed workers cannot silently replace newer chapter decisions."""
 
 import json
+from copy import deepcopy
 
 import pytest
 
 import batch
+import crops
 import masks
 import pageir as ir
 import stages
@@ -17,6 +19,184 @@ def _plan(chapter, tmp_path):
     folder = tmp_path / "parallel"
     batch.plan_shards(chapter, 2, folder)
     return folder
+
+
+def _legacy_shared_snapshot(folder, doc):
+    """Reproduce the shared-hash contract emitted before this compatibility fix."""
+    shared = deepcopy({key: value for key, value in doc.items()
+                       if key not in {"pages", "stages"}})
+    shared.get("meta", {}).pop("worksheets", None)
+    shared.get("meta", {}).pop("free_lettering_mask", None)
+    shared.get("source", {}).pop("page_count", None)
+    payload = json.dumps(shared, ensure_ascii=False, sort_keys=True, allow_nan=False)
+    path = folder / batch.MANIFEST
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest["snapshot"]["shared"] = ir.sha256_bytes(payload.encode("utf-8"))
+    ir.write_text(path, ir.dumps(manifest) + "\n")
+
+
+@pytest.mark.parametrize("source", [{}, {"page_count": 5}, {"path": "original.cbz"}])
+@pytest.mark.parametrize("counter", [False, True])
+def test_preexisting_snapshot_survives_normalization_and_worker_rerun(
+        chapter, tmp_path, monkeypatch, source, counter):
+    document = chapter / "comic.json"
+    doc = ir.load_doc(document)
+    doc["source"] = source
+    if counter:
+        doc["meta"]["stage_seq"] = 7
+        doc["stages"]["crops"] = {"fingerprint": "old-build", "pages": 5, "seq": 7}
+    ir.save_doc(doc, document)
+    folder = _plan(chapter, tmp_path)
+    _legacy_shared_snapshot(folder, doc)
+    batch.merge_shards(folder, chapter)
+
+    crops.build_document(folder / "shard-001" / "comic.json")
+    batch.merge_shards(folder, chapter)
+    merged = ir.load_doc(document)
+    assert set(merged["stages"]["crops"]["pages"]) == {"p0031", "p0029", "p0034"}
+    before = document.read_bytes()
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("an exact old-manifest replay republished assets")
+
+    monkeypatch.setattr(batch, "_publish", forbidden)
+    batch.merge_shards(folder, chapter)
+    assert document.read_bytes() == before
+
+
+@pytest.mark.parametrize("side", ["chapter", "worker", "asset"])
+def test_preexisting_snapshot_still_rejects_meaningful_drift(chapter, tmp_path, side):
+    document = chapter / "comic.json"
+    doc = ir.load_doc(document)
+    doc["meta"]["stage_seq"] = 7
+    ir.save_doc(doc, document)
+    folder = _plan(chapter, tmp_path)
+    _legacy_shared_snapshot(folder, doc)
+    if side == "asset":
+        changed = chapter / "notes" / "p0031.txt"
+        ir.write_text(changed, "New canonical draft\n")
+    else:
+        changed = document if side == "chapter" else folder / "shard-001" / "comic.json"
+        changed_doc = ir.load_doc(changed)
+        changed_doc["source"]["path"] = "different-source.cbz"
+        ir.save_doc(changed_doc, changed)
+    before = document.read_bytes()
+    draft = changed.read_bytes()
+    with pytest.raises(ValueError, match="shared|snapshot"):
+        batch.merge_shards(folder, chapter)
+    assert document.read_bytes() == before
+    assert changed.read_bytes() == draft
+
+
+def test_untouched_batch_replay_does_not_republish(chapter, tmp_path, monkeypatch):
+    folder = _plan(chapter, tmp_path)
+    batch.merge_shards(folder, chapter)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("an untouched batch replay republished identical assets")
+
+    monkeypatch.setattr(batch, "_publish", forbidden)
+    batch.merge_shards(folder, chapter)
+
+
+@pytest.mark.parametrize("legacy", ["missing-source", "stage-counter", "both"])
+def test_untouched_legacy_shards_merge_and_replay(chapter, tmp_path, legacy):
+    document = chapter / "comic.json"
+    doc = ir.load_doc(document)
+    if legacy in {"missing-source", "both"}:
+        doc.pop("source")
+    if legacy in {"stage-counter", "both"}:
+        doc["stages"]["crops"] = {"fingerprint": "old-build", "pages": 5, "seq": 7}
+        doc["meta"]["stage_seq"] = 7
+    ir.save_doc(doc, document)
+    original_stages = doc["stages"]
+    original_pages = doc["pages"]
+    folder = _plan(chapter, tmp_path)
+
+    batch.merge_shards(folder, chapter)
+    merged = ir.load_doc(document)
+    assert merged["stages"] == original_stages
+    assert merged["pages"] == original_pages
+    before = document.read_bytes()
+    batch.merge_shards(folder, chapter)
+    assert document.read_bytes() == before
+
+
+@pytest.mark.parametrize("selection", ["all", "last-shard", "one-page"])
+def test_legacy_worker_recomputation_keeps_page_freshness(chapter, tmp_path, selection):
+    document = chapter / "comic.json"
+    doc = ir.load_doc(document)
+    doc.pop("source")
+    doc["stages"]["crops"] = {"fingerprint": "old-build", "pages": 5, "seq": 7}
+    doc["meta"]["stage_seq"] = 7
+    ir.save_doc(doc, document)
+    folder = _plan(chapter, tmp_path)
+    fresh = set()
+    for name in ("shard-001", "shard-002"):
+        shard_document = folder / name / "comic.json"
+        local = ir.load_doc(shard_document)
+        ids = [page["id"] for page in local["pages"]]
+        if selection == "last-shard" and name == "shard-001":
+            continue
+        if selection == "one-page":
+            ids = ids[:1]
+        crops.build_document(shard_document, pages=ids)
+        fresh.update(ids)
+
+    batch.merge_shards(folder, chapter)
+    merged = ir.load_doc(document)
+    assert merged["stages"]["crops"]["scheme"] == stages.SCHEME
+    assert set(merged["stages"]["crops"]["pages"]) == fresh
+    assert set(stages.stale_pages(merged, "crops")) == {
+        page["id"] for page in merged["pages"]
+    } - fresh
+    before = document.read_bytes()
+    batch.merge_shards(folder, chapter)
+    assert document.read_bytes() == before
+
+
+@pytest.mark.parametrize("side", ["chapter", "worker"])
+def test_missing_source_normalization_does_not_hide_real_drift(chapter, tmp_path, side):
+    document = chapter / "comic.json"
+    doc = ir.load_doc(document)
+    doc.pop("source")
+    ir.save_doc(doc, document)
+    folder = _plan(chapter, tmp_path)
+    changed = document if side == "chapter" else folder / "shard-001" / "comic.json"
+    doc = ir.load_doc(changed)
+    doc.setdefault("source", {})["path"] = "different-source.cbz"
+    ir.save_doc(doc, changed)
+    before = document.read_bytes()
+    draft = changed.read_bytes()
+    with pytest.raises(ValueError, match="shared"):
+        batch.merge_shards(folder, chapter)
+    assert document.read_bytes() == before
+    assert changed.read_bytes() == draft
+
+
+def test_new_worker_stage_imports_only_owned_page_evidence(chapter, tmp_path):
+    folder = _plan(chapter, tmp_path)
+    shard_document = folder / "shard-002" / "comic.json"
+    crops.build_document(shard_document)
+    local = ir.load_doc(shard_document)
+    owned = {page["id"] for page in local["pages"]}
+    record = local["stages"]["crops"]
+    # Neither an earlier shard's page nor an unknown page belongs to this worker.
+    for pid in ("p0031", "p9999"):
+        record["pages"][pid] = "unowned revision"
+        record["page_options"][pid] = {"unowned": True}
+        record["needs"]["detect"][pid] = "unowned upstream revision"
+    ir.save_doc(local, shard_document)
+
+    batch.merge_shards(folder, chapter)
+    document = chapter / "comic.json"
+    merged = ir.load_doc(document)["stages"]["crops"]
+    assert set(merged["pages"]) == owned
+    assert set(merged["page_options"]) == owned
+    assert set(merged["needs"]["detect"]) == owned
+    before = document.read_bytes()
+    batch.merge_shards(folder, chapter)
+    assert document.read_bytes() == before
 
 
 def test_merge_refuses_a_newer_canonical_translation(chapter, tmp_path):

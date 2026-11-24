@@ -259,6 +259,12 @@ def facet_revision(page: dict[str, Any], name: str) -> str:
     return _page_facet(page, name)
 
 
+def _page_revisions(record: dict[str, Any]) -> dict:
+    """Legacy stage page counts carry no per-page freshness evidence."""
+    pages = record.get("pages")
+    return pages if isinstance(pages, dict) else {}
+
+
 def page_revision(doc: dict[str, Any], stage: str, page: dict[str, Any], *,
                   options: Any = None,
                   stages: dict[str, Any] | None = None) -> str:
@@ -282,7 +288,7 @@ def page_revision(doc: dict[str, Any], stage: str, page: dict[str, Any], *,
         digest.update(f"{facet}={value}|".encode("utf-8"))
     digest.update(f"options={_stable(options)}|".encode("utf-8"))
     for need in sorted(STAGE_NEEDS.get(stage, ())):
-        upstream = ((known or {}).get(need) or {}).get("pages") or {}
+        upstream = _page_revisions((known or {}).get(need) or {})
         digest.update(
             f"{need}={upstream.get(page['id']) or 'unknown'}|".encode("utf-8"))
     return digest.hexdigest()
@@ -309,7 +315,7 @@ def stamp_stage(doc: dict[str, Any], stage: str, detail: dict[str, Any], *,
     # — stamped every page as freshly done when none of them had run.
     selected = None if pages is None else set(pages)
     current = {page["id"] for page in doc.get("pages", [])}
-    per_page = {pid: rev for pid, rev in (previous.get("pages") or {}).items()
+    per_page = {pid: rev for pid, rev in _page_revisions(previous).items()
                 if pid in current}
     # The options belong to the PAGE that ran with them, not to the stage. One
     # dict for the whole record meant `mask --pages p0001 --grow 3` followed by
@@ -332,8 +338,7 @@ def stamp_stage(doc: dict[str, Any], stage: str, detail: dict[str, Any], *,
         # exact answer instead of a guess: an upstream that moved is a
         # different instruction from an input of this page's own that moved.
         "needs": {
-            need: {pid: (((recorded.get(need) or {}).get("pages") or {})
-                         .get(pid) or "unknown")
+            need: {pid: (_page_revisions(recorded.get(need) or {}).get(pid) or "unknown")
                    for pid in per_page}
             for need in STAGE_NEEDS.get(stage, ())
         },
@@ -356,7 +361,7 @@ def _why(stage: str, page_id: str, record: dict[str, Any],
     consumed = record.get("needs") or {}
     for need in sorted(STAGE_NEEDS.get(stage, ())):
         was = (consumed.get(need) or {}).get(page_id)
-        now = ((stages.get(need) or {}).get("pages") or {}).get(page_id)
+        now = _page_revisions(stages.get(need) or {}).get(page_id)
         if was != now:
             return f"`{need}` has run again since, for"
     return "the inputs changed after it ran, for"

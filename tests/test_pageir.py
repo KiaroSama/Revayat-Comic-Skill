@@ -434,3 +434,15 @@ def test_the_retired_counter_is_not_left_behind():
     doc["meta"]["stage_seq"] = 7
     stages.stamp_stage(doc, "detect", {"ran": True})
     assert "stage_seq" not in doc["meta"]
+
+
+def test_recomputed_stage_treats_legacy_upstream_counts_as_unverified():
+    doc = _doc()
+    doc["stages"]["crops"] = {"fingerprint": "old-build", "pages": len(doc["pages"])}
+    stages.stamp_stage(doc, "ocr", {"read": 1})
+    assert stages.stale_pages(doc, "ocr") == []
+    assert set(doc["stages"]["ocr"]["needs"]["crops"].values()) == {"unknown"}
+    assert "crops" in stages.unverified_stages(doc)
+    # Editing page geometry must still explain staleness with old dependencies.
+    doc["pages"][0]["regions"][0]["bbox"][0] += 1
+    assert "ocr" in stages.stale_stages(doc)
