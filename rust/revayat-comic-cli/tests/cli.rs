@@ -3,12 +3,18 @@
 use std::{
     fs::{self, File},
     path::PathBuf,
-    process::{Command, Output, Stdio},
-    sync::atomic::{AtomicUsize, Ordering},
+    process::{Child, Command, Output, Stdio},
+    sync::{
+        RwLock,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use serde_json::{Value, json};
 use time::{OffsetDateTime, PrimitiveDateTime, macros::format_description};
+
+// A concurrent fork can inherit the copy's writable descriptor and cause ETXTBSY.
+static STAGE_EXEC_LOCK: RwLock<()> = RwLock::new(());
 
 const KERNELS: [&str; 9] = [
     "cleancore-rs",
@@ -59,26 +65,33 @@ impl Fixture {
         };
         fs::create_dir(fixture.executable.parent().unwrap()).unwrap();
         fs::create_dir(&fixture.cwd).unwrap();
-        fs::copy(original, &fixture.executable).unwrap();
+        {
+            let _write_guard = STAGE_EXEC_LOCK.write().unwrap_or_else(|e| e.into_inner());
+            if fs::hard_link(&original, &fixture.executable).is_err() {
+                fs::copy(&original, &fixture.executable).unwrap();
+            }
+        }
         fixture
     }
 
-    fn command(&self, args: &[&str]) -> Command {
+    fn spawn(&self, args: &[&str], stdin: Stdio) -> Child {
         let mut cmd = Command::new(&self.executable);
         cmd.args(args)
             .current_dir(&self.cwd)
             .env("PATH", "")
-            .stdin(Stdio::null());
-        cmd
+            .stdin(stdin)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let _read_guard = STAGE_EXEC_LOCK.read().unwrap_or_else(|e| e.into_inner());
+        cmd.spawn().unwrap()
     }
 
     fn run(&self, args: &[&str], input: &[u8]) -> Output {
         let path = self.cwd.join("private input credential-marker.txt");
         fs::write(&path, input).unwrap();
         let output = self
-            .command(args)
-            .stdin(File::open(&path).unwrap())
-            .output()
+            .spawn(args, Stdio::from(File::open(&path).unwrap()))
+            .wait_with_output()
             .unwrap();
         assert_eq!(fs::read(path).unwrap(), input);
         output
@@ -404,14 +417,7 @@ fn simultaneous_invocations_keep_log_files_and_use_collision_suffixes() {
         })
         .collect();
     let children: Vec<_> = (0..4)
-        .map(|_| {
-            fixture
-                .command(&["--version"])
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .unwrap()
-        })
+        .map(|_| fixture.spawn(&["--version"], Stdio::null()))
         .collect();
     let outputs: Vec<_> = children
         .into_iter()
