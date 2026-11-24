@@ -5,4 +5,4 @@ pytest-timeout>=2.4.0
 ruff>=0.17.6                    # the lint gate; see ruff.toml for the rules
 
 # Font subsets are generated while testing glyph-coverage failures (official Vazir OFL fonts ship under skills/revayat-comic/assets/fonts/).
-fonttools>=4.60
+fonttools>=4.68.0
