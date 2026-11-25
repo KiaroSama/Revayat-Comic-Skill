@@ -4,6 +4,8 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
+pub const DEFAULT_MODEL: &str = "openai/gpt-image-2.6-sunburst";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RegionKind {
@@ -94,10 +96,9 @@ pub fn build_fullpage_prompt(request: &FullPageEditRequest) -> Result<FullPageEd
         || request.cleaned_page_path.as_os_str().is_empty()
         || request.original_page_path.as_os_str().is_empty()
         || request.cleaned_page_path == request.original_page_path
-        || request.replacements.is_empty()
     {
         return Err(VisionError::invalid(
-            "a distinct cleaned full page, original, page dimensions, model and replacements are required",
+            "a distinct cleaned full page, original, page dimensions and model are required",
         ));
     }
     let mut ids = BTreeSet::new();

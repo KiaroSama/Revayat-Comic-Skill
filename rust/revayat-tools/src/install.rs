@@ -475,6 +475,29 @@ fn finish(base: &Path, pending: &Path, record: &Record) -> Result<()> {
     rename(pending, &dir.join(name))
 }
 
+/// Resolve the CLI install base and select the agent's user or project layout.
+pub fn resolve_install_scope(
+    base: Option<PathBuf>,
+    scope: Option<&str>,
+    user_scope: bool,
+) -> std::result::Result<(PathBuf, bool), &'static str> {
+    let user_scope = match scope {
+        Some(_) if user_scope => return Err("use either --scope or --user-scope"),
+        Some("user") => true,
+        Some("project") => false,
+        Some(_) => return Err("--scope must be user or project"),
+        None => user_scope,
+    };
+    let base = match base {
+        Some(path) => path,
+        None if user_scope => {
+            std::env::home_dir().ok_or("home directory unavailable; use --base")?
+        }
+        None => return Err("project installation requires --base or --path"),
+    };
+    Ok((base, user_scope))
+}
+
 /// Install into an explicit project base. Forced replacement retains the previous copy alongside the journal.
 pub fn safe_install(
     repo: &Path,
@@ -696,6 +719,29 @@ pub fn safe_install_scoped(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolves_install_scope() {
+        let base = PathBuf::from("sandbox");
+        let project = resolve_install_scope(Some(base.clone()), Some("project"), false);
+        assert_eq!(project, Ok((base.clone(), false)));
+        let user = resolve_install_scope(Some(base.clone()), Some("user"), false);
+        assert_eq!(user, Ok((base.clone(), true)));
+        let inferred = resolve_install_scope(None, Some("user"), false).ok();
+        assert_eq!(inferred, std::env::home_dir().map(|path| (path, true)));
+        assert!(resolve_install_scope(None, Some("project"), false).is_err());
+        assert!(resolve_install_scope(Some(base), Some("project"), true).is_err());
+    }
+
+    #[test]
+    fn installs_from_explicit_repo_outside_working_directory() -> Result<()> {
+        let target = tempfile::tempdir()?;
+        let repo = fs::canonicalize(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))?;
+        let skill = repo.join("skills/revayat-comic/SKILL.md");
+        let paths = safe_install(&repo, target.path(), "claude", false, false)?;
+        assert_eq!(fs::read(paths[0].join("SKILL.md"))?, fs::read(skill)?);
+        Ok(())
+    }
 
     #[test]
     fn recovery_restores_both_promoted_and_backed_up_destinations() -> Result<()> {

@@ -25,6 +25,40 @@ pub fn page_worksheet(doc: &ComicDocument, page: &PageRecord) -> String {
         doc.pages.len(),
         ir::page_fingerprint(page)
     );
+    let header = |text: &mut String, key: &str, value: &str| {
+        let _ = writeln!(
+            text,
+            "# {key}: {}",
+            value.replace(['\r', '\n', '\u{85}', '\u{2028}', '\u{2029}'], " ")
+        );
+    };
+    if let Some(path) = page.extra.get("overview").and_then(Value::as_str) {
+        header(&mut text, "overview", path);
+    }
+    if let Some(sheets) = page.extra.get("sheets").and_then(Value::as_array) {
+        let paths = sheets.iter().filter_map(Value::as_str).collect::<Vec<_>>();
+        header(&mut text, "sheets", &paths.join(", "));
+    }
+    if let Some(scale) = page.extra.get("overview_scale").and_then(Value::as_f64) {
+        header(&mut text, "scale", &scale.to_string());
+    }
+    header(
+        &mut text,
+        "source_language",
+        doc.meta
+            .get("source_language")
+            .and_then(Value::as_str)
+            .unwrap_or("auto"),
+    );
+    header(
+        &mut text,
+        "reading_direction",
+        doc.meta
+            .get("reading_direction")
+            .and_then(Value::as_str)
+            .unwrap_or("rtl"),
+    );
+    header(&mut text, "sfx_policy", doc.policy());
     if let Some(entries) = doc.glossary.get("entries").and_then(Value::as_object) {
         for (source, entry) in entries
             .iter()
@@ -433,4 +467,37 @@ pub fn reconcile_document(
         }
     }
     Ok(ids)
+}
+
+#[cfg(test)]
+mod header_tests {
+    use super::*;
+
+    #[test]
+    fn header_lists_workspace_metadata() -> Result<(), Box<dyn std::error::Error>> {
+        let mut doc = ComicDocument::default();
+        doc.meta.insert("source_language".into(), json!("ja"));
+        doc.meta.insert("reading_direction".into(), json!("rtl"));
+        doc.meta.insert("sfx_policy".into(), json!("annotate"));
+        let mut page: PageRecord = serde_json::from_value(
+            json!({"id":"p0000", "width":100, "height":100, "image":"pages/p0000.png"}),
+        )?;
+        page.extra
+            .insert("overview".into(), json!("overviews/p0000.png"));
+        page.extra
+            .insert("sheets".into(), json!(["sheets/p0000-01.png"]));
+        page.extra.insert("overview_scale".into(), json!(0.5));
+        let text = page_worksheet(&doc, &page);
+        for expected in [
+            "overview: overviews/p0000.png",
+            "sheets: sheets/p0000-01.png",
+            "scale: 0.5",
+            "source_language: ja",
+            "reading_direction: rtl",
+            "sfx_policy: annotate",
+        ] {
+            assert!(text.contains(expected), "missing {expected}: {text}");
+        }
+        Ok(())
+    }
 }

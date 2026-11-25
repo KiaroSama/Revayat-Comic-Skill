@@ -306,8 +306,19 @@ pub fn apply(
             region.mask = None;
             region.polygon.clear();
             region.typeset.clear();
-            region.extra.remove("balloon");
+            if let Some(balloon) = region.extra.get("balloon")
+                && let Some(old) = balloon
+                    .get("bounds")
+                    .and_then(|v| serde_json::from_value::<[i64; 4]>(v.clone()).ok())
+                && (0..2).any(|i| {
+                    bbox[i].saturating_add(bbox[i + 2]) <= old[i]
+                        || old[i].saturating_add(old[i + 2]) <= bbox[i]
+                })
+            {
+                region.extra.remove("balloon");
+            }
             region.extra.remove("mask_box");
+            region.extra.remove("mask_bounds");
         }
     }
     if let Some(kind) = block.value("kind").filter(|s| !s.is_empty()) {
@@ -401,4 +412,37 @@ pub fn reply_digest(reply: &Reply) -> Result<String, IrError> {
         .collect();
     let normalized = format!("3{}", crate::stages::sorted_json(&Value::Object(payload))?);
     Ok(ir::sha256_bytes(normalized.as_bytes())[..16].to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn worksheet_box_preserves_overlapping_balloon_but_invalidates_a_move_off_it()
+    -> Result<(), IrError> {
+        let mut region = ir::new_region(
+            "p0001_r001",
+            [30., 30., 20., 20.],
+            "speech",
+            "horizontal",
+            "reader",
+            1.,
+        )?;
+        region
+            .extra
+            .insert("balloon".into(), json!({"bounds":[20,20,60,60]}));
+        let block = |value: &str| Block {
+            id: region.id.clone(),
+            fields: [("box".into(), value.to_owned())].into(),
+            ..Block::default()
+        };
+        let adjusted = block("33,34,19,21");
+        let moved = block("90,91,10,12");
+        apply(&mut region, &adjusted, 150, 150)?;
+        assert!(region.extra.contains_key("balloon"));
+        apply(&mut region, &moved, 150, 150)?;
+        assert!(!region.extra.contains_key("balloon"));
+        Ok(())
+    }
 }

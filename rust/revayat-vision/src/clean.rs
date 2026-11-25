@@ -86,6 +86,76 @@ pub fn composite_external(
         .ok_or_else(|| VisionError::invalid("invalid RGB composite buffer"))
 }
 
+/// Exclude unremoved glyphs, artwork, and colored wall pixels from lettering.
+pub fn clear_lettering_area(
+    page: &RgbImage,
+    mut interior: RegionMask,
+    dark: bool,
+) -> Result<RegionMask> {
+    let b = interior.bounds.checked(page.dimensions())?;
+    same_geometry((b.width(), b.height()), interior.pixels.dimensions())?;
+    for (x, y, p) in interior.pixels.enumerate_pixels_mut() {
+        let light = luminance(page.get_pixel(b.x() + x, b.y() + y));
+        if (if dark { 255 - light } else { light }) < 180 {
+            p[0] = 0;
+        }
+    }
+    Ok(interior)
+}
+
+/// Keep compact badge lettering on a locally uniform backing without touching its border.
+pub fn compact_lettering_area(page: &RgbImage, b: crate::Rect) -> Result<RegionMask> {
+    let b = b.checked(page.dimensions())?;
+    let [cx, cy] = b.center();
+    let mut channels = [[0u8; 9]; 3];
+    for (i, (dx, dy)) in (-1..=1)
+        .flat_map(|dy| (-1..=1).map(move |dx| (dx, dy)))
+        .enumerate()
+    {
+        let p = page.get_pixel(
+            cx.saturating_add_signed(dx).min(b.right() - 1),
+            cy.saturating_add_signed(dy).min(b.bottom() - 1),
+        );
+        for (c, v) in channels.iter_mut().zip(p.0) {
+            c[i] = v;
+        }
+    }
+    let backing = channels.map(|mut c| {
+        c.sort_unstable();
+        c[4]
+    });
+    let paper = GrayImage::from_fn(b.width(), b.height(), |x, y| {
+        Luma([
+            if page
+                .get_pixel(b.x() + x, b.y() + y)
+                .0
+                .iter()
+                .zip(backing)
+                .all(|(a, b)| a.abs_diff(b) <= 14)
+            {
+                255
+            } else {
+                0
+            },
+        ])
+    });
+    let labels = imageproc::region_labelling::connected_components(
+        &paper,
+        imageproc::region_labelling::Connectivity::Four,
+        Luma([0]),
+    );
+    let label = labels.get_pixel(cx - b.x(), cy - b.y())[0];
+    let pixels = GrayImage::from_fn(b.width(), b.height(), |x, y| {
+        Luma([if label != 0 && labels.get_pixel(x, y)[0] == label {
+            255
+        } else {
+            0
+        }])
+    });
+    let pixels = crate::masks::morphology(&pixels, (b.width().min(b.height()) / 24).max(1), true)?;
+    Ok(RegionMask { bounds: b, pixels })
+}
+
 pub fn clean_region(
     page: &RgbImage,
     mask: &RegionMask,
@@ -99,6 +169,11 @@ pub fn clean_region(
     }
     if !mask.pixels.pixels().any(|p| p[0] != 0) {
         return Ok((page.clone(), CleanStrategy::NoInk));
+    }
+    if external.is_none() && mask.pixels.pixels().all(|p| p[0] != 0) {
+        return Err(VisionError::invalid(
+            "a solid erase mask needs an approved external repair",
+        ));
     }
     let crop = imageops::crop_imm(page, b.x(), b.y(), b.width(), b.height()).to_image();
     let (paint, strategy) = if let Some(external) = external {
@@ -279,4 +354,23 @@ pub fn clean_page_bubbles(original: &RgbImage, balloons: &[Balloon]) -> Result<C
         mask,
         strategies,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Rect;
+
+    #[test]
+    fn a_solid_mask_does_not_turn_textured_artwork_white() {
+        let original = RgbImage::from_fn(36, 40, |x, y| Rgb([(x * 3 + y * 5) as u8, 22, 43]));
+        let mask = RegionMask {
+            bounds: Rect([8, 9, 18, 20]),
+            pixels: GrayImage::from_pixel(18, 20, Luma([255])),
+        };
+        assert!(matches!(
+            clean_region(&original, &mask, None, None),
+            Err(VisionError::Invalid(_))
+        ));
+    }
 }

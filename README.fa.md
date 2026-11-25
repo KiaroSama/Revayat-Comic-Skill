@@ -8,7 +8,7 @@
 
 [![وضعیت گردش‌کار CI در GitHub Actions](https://img.shields.io/github/actions/workflow/status/KiaroSama/Revayat-Comic-Skill/ci.yml?branch=main&style=flat-square&label=CI&color=16a34a)](.github/workflows/ci.yml)
 [![مجوز GPL نسخهٔ ۳ یا بالاتر](https://img.shields.io/github/license/KiaroSama/Revayat-Comic-Skill?style=flat-square&color=2563eb)](LICENSE)
-[![آخرین برچسب نسخه در گیت‌هاب](https://img.shields.io/github/v/tag/KiaroSama/Revayat-Comic-Skill?style=flat-square&label=version&color=ea580c)](https://github.com/KiaroSama/Revayat-Comic-Skill/tags)
+[![آخرین برچسب نسخه در گیت‌هاب](https://img.shields.io/github/v/tag/KiaroSama/Revayat-Comic-Skill?style=flat-square&label=version&color=ea580c)](#releases-and-tags)
 [![آخرین انتشار گیت‌هاب](https://img.shields.io/github/v/release/KiaroSama/Revayat-Comic-Skill?style=flat-square&label=release&color=dc2626)](https://github.com/KiaroSama/Revayat-Comic-Skill/releases)
 [![آزمون‌های خودکار ورک‌اسپیس Cargo](https://img.shields.io/badge/tests-Cargo%20workspace-0d9488?style=flat-square)](#توسعه)
 [![نسخهٔ ثابت Rust 1.100.0](https://img.shields.io/badge/Rust-1.100.0-8b5cf6?style=flat-square)](rust-toolchain.toml)
@@ -18,14 +18,14 @@
 [![حجم مخزن در گیت‌هاب](https://img.shields.io/github/repo-size/KiaroSama/Revayat-Comic-Skill?style=flat-square&color=ca8a04)](#توسعه)
 [![اجرا با Rust خالص بدون هیچ وابستگی پایتونی](https://img.shields.io/badge/runtime-pure%20Rust%20%7C%20zero%20Python-059669?style=flat-square)](#معماری)
 [![گردش‌کار شش‌مرحله‌ای چندعاملی و ویرایش تمام‌صفحه](https://img.shields.io/badge/workflow-6%20agents%20%7C%20full--page%20edit-7c3aed?style=flat-square)](skills/revayat-comic/references/multi-agent-workflow.md)
-[![راهنماهای لحن Humanizer 4.0 و فارسی همراه بسته](https://img.shields.io/badge/voice-Humanizer%204.0%20%7C%20Persian-b45309?style=flat-square)](skills/revayat-comic/references/voice/index.md)
+[![راهنماهای لحن Humanizer ۴.۰ و فارسی همراه بسته](https://img.shields.io/badge/voice-Humanizer%204.0%20%7C%20Persian-b45309?style=flat-square)](skills/revayat-comic/references/voice/index.md)
 [![حمایت مالی](https://img.shields.io/badge/Support-donations-d04a9a?style=flat-square)](#donate)
 
 [English](README.md) · [فارسی](README.fa.md) · [مشخصات مهارت](skills/revayat-comic/SKILL.md) · [گردش‌کار شش‌مرحله‌ای](skills/revayat-comic/references/multi-agent-workflow.md) · [ویرایش تمام‌صفحه](skills/revayat-comic/references/fullpage-image-edit.md)
 
 </div>
 
-«روایت کمیک» یک ابزار خط فرمان خالص Rust (`revayat-comic`) همراه با مهارت عامل هوشمند برای ترجمهٔ کمیک و مانگا به فارسی روان است. این ابزار فایل‌های CBZ، CBR، PDF، پوشهٔ تصویر و تک‌صفحه را می‌خواند، پنل‌ها و حباب‌ها را پیدا می‌کند، برش‌های خوانا برای بازبینی متنی می‌سازد، متن اصلی را درون ماسک‌های کنترل‌شده پاک می‌کند، فارسی راست‌به‌چپ را با قلم وزیر حروف‌چینی می‌کند، صفحه را با دروازه‌های پیکسلی و چیدمان می‌سنجد و در پایان خروجی بی‌افت CBZ، PDF، پوشهٔ عکس یا DOCX دوزبانهٔ بازبینی تحویل می‌دهد.
+«روایت کمیک» یک ابزار خط فرمان خالص Rust (`revayat-comic`) همراه با مهارت عامل هوشمند برای ترجمهٔ کمیک و مانگا به فارسی روان است. این ابزار فایل‌های CBZ، CBR، PDF، پوشهٔ تصویر و تک‌صفحه را می‌خواند، پنل‌ها و حباب‌ها را پیدا می‌کند، برش‌های خوانا برای بازبینی متنی می‌سازد، متن اصلی را درون ماسک‌های کنترل‌شده پاک می‌کند، فارسی راست‌به‌چپ را با قلم وزیر حروف‌چینی می‌کند، صفحه را با دروازه‌های پیکسلی و چیدمان می‌سنجد و خروجی بی‌افت CBZ، PDF، پوشهٔ عکس یا DOCX دوزبانهٔ بازبینی تحویل می‌دهد.
 
 ## ویژگی‌های نسخهٔ ۲.۰
 
@@ -33,7 +33,7 @@
 - خواندن، بررسی، رندر و ساخت PDF بی‌افت در Rust خالص با `lopdf`، `pdf-writer` و `hayro` به همراه کنترل بودجهٔ پیکسلی ماسک‌های شابلونی و Form XObject پیش از تخصیص حافظهٔ تصویر.
 - پشتیبانی بومی و خالص Rust از آرشیو CBR (`rars`)، CBZ (`zip`) و فایل بازبینی DOCX راست‌به‌چپ (`quick-xml`).
 - شکل‌دهی و راست‌به‌چپ‌سازی اصولی فارسی روی همهٔ سیستم‌عامل‌ها با `cosmic-text` (مبتنی بر HarfBuzz و FriBidi) و قلم‌های وزیر همراه مخزن (`Regular`، `Medium` و `Bold`)، با حداقل فاصلهٔ سطر `1.38x`، پاک‌سازی کامل نقطه‌های جا‌مانده درون حباب و محافظ ضدتداخل متن.
-- گردش‌کار ویرایش تمام‌صفحه (`fullpage-prompt`) برای جلدها، خطوط سرعت، عنوان فصل‌ها و افکت‌های صوتی روی نقاشی: ابتدا فقط حباب‌های یکنواخت خالی می‌شوند، سپس کل صفحه همراه با متن OCR تاییدشده، مختصات دقیق و معادل فارسی به مدل ویرایش تصویر سپرده می‌شود و در نهایت فقط ناحیه‌های ویرایش‌شده با حاشیهٔ نرم روی اسکن اصلی دست‌نخورده می‌نشینند.
+- گردش‌کار ویرایش تمام‌صفحه (`fullpage-prompt`) برای جلدها، خطوط سرعت، عنوان فصل‌ها و افکت‌های صوتی روی نقاشی: ابتدا فقط حباب‌های یکنواخت خالی می‌شوند، سپس کل صفحه همراه با متن OCR تاییدشده، مختصات دقیق و معادل فارسی به مدل ویرایش تصویر سپرده می‌شود و فقط ناحیه‌های ویرایش‌شده با حاشیهٔ نرم روی اسکن اصلی دست‌نخورده می‌نشینند.
 - گردش‌کار شش‌مرحله‌ای چندعاملی با قالب پرامپت آماده برای ترجمهٔ اولیه، صفحه‌آرایی، بازبینی، اعمال ترجمه، چک مجدد فایل و رفع اشکال، و بازبینی نهایی و تحویل، همراه با جست‌وجوی نام‌های رسمی شخصیت‌ها و اصطلاحات مجموعه پیش از شروع ترجمه.
 
 ## معماری
@@ -61,16 +61,24 @@
 
 هدف‌های ۳۲ بیتی و macOS به‌طور پیش‌فرض ساخته نمی‌شوند.
 
+<a id="releases-and-tags"></a>
+
+## انتشارها و برچسب‌ها
+
+در [انتشارهای گیت‌هاب](https://github.com/KiaroSama/Revayat-Comic-Skill/releases) برای هر سیستم ۶۴ بیتی پشتیبانی‌شده یک فایل ZIP هست. برنامهٔ مستقل `revayat-comic` (لینوکس) یا `revayat-comic.exe` (ویندوز) را از آن بیرون بکشید. برای دیدن کد هر نسخه، به [برچسب‌های گیت‌هاب](https://github.com/KiaroSama/Revayat-Comic-Skill/tags) سر بزنید.
+
 ## نصب
 
 ### پیش‌نیازها
 
-- برای استفاده از باینری آماده در [انتشارهای گیت‌هاب](https://github.com/KiaroSama/Revayat-Comic-Skill/releases): فایل فشردهٔ سیستم ۶۴ بیتی لینوکس یا ویندوز را بگیرید و `revayat-comic` یا `revayat-comic.exe` را استخراج کنید.
-- برای ساخت از سورس: Rust نسخهٔ `1.100.0` (ثبت‌شده در `rust-toolchain.toml`)، `git` و PowerShell 7 (`pwsh`) روی ویندوز یا Bash روی لینوکس.
+- اگر از افزونه استفاده می‌کنید، برنامه را در `PATH` بگذارید. برای اجرای مثال‌های پایین، آن را در پوشهٔ `bin/` در ریشهٔ مخزن بگذارید.
+- برای ساخت از سورس: Rust نسخهٔ `1.100.0` (ثبت‌شده در `rust-toolchain.toml`)، `git` و PowerShell ۷ (`pwsh`) روی ویندوز یا Bash روی لینوکس.
 
 ### نصب افزونه
 
-مخزن مانیفست‌های همگام نسخهٔ `2.0.0` را برای پنج اکوسیستم افزونه نگه می‌دارد: Agent Plugins (`plugin.json` و `.agents/plugins/marketplace.json`)، Claude Code (`.claude-plugin/`)، Codex (`.codex-plugin/`)، Cursor (`.cursor-plugin/`) و Antigravity (`.antigravity-plugin/`).
+فایل ZIP انتشار، برنامهٔ خط فرمان را در خود دارد. مهارت را از تعریف‌های افزونه در مخزن یا با [نصب‌کنندهٔ مهارت](install/README.md) نصب کنید و `revayat-comic` را در `PATH` نگه دارید.
+
+مخزن برای پنج نوع افزونه فایل تعریف نسخهٔ `2.0.0` دارد: Agent Plugins (`plugin.json` و `.agents/plugins/marketplace.json`)، Claude Code (`.claude-plugin/`)، Codex (`.codex-plugin/`)، Cursor (`.cursor-plugin/`) و Antigravity (`.antigravity-plugin/`).
 
 در Claude Code:
 
@@ -85,7 +93,7 @@
 
 ### ساخت از سورس
 
-ویندوز (PowerShell 7):
+ویندوز (PowerShell ۷):
 
 </div>
 
@@ -125,18 +133,18 @@ cp target/release/revayat-comic bin/revayat-comic
 
 ### دستورهای خط لوله
 
-هر مرحله روی فایل `doc.json` داخل پوشهٔ کاری کار می‌کند و صفحه‌های اصلی را در `originals/` دست‌نخورده نگه می‌دارد.
+دستور `import` فایل `comic.json` را می‌سازد و صفحه‌های اصلی را در پوشهٔ `pages/` می‌گذارد. مرحله‌های بعد فایل‌های جداگانه می‌نویسند و به صفحه‌های اصلی دست نمی‌زنند.
 
-ویندوز (PowerShell 7):
+ویندوز (PowerShell ۷):
 
 </div>
 
 ```powershell
-.\bin\revayat-comic.exe import chapter.cbz --work .\work --direction rtl
-.\bin\revayat-comic.exe detect --doc .\work\doc.json
-.\bin\revayat-comic.exe mask --doc .\work\doc.json
-.\bin\revayat-comic.exe crops --doc .\work\doc.json
-.\bin\revayat-comic.exe worksheet build --doc .\work\doc.json --out .\work\worksheets
+.\bin\revayat-comic.exe import chapter.cbz --out .\work --direction rtl
+.\bin\revayat-comic.exe detect --doc .\work\comic.json
+.\bin\revayat-comic.exe mask --doc .\work\comic.json
+.\bin\revayat-comic.exe crops --doc .\work\comic.json
+.\bin\revayat-comic.exe worksheet build --doc .\work\comic.json --worksheets .\work\worksheets
 ```
 
 <div dir="rtl">
@@ -146,26 +154,28 @@ cp target/release/revayat-comic bin/revayat-comic
 </div>
 
 ```powershell
-.\bin\revayat-comic.exe worksheet merge --doc .\work\doc.json --in .\work\worksheets
-.\bin\revayat-comic.exe glossary check --doc .\work\doc.json
-.\bin\revayat-comic.exe falint check --doc .\work\doc.json
-.\bin\revayat-comic.exe clean --doc .\work\doc.json
-.\bin\revayat-comic.exe typeset --doc .\work\doc.json
-.\bin\revayat-comic.exe qa check --doc .\work\doc.json --strict
-.\bin\revayat-comic.exe export --doc .\work\doc.json --format cbz --out .\work\chapter-fa.cbz
-.\bin\revayat-comic.exe qa package --doc .\work\doc.json --out .\work\chapter-fa.cbz
+.\bin\revayat-comic.exe worksheet merge --doc .\work\comic.json --worksheets .\work\worksheets
+.\bin\revayat-comic.exe glossary check --doc .\work\comic.json
+.\bin\revayat-comic.exe falint check --doc .\work\comic.json
+.\bin\revayat-comic.exe clean --doc .\work\comic.json
+.\bin\revayat-comic.exe typeset --doc .\work\comic.json
+.\bin\revayat-comic.exe qa check --doc .\work\comic.json --strict
+.\bin\revayat-comic.exe export --doc .\work\comic.json --out .\work\chapter-fa.cbz
+.\bin\revayat-comic.exe qa package --doc .\work\comic.json --package .\work\chapter-fa.cbz
 ```
 
 <div dir="rtl">
 
-سایر دستورها:
+دستور `export` قالب را از مسیر خروجی تشخیص می‌دهد: فایل `.cbz`، فایل `.pdf` یا پوشه.
 
-- `fullpage-prompt --doc <doc.json> --page <id> --out <manifest.json>`: ساخت مانیفست و پرامپت ویرایش تمام‌صفحه همراه با متن OCR تاییدشده و مختصات دقیق.
-- `review-docx --doc <doc.json> --out <review.docx>`: خروجی فایل Word دوزبانهٔ بازبینی با جهت راست‌به‌چپ.
-- `watermark --doc <doc.json> ...`: مشخص‌کردن کادر دقیق واترمارک مجاز برای حذف.
+دستورهای دیگر:
+
+- `fullpage-prompt --doc <comic.json> --page <id>`: اطلاعات ویرایش تمام‌صفحه را در خروجی استاندارد می‌نویسد. مدل پیش‌فرض `openai/gpt-image-2.6-sunburst` است.
+- `review-docx --doc <comic.json> --out <review.docx>`: خروجی فایل Word دوزبانهٔ بازبینی با جهت راست‌به‌چپ.
+- `watermark --doc <comic.json> ...`: مشخص‌کردن کادر دقیق واترمارک مجاز برای حذف.
 - `batch plan|merge|status`: تقسیم فصل‌های بلند به بخش‌های موازی و ادغام امن.
-- `voice lint [--check|--fix] [--style]` و `voice lookup <file>`: اجرای لینتر و واژه‌نامهٔ فارسی در Rust خالص.
-- `serve --mcp` یا `serve --http 127.0.0.1:0`: ارائهٔ همهٔ مراحل از طریق MCP stdio یا HTTP محلی.
+- `voice lint <file> --check --style` نگارش فارسی را بررسی می‌کند و `voice lookup <text>` واژه‌نامه را جست‌وجو می‌کند.
+- `serve --stdio` سرور MCP را راه می‌اندازد. برای HTTP محلی، `REVAYAT_HTTP_TOKEN` را تنظیم کنید و `serve --http 127.0.0.1:8765` را اجرا کنید.
 - `ocr` و `translate`: کمک‌ابزار اختیاری مدل‌های میزبانی‌شده (نیازمند نشانی HTTPS و توکن Bearer).
 - `install` و `eval`: نصب تراکنشی مهارت و ارزیابی با نمونه‌های ساختگی.
 
@@ -182,7 +192,7 @@ cp target/release/revayat-comic bin/revayat-comic
 
 ### لاگ‌های اجرا
 
-هر اجرای CLI یک فایل لاگ UTF-8 در پوشهٔ `logs/` کنار باینری یا پروژه با نام `revayat-comic_YYYY-MM-DD_HH-mm-ss_UTC.log` و قالب `[YYYY-MM-DD HH:mm:ss UTC] [LEVEL] [COMPONENT] Message` می‌نویسد. هدرهای احراز هویت، کلیدهای API، گذرواژه‌ها و نشانی‌های دارای اعتبارنامه پیش از ثبت پوشانده می‌شوند. برای جزئیات بیشتر از `--verbose` یا متغیر `REVAYAT_LOG_LEVEL=DEBUG` استفاده کنید و هنگام گزارش خطا آخرین فایل لاگ را پیوست کنید.
+دستورهای خط لوله جزئیات اجرا و وضعیت خروج را با کدگذاری UTF-8 در `logs/revayat-comic_YYYY-MM-DD_HH-mm-ss_UTC.log` می‌نویسند. پوشهٔ `logs/` کنار `bin/` قرار می‌گیرد. اگر برنامه در پوشه‌ای با نام دیگری باشد، `logs/` کنار خود برنامه ساخته می‌شود. پیش از پیوست‌کردن گزارش اجرا به گزارش خطا، محتوایش را مرور کنید.
 
 ## مستندات
 
@@ -212,7 +222,7 @@ cargo test --workspace --locked
 
 <div dir="rtl">
 
-هیچ صفحهٔ کمیک دارای حق نشر در مخزن ذخیره نمی‌شود و همهٔ آزمون‌ها نمونه‌های ساختگی تولید می‌کنند. گردش‌کارهای GitHub Actions هر چهار هدف ۶۴ بیتی لینوکس و ویندوز را می‌سازند، نسخهٔ مانیفست‌های افزونه را می‌سنجند و اسکن‌های CodeQL، Gitleaks، Semgrep و بررسی وابستگی‌ها را اجرا می‌کنند.
+در مخزن صفحه‌ای از کمیک‌های تحت حق نشر نگه نمی‌داریم. آزمون‌ها از نمونه‌های ساختگی استفاده می‌کنند. گردش‌کارهای GitHub Actions هر چهار هدف ۶۴ بیتی لینوکس و ویندوز را می‌سازند، نسخهٔ مانیفست‌های افزونه را می‌سنجند و اسکن‌های CodeQL، Gitleaks، Semgrep و بررسی وابستگی‌ها را اجرا می‌کنند.
 
 ## سپاس
 

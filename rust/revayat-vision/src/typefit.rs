@@ -109,9 +109,11 @@ fn wrap(
 pub(crate) struct FitOptions<'a> {
     pub bounds: Rect,
     pub mask: Option<&'a GrayImage>,
+    pub occupied: &'a GrayImage,
     pub min_size: u32,
     pub max_size: u32,
     pub spacing: f32,
+    pub compact: bool,
     pub align: Alignment,
 }
 
@@ -124,11 +126,14 @@ pub(crate) fn fit_region(
     let FitOptions {
         bounds,
         mask,
+        occupied,
         min_size,
         max_size,
         spacing,
+        compact,
         align,
     } = opts;
+    let source = text;
     let paragraphs = tokens(text);
     if paragraphs.iter().all(Vec::is_empty) {
         return Ok(None);
@@ -150,7 +155,7 @@ pub(crate) fn fit_region(
         let line_height = (size as f32 * spacing.max(MIN_LINE_HEIGHT)).ceil();
         let effect =
             (if style.outline { (size / 12).max(1) } else { 0 }) + if style.shadow { 3 } else { 0 };
-        let pad = effect + 2;
+        let pad = effect + if compact { 1 } else { 2 };
         let max_rows =
             (bounds.height().saturating_sub(pad * 2) as f32 / line_height).floor() as usize;
         if max_rows == 0 {
@@ -162,6 +167,7 @@ pub(crate) fn fit_region(
             max_width * 8 / 10,
             max_width * 7 / 10,
             max_width * 6 / 10,
+            max_width / 2,
         ];
         for width in attempts {
             let available =
@@ -173,107 +179,134 @@ pub(crate) fn fit_region(
             else {
                 continue;
             };
-            let line_top =
+            let centered =
                 ((bounds.height() as f32 - line_height * lines.len() as f32) / 2.0).floor() as i32;
-            let mut fitted = Vec::new();
-            let mut extent: Option<Rect> = None;
-            let mut failed = false;
+            let mut shaped_lines = Vec::new();
             for (i, text) in lines.into_iter().enumerate() {
                 if text.is_empty() {
                     continue;
                 }
                 let text = bidi::ensure_rli_pdi(&text)?;
-                let shaped = shaper.draw(&text, size as f32, style.weight())?;
+                let shaped = shaper.draw_in_direction(
+                    &text,
+                    size as f32,
+                    style.weight(),
+                    bidi::is_rtl_text(source),
+                )?;
                 if shaped.pixels.width() == 0 {
-                    failed = true;
-                    break;
+                    continue;
                 }
                 let ink = if style.italic {
                     typestyle::italicize(&shaped.pixels)
                 } else {
                     shaped.pixels
                 };
-                let offset = line_top + (i as f32 * line_height) as i32;
-                let local_y = offset + shaped.top;
-                if local_y < pad as i32
-                    || (local_y as u32)
-                        .saturating_add(ink.height())
-                        .saturating_add(pad)
-                        > bounds.height()
-                {
-                    failed = true;
-                    break;
-                }
-                let local_y = local_y as u32;
-                let [left, right] = if let Some(spans) = &spans {
-                    let band =
-                        &spans[(local_y - pad) as usize..(local_y + ink.height() + pad) as usize];
-                    [
-                        band.iter().map(|s| s[0]).max().unwrap_or(0) as u32,
-                        band.iter().map(|s| s[1]).min().unwrap_or(0) as u32,
-                    ]
+                let border = if style.outline { (size / 12).max(1) } else { 0 };
+                let brush = if border > 0 {
+                    typestyle::stroke(&ink, border)
                 } else {
-                    [0, bounds.width()]
+                    ink.clone()
                 };
-                if right.saturating_sub(left) < ink.width() + 2 * pad {
-                    failed = true;
-                    break;
-                }
-                let x = match (align, shaped.rtl) {
-                    (Alignment::Center, _) => left + (right - left - ink.width()) / 2,
-                    (Alignment::Leading, true) | (Alignment::Trailing, false) => {
-                        right - ink.width() - pad
-                    }
-                    _ => left + pad,
-                };
-                let bbox = Rect([
-                    bounds.x() + x,
-                    bounds.y() + local_y,
-                    ink.width(),
-                    ink.height(),
-                ]);
-                let footprint = Rect([
-                    bbox.x() - effect,
-                    bbox.y() - effect,
-                    bbox.width() + 2 * effect,
-                    bbox.height() + 2 * effect,
-                ]);
-                if let Some(mask) = mask
-                    && (footprint.y()..footprint.bottom()).any(|y| {
-                        (footprint.x()..footprint.right())
-                            .any(|x| mask.get_pixel(x - bounds.x(), y - bounds.y())[0] == 0)
-                    })
-                {
-                    failed = true;
-                    break;
-                }
-                if fitted
-                    .last()
-                    .is_some_and(|(line, _): &(PlacedLine, GrayImage)| {
-                        line.bbox.bottom() + 2 * effect > bbox.y()
-                    })
-                {
-                    failed = true;
-                    break;
-                }
-                extent = Some(extent.map_or(footprint, |p| p.union(footprint)));
-                fitted.push((
-                    PlacedLine {
-                        text,
-                        bbox,
-                        rtl: shaped.rtl,
-                        baseline: bounds.y() as f32 + offset as f32 + size as f32,
-                    },
-                    ink,
-                ));
+                shaped_lines.push((i, text, shaped.top, shaped.rtl, ink, brush, border));
             }
-            if !failed && let Some(bounds) = extent {
-                return Ok(Some(Fit {
-                    lines: fitted,
-                    size: size as f32,
-                    line_height,
-                    bounds,
-                }));
+            let shift = (size as i32 / 4).max(1);
+            for line_top in [
+                centered,
+                centered - shift,
+                centered + shift,
+                centered - 2 * shift,
+                centered + 2 * shift,
+            ] {
+                let mut fitted = Vec::new();
+                let mut extent: Option<Rect> = None;
+                let mut failed = false;
+                for (i, text, top, rtl, ink, brush, border) in &shaped_lines {
+                    let offset = line_top + (*i as f32 * line_height) as i32;
+                    let local_y = offset + top;
+                    if local_y < pad as i32
+                        || (local_y as u32)
+                            .saturating_add(ink.height())
+                            .saturating_add(pad)
+                            > bounds.height()
+                    {
+                        failed = true;
+                        break;
+                    }
+                    let local_y = local_y as u32;
+                    let [left, right] = if let Some(spans) = &spans {
+                        let band = &spans
+                            [(local_y - pad) as usize..(local_y + ink.height() + pad) as usize];
+                        [
+                            band.iter().map(|s| s[0]).max().unwrap_or(0) as u32,
+                            band.iter().map(|s| s[1]).min().unwrap_or(0) as u32,
+                        ]
+                    } else {
+                        [0, bounds.width()]
+                    };
+                    if right.saturating_sub(left) < ink.width() + 2 * pad {
+                        failed = true;
+                        break;
+                    }
+                    let x = match (align, *rtl) {
+                        (Alignment::Center, _) => left + (right - left - ink.width()) / 2,
+                        (Alignment::Leading, true) | (Alignment::Trailing, false) => {
+                            right - ink.width() - pad
+                        }
+                        _ => left + pad,
+                    };
+                    let bbox = Rect([
+                        bounds.x() + x,
+                        bounds.y() + local_y,
+                        ink.width(),
+                        ink.height(),
+                    ]);
+                    let footprint = Rect([
+                        bbox.x() - effect,
+                        bbox.y() - effect,
+                        bbox.width() + 2 * effect,
+                        bbox.height() + 2 * effect,
+                    ]);
+                    let blocked = |x: u32, y: u32| {
+                        occupied.get_pixel(x, y)[0] != 0
+                            || mask.is_some_and(|m| {
+                                m.get_pixel(x - bounds.x(), y - bounds.y())[0] == 0
+                            })
+                    };
+                    if brush.enumerate_pixels().any(|(x, y, p)| {
+                        let (x, y) = (bbox.x() - border + x, bbox.y() - border + y);
+                        p[0] != 0 && (blocked(x, y) || (style.shadow && blocked(x + 2, y + 2)))
+                    }) {
+                        failed = true;
+                        break;
+                    }
+                    if fitted
+                        .last()
+                        .is_some_and(|(line, _): &(PlacedLine, GrayImage)| {
+                            line.bbox.bottom() + 2 * effect > bbox.y()
+                        })
+                    {
+                        failed = true;
+                        break;
+                    }
+                    extent = Some(extent.map_or(footprint, |p| p.union(footprint)));
+                    fitted.push((
+                        PlacedLine {
+                            text: text.clone(),
+                            bbox,
+                            rtl: *rtl,
+                            baseline: bounds.y() as f32 + offset as f32 + size as f32,
+                        },
+                        ink.clone(),
+                    ));
+                }
+                if !failed && let Some(bounds) = extent {
+                    return Ok(Some(Fit {
+                        lines: fitted,
+                        size: size as f32,
+                        line_height,
+                        bounds,
+                    }));
+                }
             }
         }
     }

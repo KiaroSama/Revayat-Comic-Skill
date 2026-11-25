@@ -3,7 +3,7 @@ use crate::{
     masks::{Balloon, RegionMask, balloon_interior},
     same_geometry,
 };
-use image::{GrayImage, RgbImage, imageops};
+use image::{RgbImage, imageops};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,10 +66,7 @@ pub fn reconcile_image_dimensions(image: &RgbImage, target: (u32, u32)) -> Resul
 }
 
 pub fn balloon_text_interior(original: &RgbImage, b: Balloon) -> Result<RegionMask> {
-    let inset = (b.bounds.width().min(b.bounds.height()) as f32 * 0.045)
-        .round()
-        .max(1.0) as u32;
-    balloon_interior(original, b, inset)
+    balloon_interior(original, b, crate::masks::text_inset(b.bounds))
 }
 
 pub fn full_balloon_surviving_ink(
@@ -114,21 +111,32 @@ pub fn text_crosses_outline(
 ) -> Result<u64> {
     same_geometry(original.dimensions(), cleaned.dimensions())?;
     same_geometry(original.dimensions(), final_image.dimensions())?;
-    footprint.checked(original.dimensions())?;
     let safe = balloon_text_interior(original, b)?;
-    let mut page_safe = GrayImage::new(original.width(), original.height());
-    safe.apply_to(&mut page_safe)?;
-    let crossing = pixcore_rs::port::outline_crossing_pixels(
-        original.as_raw(),
-        cleaned.as_raw(),
-        final_image.as_raw(),
-        page_safe.as_raw(),
-        i64::from(original.width()),
-        i64::from(original.height()),
-        serde_json::to_value(footprint)?,
-        b.dark,
-        8,
-    )
-    .map_err(VisionError::kernel)?;
-    Ok(crossing as u64)
+    let footprint = footprint.checked(original.dimensions())?;
+    let mut crossing = 0;
+    for y in footprint.y()..footprint.bottom() {
+        for x in footprint.x()..footprint.right() {
+            let clean = cleaned.get_pixel(x, y);
+            if !pixel_changed(clean, final_image.get_pixel(x, y)) {
+                continue;
+            }
+            let inside = safe.bounds.contains(x, y)
+                && safe
+                    .pixels
+                    .get_pixel(x - safe.bounds.x(), y - safe.bounds.y())[0]
+                    != 0;
+            let paper = |p| {
+                let luma = crate::luminance(p);
+                if b.dark { 255 - luma } else { luma }
+            };
+            // Dark source glyphs legitimately removed inside safe paper are not an outline.
+            let dark = paper(clean) < 180 || (!inside && paper(original.get_pixel(x, y)) < 180);
+            crossing += u64::from(!inside || dark);
+        }
+    }
+    Ok(crossing)
+}
+
+pub fn pixel_changed(before: &image::Rgb<u8>, after: &image::Rgb<u8>) -> bool {
+    before.0.iter().zip(after.0).any(|(a, b)| a.abs_diff(b) > 8)
 }

@@ -6,32 +6,25 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, Agent, AskUserQuestion
 metadata: {"homepage":"https://github.com/KiaroSama/Revayat-Comic-Skill","version":"2.0.0","requires":{"bins":["revayat-comic"]}}
 ---
 
-# Revayat Comic — comics into Persian
+# Revayat Comic: comics into Persian
 
 Run the eleven steps below **in order**. Each is a command plus a rule for what
 to do with its output. Do not improvise a different order, and do not skip a
 step because the previous one looked fine.
 
-Set four variables once, then use them everywhere:
+Set `WORK` to the chapter workspace and `OUTPUT` to the final CBZ, PDF or page folder. Create the activity log beside `OUTPUT` before step 1; see `references/translation-log.md`. Resolve `SKILL_DIR` to the folder holding this file (`${CLAUDE_PLUGIN_ROOT}/skills/revayat-comic` in a Claude Code plugin).
 
-- `SKILL_DIR` — the folder holding this file. In a Claude Code plugin it is
-  `${CLAUDE_PLUGIN_ROOT}/skills/revayat-comic`.
-- `WORK` — a working folder for this chapter, e.g. `work/`.
-- `OUTPUT` — the final CBZ/PDF path or translated-page folder. Create the
-  activity log beside it before step 1; follow `references/translation-log.md`.
-- `BIN` — the standalone pure-Rust `revayat-comic` binary (`bin/revayat-comic` on Linux, `bin/revayat-comic.exe` on Windows, or `revayat-comic` on `PATH`). Built with Rust `1.100.0` with zero Python runtime required.
+The examples use the standalone v2 `revayat-comic` on `PATH`. Set `DRAFT` to a UTF-8 file when linting draft prose and `BATCH` to a separate shard directory when using batch mode.
 
-Every command is `revayat-comic <stage> …`.
-
-### Mandatory Six-Stage Multi-Agent Workflow & Full-Page Image Editing
+### Six-stage workflow and full-page editing
 
 Every comic translation runs through the **six-stage multi-agent workflow** in `references/multi-agent-workflow.md`:
 1. **Initial Translation (`ترجمه اولیه`)**: Web-search official series character names, honorifics, and canon terminology first; draft natural spoken Persian applying `references/voice/persian/SKILL.md` and `references/voice/humanizer/SKILL.md` (v4.0.0).
 2. **Layout & Typesetting Planning (`صفحه آرایی`)**: Set balanced line breaks, generous line spacing (`>= 1.38x`), RTL punctuation, anti-overlap badge/title checks, and classify each region as `typeset` (clean uniform bubble) vs `fullpage_edit` (on-art/speedlines/maps/covers/SFX).
-3. **Bilingual & Tone Review (`بازبینی`)**: Audit fidelity, character register, natural spoken Persian, and run `revayat-comic voice lint --check --style`.
-4. **Apply Translation (`اعمال ترجمه`)**: Empty ONLY uniform speech bubbles first (`revayat-comic clean --bubbles-only`), submit the **FULL bubbles-emptied page** (NEVER isolated small crops!) to `Numera-Gen-mcp` (`references/fullpage-image-edit.md`) for on-art/SFX/cover/title lettering using `revayat-comic fullpage-prompt`, composite only the edited zones onto the immutable original page, then run `revayat-comic typeset` (pure-Rust `cosmic-text` + bundled Vazir TTF) for speech bubbles.
-5. **Visual Recheck & Fix (`چک مجدد فایل و اصلاح مشکلات`)**: Visually inspect every rendered page with `Read` alongside `revayat-comic qa check --strict` and repair any leftover dots, overlaps, spacing, or glyph issues.
-6. **Final Review & Delivery (`بازبینی نهایی و تحویل`)**: Run `revayat-comic qa package`, export lossless CBZ + lossless PDF, and write the translation & QA log.
+3. **Bilingual and tone review**: Check the Persian against the source crops and run `revayat-comic voice lint "$DRAFT" --check --style` on a UTF-8 draft file.
+4. **Apply the translation**: Merge the worksheets, then clean and typeset. For lettering on artwork, follow `references/fullpage-image-edit.md`: send the full page with empty balloons to the image editor and composite the approved result with `typeset --external-dir`. Include a `<page_id>.png` only for each approved external edit; the CLI typesets pages without a matching PNG normally.
+5. **Visual recheck**: Open every rendered page with `Read`, then run `revayat-comic qa check --doc "$WORK/comic.json" --strict`. Fix remaining marks, overflows and missing glyphs.
+6. **Delivery**: Export the requested formats, verify each package with `qa package --package`, and update the translation and QA log.
 
 Before translating, **ask whether the user wants optional parallel translation
 and editing with multiple subagents**. Sequential is the default; enable helpers
@@ -79,34 +72,18 @@ choice beside the output and retain it on resume.
 
 ---
 
-## Step 1 — Check the tools
-
-Python 3.12 or newer is required. Anything older fails dependency resolution
-or import checks.
+## Step 1: Check the tools
 
 ```bash
-revayat-comic doctor
+revayat-comic doctor --json
 ```
 
-- `"ready": true` → continue.
-- `"ready": false` → rebuild or download the pure-Rust `revayat-comic` binary (`cargo build --release --locked -p revayat-comic-cli`), then run
-  `doctor` again.
+Continue when `ok` is `true`. If it is `false` or the command is missing, check which `revayat-comic` is on `PATH`, then reinstall or build the binary and retry. The CLI includes the Vazir fonts and shapes Persian itself.
 
-Two fields in `persian` decide whether the output is correct rather than merely
-present. Read them now, not after building a chapter:
-
-| Field | Meaning | Action |
-| --- | --- | --- |
-| `"raqm": true` | Pillow shapes and reorders Persian itself, through HarfBuzz and FriBidi | nothing; this is the good path |
-| `"raqm": false` | Persian will be pre-shaped by hand into presentation forms | works, and it is fixable: libraqm is in every Pillow wheel and needs a **FriBiDi** library at run time. Put `fribidi.dll` / `fribidi-0.dll` / `libfribidi-0.dll` on PATH (Windows) or install `libfribidi` (Linux/macOS) |
-| `"font"` is a path | a Persian-capable font was found | nothing |
-| `"font": null` | there is no font on this machine that can draw Persian | install Vazirmatn, then pass `--font` at step 9 |
-| `"font_draws_persian": false` | the font was found but renders tofu | pick another; `--font` at step 9 |
-
-## Step 2 — Import the chapter
+## Step 2: Import the chapter
 
 ```bash
-revayat-comic import "<chapter.cbz>" --out $WORK \
+revayat-comic import "<chapter.cbz>" --out "$WORK" \
   --source-language ja --direction rtl
 ```
 
@@ -121,8 +98,8 @@ Accepted input: CBZ, CBR, a comic PDF, a folder of images, or one image.
 | What you see | What to do |
 | --- | --- |
 | `"pages": N` matching the chapter | continue |
-| `webtoon_strips` is not empty | this is a webtoon; use `--direction ltr` and expect one long column per file |
-| an error naming `rarfile` or `unrar` | CBR needs an unrar binary; convert to CBZ instead if that is easier |
+| A tall webtoon strip | Check the file order and read the strip from top to bottom. Set `--direction ltr` when the source reads left to right. |
+| The archive cannot be read | Check that the archive is intact. If needed, use a CBZ or a folder of the original images. |
 
 The original pages are copied to `$WORK/pages/` and hashed. **Nothing in the
 pipeline ever writes to them.** Every later stage writes a new file.
@@ -130,40 +107,34 @@ Record original dimensions and quality in the output-side activity log now.
 PDF imports also retain visible page dimensions independently of raster pixels;
 legacy imports need re-importing to recover physical dimensions they never stored.
 
-## Step 3 — Find the text
+## Step 3: Find the text
 
 Three commands, always run together:
 
 ```bash
-revayat-comic detect --doc $WORK/comic.json
-revayat-comic mask   --doc $WORK/comic.json
-revayat-comic crops  --doc $WORK/comic.json
+revayat-comic detect --doc "$WORK/comic.json"
+revayat-comic mask   --doc "$WORK/comic.json"
+revayat-comic crops  --doc "$WORK/comic.json"
 ```
 
 | What you see | What to do |
 | --- | --- |
-| `totals.speech` in the right region of plausible | continue |
-| `pages_without_text` covering many pages | the thresholds do not fit this book — see `references/detection.md` |
-| a `warning` about excessive coverage | the mask matched artwork, not lettering; fix it before cleaning |
+| The overview labels match the page's lettering | Continue to the worksheets. |
+| Text on the page has no region | Record the missing area in the worksheet after checking the source image. |
+| A mask covers artwork beyond the intended edit | Fix the region or mask before cleaning. |
 
 `detect` finds balloons well and free-floating sound effects badly. That is
 expected and it is why step 5 exists: you will see the page and can correct it.
 
-## Step 4 — Worksheets
+## Step 4: Worksheets
 
 ```bash
-revayat-comic worksheet build --doc $WORK/comic.json
+revayat-comic worksheet build --doc "$WORK/comic.json" --worksheets "$WORK/worksheets"
 ```
 
-One worksheet per page in `$WORK/worksheets/pNNNN.txt`.
+Each page gets a worksheet at `$WORK/worksheets/pNNNN.txt`. If a reply no longer matches the page, save its Persian separately and compare it with the current crops before copying any lines into a fresh worksheet. See `references/recovery.md`.
 
-If this refuses with `"refused": "stale-worksheets"`, regions moved after some
-pages were already translated, so their ids no longer point at the same
-balloons. Preserve the existing Persian, review each affected page's current
-geometry, then use `worksheet reconcile --doc $WORK/comic.json --pages pNNNN`.
-Read `references/recovery.md` for interrupted merges and old fingerprints.
-
-## Step 5 — Read the page and translate it
+## Step 5: Read the page and translate it
 
 **This is the step that makes the result good, and it is yours, not a
 script's.** For each `$WORK/worksheets/pNNNN.txt`, write
@@ -202,9 +173,7 @@ page 2  →  merge  →  glossary scan / lock  →  build page 3 context
 what `test_page_two_sees_page_one_only_after_it_is_merged` pins, and it is only
 true page by page.
 
-`worksheet merge` (Step 6) and `glossary scan` (Step 7) run after **each** page,
-not once at the end. Both are safe to re-run, both are cheap, and `merge`
-reporting `missing_outputs` for the pages whose turn has not come is expected.
+After each page, run `worksheet merge` (Step 6) with `--pages` and the ID you just completed, then run `glossary scan` (Step 7). A merge without `--pages` expects replies for the whole chapter.
 
 <details>
 <summary>Optional parallel mode and its context boundary</summary>
@@ -224,7 +193,7 @@ preparation/review can help while translation remains sequential.
 
 </details>
 
-### Batch work on independent page ranges or books
+### Batch work on independent page ranges
 
 Use shards only when page ranges can proceed independently. Finish the chapter
 prep and verify and lock the cast glossary before splitting it. Give one agent
@@ -232,20 +201,12 @@ exclusive ownership of each shard, with any scene context it needs. Keep pages
 ordered inside each shard. Dependent ranges use the sequential workflow above.
 
 ```bash
-revayat-comic batch plan-shards "$WORK" --shards 3 --out "$BATCH"
-revayat-comic batch merge-shards "$BATCH" --into "$WORK"
-revayat-comic batch plan-books "$INPUT_DIR" --out "$BOOK_BATCH" --workers 3
+revayat-comic batch plan --doc "$WORK/comic.json" --shards 3 --out "$BATCH"
+revayat-comic batch status --batch "$BATCH"
+revayat-comic batch merge --doc "$WORK/comic.json" --batch "$BATCH"
 ```
 
-Without `--out`, `plan-shards` creates `$WORK/batch`. Read `batch-manifest.json`:
-`workdir` is relative to the batch directory and `pages` is a zero-based,
-half-open range in the original page order. In book mode,
-import each item's `input` from its own `workdir` into a chapter folder there.
-Use at most `workers` agents at once. Agents edit and merge worksheets in their
-own workspace; only the coordinator updates manifest statuses. Finish or retry
-failed shards before merging. Keep the original chapter unchanged while agents
-work and wait for all writers to stop before running `merge-shards`. Then run
-chapter-wide QA and review every final page in original order.
+Read `batch-manifest.json` for each shard's `workdir`, relative to `$BATCH`, and its page range. Agents edit and merge worksheets only in their own shard. Keep the original chapter unchanged and wait for all writers to finish before running `batch merge`. Then run chapter-wide QA and review every final page in reading order.
 
 The plan records a frozen digest of the chapter, shared glossary/policy and
 chapter assets. A merge refuses changed canonical files or changed shared
@@ -269,7 +230,7 @@ page 4 becomes `تو` on page 5, and a settled term drifts. This is bounded,
 deterministic and cheap:
 
 ```bash
-revayat-comic context --doc $WORK/comic.json --page pNNNN
+revayat-comic context --doc "$WORK/comic.json" --page pNNNN
 ```
 
 It returns `constraints` (the locked glossary and the rules — not open to
@@ -295,13 +256,7 @@ assignment/snapshot contract from `references/parallel-workflow.md`:**
 
 > Read `$WORK/worksheets/pNNNN.txt` and write `$WORK/worksheets/pNNNN.done.txt`.
 >
-> **Look at both images the worksheet names before you write anything.** Use the
-> Read tool on each:
-> - `crops/pNNNN/overview.png` — the whole page with every region numbered in
->   reading order. This is your context: who is speaking, what they are looking
->   at, which balloon answers which.
-> - `crops/pNNNN/sheet*.png` — the crops themselves, enlarged and labelled with
->   the region ids.
+> **Open the overview and every crop sheet named in the worksheet with `Read` before writing.** The overview shows the whole page in reading order. Use it to identify the speakers and connect replies. The sheets show enlarged crops labelled with their region IDs.
 >
 > Read `$SKILL_DIR/references/translation-policy.md` first and follow it.
 > Read the common pass and matching section in `references/source-languages.md`.
@@ -404,7 +359,7 @@ assignment/snapshot contract from `references/parallel-workflow.md`:**
 >   fa: تلپ
 >   ```
 >
->   `box:` is `x y w h` in the page's own pixels. `overview.png` is drawn at
+>   `box:` is `x y w h` in the page's own pixels. The overview image is drawn at
 >   most 1600 pixels on its longest side, so on a longer page a box measured on
 >   it is NOT in the page's pixels — the worksheet header prints the factor to
 >   divide by whenever that applies. Add `polarity: dark` for white lettering on
@@ -413,36 +368,21 @@ assignment/snapshot contract from `references/parallel-workflow.md`:**
 Check what is left at any time:
 
 ```bash
-revayat-comic worksheet status --doc $WORK/comic.json
+revayat-comic worksheet status --doc "$WORK/comic.json"
 ```
 
-## Step 6 — Merge
+## Step 6: Merge
 
 ```bash
-revayat-comic worksheet merge --doc $WORK/comic.json
+revayat-comic worksheet merge --doc "$WORK/comic.json" --worksheets "$WORK/worksheets" --pages p0001
 ```
 
-| Field | Meaning | Action |
-| --- | --- | --- |
-| `"ok": true` | everything landed | continue |
-| `missing_outputs` | those pages were never translated | translate them — **expected mid-chapter** for pages whose turn has not come |
-| `missing_regions` | ids were dropped from a worksheet | re-do those pages |
-| `unknown_regions` | ids were invented — **that page is left untouched**, not partly merged | re-do those pages |
-| `duplicate_regions` | an id appears twice — **that page is left untouched** | re-do that page |
-| `conflicting_actions` | one region asks for two opposite things, e.g. `keep` and `erase` — **that page is left untouched** | pick one and re-do that page |
-| `empty_translation` | a region has `src:` but no `fa:` | fill it in, or `drop: yes` |
-| `stale_worksheets` | the reply's mapping no longer matches the page | preserve its Persian, review the current geometry and explicitly reconcile only the affected pages; see `references/recovery.md` |
+Use the ID from the reply's worksheet. The command lists changed pages in `merged`; `worksheet status` distinguishes merged, completed, stale, and pending replies. Fix missing or duplicate IDs and conflicting actions in the reply, then retry the same page. See `references/recovery.md` for stale replies and interrupted merges.
 
-An interrupted accepted merge records a receipt with its Persian; retry finishes
-the reply header without applying that text again. A refused reply does not refresh
-the worksheet stage. Re-running merge after a fix is meant to be run **after
-each page** rather than once at the end — that is what puts a page's Persian into
-`comic.json` where the next page's `context` can see it.
-
-## Step 7 — Names and typography
+## Step 7: Names and typography
 
 ```bash
-revayat-comic glossary scan --doc $WORK/comic.json
+revayat-comic glossary scan --doc "$WORK/comic.json"
 ```
 
 Open `$WORK/comic.json` and, for each entry under `glossary.entries` that has an
@@ -456,160 +396,53 @@ constrains every page after it, through both the worksheet table and the
 already been translated. Carry the locked entries into the next chapter's
 document too.
 
-Run `revayat-comic voice lint --check --style`
-on the Persian prose before writing it into a worksheet. Review its suggestions in
-context. Then fix the merged chapter with the comic-aware linter:
+Run `revayat-comic voice lint "$DRAFT" --check --style` on a UTF-8 file containing the Persian draft. Review its suggestions in context. Then check and fix the merged chapter with the comic-aware linter:
 
 ```bash
-revayat-comic falint fix --doc $WORK/comic.json
+revayat-comic falint fix --doc "$WORK/comic.json"
 ```
 
-Add `--digits keep` if the comic must keep Latin numerals. If a Persian sentence
+Review numeral choices in the worksheet and compare them with the rendered page. If a Persian sentence
 starts with an English word, put U+2067 (RLI) before the sentence and U+2069
 (PDI) after it. Both linters add only missing isolation; keep pure English and
 Persian-leading sentences unwrapped.
 
-## Step 8 — Clean the artwork
+## Step 8: Clean the artwork
 
 ```bash
-revayat-comic clean --doc $WORK/comic.json
+revayat-comic clean --doc "$WORK/comic.json"
 ```
 
-| Field | Meaning |
-| --- | --- |
-| `totals.flat` | balloons repainted in their own colour — the good case |
-| `totals.inpaint` | lettering that sat on artwork and had to be reconstructed |
-| `totals.keep` | sound effects deliberately left in the drawing |
-| `totals.refused` | **a solid free-lettering patch with no repair available.** Nothing was touched and the region says what would fix it: `--external`, a working `--provider`, or re-running `mask --free-lettering glyphs` |
-| `inpaint_heavy_pages` | look at these; Telea smooths, it does not redraw |
+Inspect the cleaned pages before setting new text. Ordinary cleaning handles uniform balloons. For lettering over artwork, follow `references/fullpage-image-edit.md`, which starts with `clean --bubbles-only`. Keep every page at its original width and height. Leave effects you have not approved for translation as drawn.
 
-To use a better cleaner than this ships with, clean the pages elsewhere and
-pass the folder: `--external cleaned/`, named `pNNNN.png`. **Only the masked
-pixels of those images are used**, so even a generative model that redrew half
-the page cannot change artwork it was not asked to touch.
-
-For lettering drawn **onto the artwork**, give the model the whole patch rather
-than the letter shapes — clipped back to strokes a few pixels wide, even a good
-reconstruction reads as repaired rather than redrawn:
+To mark an authorized watermark at the same coordinates on every page, read `references/watermarks.md`, then run:
 
 ```bash
-revayat-comic mask  --doc $WORK/comic.json --free-lettering solid
-revayat-comic clean --doc $WORK/comic.json --external reconstructed/
+revayat-comic watermark --doc "$WORK/comic.json" --box "12 1840 300 44"
+revayat-comic mask --doc "$WORK/comic.json"
 ```
 
-Balloons ignore the flag. A solid mask has exactly two valid consumers, and
-`clean` **refuses** it without one of them:
+Mark a watermark that moves from page to page in the worksheet for each page instead.
+
+## Step 9: Set the Persian
 
 ```bash
-# an image-edit provider, called for you, only where it is actually needed
-revayat-comic clean --doc $WORK/comic.json --provider <name>
+revayat-comic typeset --doc "$WORK/comic.json"
 ```
 
-`clean` refuses solid masks with neither `--provider` nor `--external`,
-because painting one flat or inpainting it blanks a rectangle out of the drawing.
-See `references/artwork-preservation.md`. Keep every page at its original
-pixel width and height (`W x H`). After a `numera-gen` edit to a cover, table of
-contents, or title page, measure the returned image before using it. If it
-differs, reconcile it without stretching or clipping the artwork; reject it if
-you cannot keep both the composition and the exact original dimensions.
+The CLI uses the bundled Vazir fonts. Inspect each rendered page for missing dots or glyphs, wrong RTL punctuation, and text touching another balloon or an outline. If a line does not fit, break it differently before trying a shorter translation. Keep the full wording in `fa_full` and review the shorter `fa` before merging again.
 
-A mark sitting in the **same place on every page** — a corner stamp on all two
-hundred — is one command rather than two hundred worksheet lines:
+## Step 10: Check the rendered pages
 
 ```bash
-revayat-comic watermark --doc $WORK/comic.json --box "12 1840 300 44"
-revayat-comic mask --doc $WORK/comic.json
+revayat-comic qa check --doc "$WORK/comic.json" --strict
 ```
 
-Run it before `clean`, and re-run `mask` after it, because the new boxes have no
-masks yet. A mark that *moves* between pages belongs in the worksheet instead,
-where you can see it. Read `references/watermarks.md` first — including the part
-about which marks are yours to remove.
+Stop if `ok` is false. Review the page and region in each finding, fix the worksheet or mask as needed, and rerun the affected stages. If the artwork changed outside the approved edit areas, compare the original with the cleaned and rendered pages before trying again. Check `artwork_pixels_changed` and reopen the rendered pages after every repair.
 
-## Step 9 — Set the Persian
+## Step 11: Export and report
 
-```bash
-revayat-comic typeset --doc $WORK/comic.json \
-  --font "Vazirmatn-Medium.ttf"
-```
-
-`--font` is optional; without it the best Persian face on the machine is used.
-
-| Field | Meaning | Action |
-| --- | --- | --- |
-| `"shaping": "raqm"` | correct shaping and direction | nothing |
-| `"shaping": "reshaper"` | the fallback ran | works; mention it in the report |
-| `overflow` is empty | everything fitted | continue |
-| `overflow` lists regions | the words do not fit the measured ink bounds | try line breaks/reflow, then a reviewed `fa`/`fa_full` pair; re-run merge, falint and typeset |
-
-`--min-size` is a floor, not a suggestion. It will not go below it silently.
-
-## Step 10 — Gate
-
-```bash
-revayat-comic qa check --doc $WORK/comic.json
-```
-
-**Do not export while `"ok"` is false.** Fix by code:
-
-| Code | Meaning | Action |
-| --- | --- | --- |
-| `artwork-modified` | pixels changed outside the authorised mask | do not ship; re-run clean and typeset for that page |
-| `source-text-survived` | the mask missed part of the lettering, so the original script is still on the cleaned page | re-run `mask` with a larger `--grow` for that page, then `clean` |
-| `rendered-text-overlap` | rendered Persian glyphs from two regions collide on the same page | separate the colliding boxes or shorten one translation, then re-run `typeset` |
-| `text-crosses-outline` | rendered Persian ink spilled across a balloon outline or onto screentone | tighten the balloon/region box or shorten the line, then re-run `mask`, `clean`, and `typeset` |
-| `page-dimension-mismatch` | a cleaned or final page has different pixel dimensions than the original page | reconcile the external/generative edit back to exact original `W x H` without stretching, then re-run `clean` and `typeset` |
-| `stale-stage` | a finished stage's result no longer matches what it was made from — an approved line was corrected after the page was rendered, or a stage it depends on has run since | re-run the stage it names, then `qa` |
-| `clean-refused` | `clean` had no repair for this patch and left the original lettering on the page | give it `--external`, a working `--provider`, or re-run `mask --free-lettering glyphs` for that page |
-| `region-not-rendered` | this region has approved Persian and its render is missing or overflowed | run `typeset`; for overflow, reflow before proposing reviewed compression |
-| `erase-unfinished` | a region is marked for erasure and the cleaner has not acted on it | run `clean` before publishing |
-| `delivery-mismatch` | the finished page, the mask it was drawn inside, the cleaned page under it, or the original it was repaired from is not the file the stage committed — or the certificate does not cover it at all | re-run the stage it names, or restore the file it used |
-| `delivery-unverified` | this page was rendered or cleaned before those outputs were signed, so there is nothing to check the file against | re-run the stage it names to certify it |
-| `annotation-unplaced` | a `bilingual`/`annotate` gloss was produced and nothing reserves a place for it | place it by hand, or use `--sfx-policy translate` to replace the effect instead |
-| `compressed-variant` | a displayed/full Persian pair needs review | compare both with the source, then mark `reviewed: compressed-variant`; changing either text or its source reopens review, and old decisions remain recorded |
-| `archive-duplicate-page` | two pages in the package are byte-identical where the export wrote two different ones | re-run `export`; if it repeats, a page failed to write |
-| `stage-unverified` | a stage was stamped by an older build, so its freshness cannot be judged | re-run the stage it names once |
-| `policy-conflict` | `title_policy.sfx` names a different policy from `meta.sfx_policy`, which is the one every stage obeys | make them agree, or word the policy so it does not name another one |
-| `source-modified` | an original page file was edited after import | restore it, or re-import |
-| `page-missing` / `page-size-changed` | an output is gone or resized | re-run the stage that makes it |
-| `untranslated-region` | a region has no Persian | translate it, or `drop: yes` |
-| `page-not-rendered` | the page carries Persian that was never drawn onto it | run `typeset`; it is a draft until you do |
-| `page-not-cleaned` | the cleaner repaired this page and the repaired image is gone, so the package would ship the original with everything that was erased still on it | re-run `clean`, or restore the file |
-| `source-script-left` | Japanese, Korean or Chinese survives inside the Persian | re-do that region |
-| `not-persian` | the target text is not Persian at all | re-do that region |
-| `text-overflow` | it does not fit at the minimum size, and the words were **not drawn** — ink that would land outside the balloon is taken back off the page | reflow first; if compression is necessary preserve `fa_full` and obtain review before merging and typesetting again |
-| `reading-order-broken` | the numbering is not `1..n` | re-run detect for that page |
-| `mask-excessive` (warning) | more than 28% of a page would be repainted | tighten detection |
-| `duplicate-translation` (warning) | different sources, identical Persian | a reply was pasted twice; re-do both |
-| `low-confidence-region` (warning) | the detector guessed and nobody checked | look at the crop |
-| `glossary-drift` (warning) | a locked name was rendered differently | re-do that region |
-| `typography` (warning) | Arabic letter forms, Latin quotes, stray punctuation | run `falint fix` |
-| `sfx-untranslated` (warning) | a sound effect was left drawn | expected under the `keep` policy |
-| `visual-note` (advice) | a model's opinion from the optional `qa visual` pass | read it and decide; it never passes or fails a run |
-
-Add `--strict` to make warnings blocking, for publication work.
-
-**Read `stats.states` as well as `ok`.** Every detected region lands in exactly
-one terminal state, and there is deliberately no state meaning "it quietly
-disappeared":
-
-| State | Meaning |
-| --- | --- |
-| `translated` | carries Persian |
-| `kept_by_policy` | left as drawn on purpose — a sound effect under `keep` |
-| `erased` | removed on purpose with nothing put back — a watermark under `erase` |
-| `dropped_false_detection` | you said there is no text there |
-| `needs_review` | seen but unresolved: overflowing, or a doubt you noted |
-| `unresolved` | **must be zero** — detected and then forgotten |
-
-`unresolved` is not its own error — every region in it is already blocked by
-`untranslated-region`, and two codes on the same rows is noise. The census is
-there to be *read*: the other five are all decisions, so report the counts to
-the user rather than only the total.
-
-## Step 11 — Export and report
-
-Before packaging, open **every** `final/pNNNN.png` and compare it with its
+Before packaging, open **every** rendered page listed in `comic.json` and compare it with its
 original. Check white boxes over outlines or hair, leftover English, overlapping
 text, text crossing balloon outlines, and untranslated balloons. Confirm the
 original pixel dimensions on each page. A spot-check or a green automated QA
@@ -617,10 +450,10 @@ report does not count. Repair defects, rerender and recheck affected pages, and
 package only after the full page-by-page audit is complete.
 
 ```bash
-revayat-comic export --doc $WORK/comic.json \
-  --out $OUTPUT
-revayat-comic qa package --doc $WORK/comic.json \
-  --file $OUTPUT
+revayat-comic export --doc "$WORK/comic.json" \
+  --out "$OUTPUT"
+revayat-comic qa package --doc "$WORK/comic.json" \
+  --package "$OUTPUT"
 ```
 
 `--out` decides the format: `.cbz`, `.pdf`, or a folder.
@@ -650,9 +483,7 @@ out-of-date activity log means the workflow is incomplete.
 | `archive-page-count` | the package has a different number of pages from the document | re-run export; if it repeats, a page failed to write |
 | `archive-page-size` | a page in the package is not the size the document says | re-run export; a mismatch means the wrong file was packed |
 
-Then report: where the file is, how many pages and balloons, which sound-effect
-policy was used, whether shaping used RAQM or the fallback, anything QA flagged
-that you chose not to act on, and this limitation —
+Report the output path, page and balloon counts, sound-effect policy, and any QA findings you left unresolved. Explain the sound-effect policy if it affects the delivery:
 
 > Sound effects drawn into the artwork are kept as drawn unless you asked for
 > them to be replaced. Redrawing hand-lettered art is a lettering job, not a

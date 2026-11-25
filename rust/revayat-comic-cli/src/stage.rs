@@ -205,8 +205,10 @@ enum Stage {
         doc: Doc,
         #[arg(long)]
         page: String,
-        #[arg(long, default_value = "deepinfra/google/nano-banana-pro")]
+        #[arg(long, default_value = revayat_vision::fullpage_edit::DEFAULT_MODEL)]
         model: String,
+        #[arg(long)]
+        all_regions: bool,
     },
     /// Mark an exact rectangle for erasure.
     Watermark {
@@ -295,8 +297,10 @@ enum Stage {
     Install {
         #[arg(long, default_value = ".")]
         repo: PathBuf,
-        #[arg(long)]
-        base: PathBuf,
+        #[arg(long, visible_alias = "path")]
+        base: Option<PathBuf>,
+        #[arg(long, value_parser = ["user", "project"], conflicts_with = "user_scope")]
+        scope: Option<String>,
         #[arg(long, default_value = "all")]
         agent: String,
         #[arg(long)]
@@ -509,7 +513,12 @@ fn stage_output(stage: Stage, output: &mut dyn Write) -> Result<i32, StageError>
         Stage::Typeset { doc, external_dir } => {
             processing::typeset(&doc.doc, external_dir.as_deref())?
         }
-        Stage::FullpagePrompt { doc, page, model } => processing::fullpage(&doc.doc, &page, model)?,
+        Stage::FullpagePrompt {
+            doc,
+            page,
+            model,
+            all_regions,
+        } => processing::fullpage(&doc.doc, &page, model, all_regions)?,
         Stage::Watermark {
             doc,
             bounds,
@@ -625,11 +634,15 @@ fn stage_output(stage: Stage, output: &mut dyn Write) -> Result<i32, StageError>
         Stage::Install {
             repo,
             base,
+            scope,
             agent,
             user_scope,
             force,
             recover,
         } => {
+            let (base, user_scope) =
+                install::resolve_install_scope(base, scope.as_deref(), user_scope)
+                    .map_err(usage)?;
             json!({"installed":install::safe_install_scoped(&repo, &base, &agent, user_scope, force, recover).map_err(failed)?})
         }
         Stage::Eval {

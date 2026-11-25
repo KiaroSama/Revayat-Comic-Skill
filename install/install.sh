@@ -15,4 +15,4 @@ if [ -z "$binary" ] || [ ! -x "$binary" ]; then
     printf '%s [ERROR] [installer] revayat-comic binary not found; build with "cargo build --release --locked -p revayat-comic-cli" or set REVAYAT_BIN.\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >&2
     exit 1
 fi
-exec "$binary" install "$@"
+exec "$binary" install --repo "$root" "$@"

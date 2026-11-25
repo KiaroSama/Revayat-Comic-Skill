@@ -1924,14 +1924,17 @@ checksum = "f2d43a8c8c74056248124068fde0df374d1ddf9039e747d190f01c36faeaab08"
 
 [[package]]
 name = "rars"
-version = "0.13.0"
+version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1da01c12cc3255e4c42fbd643820efad0c179e98362770f992eff6ba436cba3c"
+checksum = "3acb6933c3c4c46ca3700c8073c1e99e6af5615430eadfcba84847ec83c184b5"
 dependencies = [
  "aho-corasick",
  "blake2s_simd",
  "crc32fast",
  "libc",
+ "memchr",
+ "memmap2",
+ "rustix",
 ]
 
 [[package]]

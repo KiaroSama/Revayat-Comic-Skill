@@ -32,7 +32,9 @@ if (-not $binary) {
     exit 1
 }
 
-$arguments = @('install', '--agent', $Agent, '--scope', $Scope, '--path', $Path)
+$base = if ($Scope -eq 'user' -and -not $PSBoundParameters.ContainsKey('Path')) { $HOME } else { $Path }
+$arguments = @('install', '--repo', $repoRoot, '--agent', $Agent, '--base', $base)
+if ($Scope -eq 'user') { $arguments += '--user-scope' }
 if ($Force) { $arguments += '--force' }
 if ($Recover) { $arguments += '--recover' }
 & $binary @arguments

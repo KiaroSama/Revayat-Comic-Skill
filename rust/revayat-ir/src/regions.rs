@@ -39,6 +39,12 @@ pub fn translatable(region: &RegionRecord, policy: &str) -> bool {
         && (region.kind != "sfx" || matches!(policy, "translate" | "annotate" | "bilingual"))
 }
 
+pub fn uses_gloss(region: &RegionRecord, policy: &str) -> bool {
+    region.kind == "sfx"
+        && matches!(policy, "annotate" | "bilingual")
+        && translatable(region, policy)
+}
+
 pub fn may_be_edited(region: &RegionRecord, policy: &str) -> bool {
     !(region.keep
         || region.dropped

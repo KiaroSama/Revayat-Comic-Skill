@@ -6,7 +6,7 @@
 
 [![GitHub Actions CI workflow status](https://img.shields.io/github/actions/workflow/status/KiaroSama/Revayat-Comic-Skill/ci.yml?branch=main&style=flat-square&label=CI&color=16a34a)](.github/workflows/ci.yml)
 [![GNU General Public License v3.0 or later](https://img.shields.io/github/license/KiaroSama/Revayat-Comic-Skill?style=flat-square&color=2563eb)](LICENSE)
-[![Latest GitHub version tag](https://img.shields.io/github/v/tag/KiaroSama/Revayat-Comic-Skill?style=flat-square&label=version&color=ea580c)](https://github.com/KiaroSama/Revayat-Comic-Skill/tags)
+[![Latest GitHub version tag](https://img.shields.io/github/v/tag/KiaroSama/Revayat-Comic-Skill?style=flat-square&label=version&color=ea580c)](#releases-and-tags)
 [![Latest GitHub release](https://img.shields.io/github/v/release/KiaroSama/Revayat-Comic-Skill?style=flat-square&label=release&color=dc2626)](https://github.com/KiaroSama/Revayat-Comic-Skill/releases)
 [![Automated Cargo workspace tests](https://img.shields.io/badge/tests-Cargo%20workspace-0d9488?style=flat-square)](#development)
 [![Rust 1.100.0 pinned toolchain](https://img.shields.io/badge/Rust-1.100.0-8b5cf6?style=flat-square)](rust-toolchain.toml)
@@ -55,16 +55,22 @@ Prebuilt release binaries and CI cover four 64-bit targets:
 
 32-bit platforms and macOS are not built by default.
 
+## Releases and Tags
+
+[GitHub Releases](https://github.com/KiaroSama/Revayat-Comic-Skill/releases) has a ZIP for each supported 64-bit target. Extract the standalone `revayat-comic` (Linux) or `revayat-comic.exe` (Windows). For source snapshots, see the [Git tags](https://github.com/KiaroSama/Revayat-Comic-Skill/tags).
+
 ## Install
 
 ### Prerequisites
 
-- To use a prebuilt binary from [GitHub Releases](https://github.com/KiaroSama/Revayat-Comic-Skill/releases): download the archive for your 64-bit Linux or Windows target and extract `revayat-comic` (or `revayat-comic.exe`).
+- Put the extracted binary on `PATH` when using an agent plugin, or place it in `bin/` at the repository root for the examples below.
 - To build from source: Rust `1.100.0` (pinned in `rust-toolchain.toml`), `git`, and PowerShell 7 (`pwsh`) on Windows or Bash on Linux.
 
 ### Plugin install
 
-The repository ships synchronized v2.0.0 manifests for five plugin ecosystems: Agent Plugins (`plugin.json` and `.agents/plugins/marketplace.json`), Claude Code (`.claude-plugin/`), Codex (`.codex-plugin/`), Cursor (`.cursor-plugin/`), and Antigravity (`.antigravity-plugin/`).
+The release ZIP contains the standalone CLI. Install the skill from the repository's plugin manifests or with the [skill installer](install/README.md), and keep `revayat-comic` on `PATH`.
+
+The repository has v2.0.0 manifests for five plugin systems: Agent Plugins (`plugin.json` and `.agents/plugins/marketplace.json`), Claude Code (`.claude-plugin/`), Codex (`.codex-plugin/`), Cursor (`.cursor-plugin/`), and Antigravity (`.antigravity-plugin/`).
 
 In Claude Code:
 
@@ -107,39 +113,41 @@ See [the voice index](skills/revayat-comic/references/voice/index.md) for licens
 
 ### Pipeline commands
 
-Every stage reads and writes the workspace `doc.json` created by `import`, leaving original pages untouched in `originals/`.
+`import` creates `comic.json` and stores the original pages in `pages/`. Later stages write their own files and leave those originals untouched.
 
 Windows (PowerShell 7):
 
 ```powershell
-.\bin\revayat-comic.exe import chapter.cbz --work .\work --direction rtl
-.\bin\revayat-comic.exe detect --doc .\work\doc.json
-.\bin\revayat-comic.exe mask --doc .\work\doc.json
-.\bin\revayat-comic.exe crops --doc .\work\doc.json
-.\bin\revayat-comic.exe worksheet build --doc .\work\doc.json --out .\work\worksheets
+.\bin\revayat-comic.exe import chapter.cbz --out .\work --direction rtl
+.\bin\revayat-comic.exe detect --doc .\work\comic.json
+.\bin\revayat-comic.exe mask --doc .\work\comic.json
+.\bin\revayat-comic.exe crops --doc .\work\comic.json
+.\bin\revayat-comic.exe worksheet build --doc .\work\comic.json --worksheets .\work\worksheets
 ```
 
 After filling the worksheets (manually or through the six-stage agent workflow):
 
 ```powershell
-.\bin\revayat-comic.exe worksheet merge --doc .\work\doc.json --in .\work\worksheets
-.\bin\revayat-comic.exe glossary check --doc .\work\doc.json
-.\bin\revayat-comic.exe falint check --doc .\work\doc.json
-.\bin\revayat-comic.exe clean --doc .\work\doc.json
-.\bin\revayat-comic.exe typeset --doc .\work\doc.json
-.\bin\revayat-comic.exe qa check --doc .\work\doc.json --strict
-.\bin\revayat-comic.exe export --doc .\work\doc.json --format cbz --out .\work\chapter-fa.cbz
-.\bin\revayat-comic.exe qa package --doc .\work\doc.json --out .\work\chapter-fa.cbz
+.\bin\revayat-comic.exe worksheet merge --doc .\work\comic.json --worksheets .\work\worksheets
+.\bin\revayat-comic.exe glossary check --doc .\work\comic.json
+.\bin\revayat-comic.exe falint check --doc .\work\comic.json
+.\bin\revayat-comic.exe clean --doc .\work\comic.json
+.\bin\revayat-comic.exe typeset --doc .\work\comic.json
+.\bin\revayat-comic.exe qa check --doc .\work\comic.json --strict
+.\bin\revayat-comic.exe export --doc .\work\comic.json --out .\work\chapter-fa.cbz
+.\bin\revayat-comic.exe qa package --doc .\work\comic.json --package .\work\chapter-fa.cbz
 ```
+
+`export` uses the output path to select the format: `.cbz`, `.pdf`, or a folder.
 
 Additional commands:
 
-- `fullpage-prompt --doc <doc.json> --page <id> --out <manifest.json>`: build an OCR-verified full-page image-edit manifest and prompt for pages with art-integrated text, speedlines, or complex covers.
-- `review-docx --doc <doc.json> --out <review.docx>`: export an RTL Persian bilingual review document.
-- `watermark --doc <doc.json> ...`: mark an exact authorized watermark rectangle for removal.
+- `fullpage-prompt --doc <comic.json> --page <id>`: print the full-page image-edit manifest to stdout. The default model is `openai/gpt-image-2.6-sunburst`.
+- `review-docx --doc <comic.json> --out <review.docx>`: export an RTL Persian bilingual review document.
+- `watermark --doc <comic.json> ...`: mark an exact authorized watermark rectangle for removal.
 - `batch plan|merge|status`: split long chapters into shards and merge them safely.
-- `voice lint [--check|--fix] [--style]` and `voice lookup <file>`: run the pure Rust Persian linter and terminology lookup.
-- `serve --mcp` or `serve --http 127.0.0.1:0`: expose all pipeline stages over MCP stdio or concurrent loopback HTTP.
+- `voice lint <file> --check --style` checks Persian prose; `voice lookup <text>` searches the terminology glossary.
+- `serve --stdio` starts the MCP server. For loopback HTTP, set `REVAYAT_HTTP_TOKEN` and run `serve --http 127.0.0.1:8765`.
 - `ocr` and `translate`: optional hosted model helpers (require explicit HTTPS endpoint and Bearer token).
 - `install`: transactional skill installer.
 - `eval`: synthetic fixture generator and scorer.
@@ -157,7 +165,7 @@ For full chapters, follow [references/multi-agent-workflow.md](skills/revayat-co
 
 ### Runtime logs
 
-Each CLI invocation writes a UTF-8 log file next to the binary or project under `logs/revayat-comic_YYYY-MM-DD_HH-mm-ss_UTC.log` with `[YYYY-MM-DD HH:mm:ss UTC] [LEVEL] [COMPONENT] Message` lines. Authorization headers, Bearer tokens, API keys, passwords, and credentialed URLs are redacted before writing. Pass `--verbose` (or `REVAYAT_LOG_LEVEL=DEBUG`) for detailed diagnostics, and attach the latest log file when reporting issues.
+Pipeline commands write UTF-8 logs under `logs/revayat-comic_YYYY-MM-DD_HH-mm-ss_UTC.log`. The `logs/` folder sits next to `bin/` or alongside a standalone binary whose directory is not named `bin`. CLI logs contain command metadata and exit status. Review the log before sharing it with a bug report.
 
 ## Documentation
 

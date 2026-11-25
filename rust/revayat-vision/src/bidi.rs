@@ -5,6 +5,16 @@ pub const RLM: char = '\u{200f}';
 pub const RLI: char = '\u{2067}';
 pub const PDI: char = '\u{2069}';
 
+pub(crate) fn is_rtl_text(text: &str) -> bool {
+    text.chars().any(|c| matches!(c, RLM | RLI | '\u{0600}'..='\u{08ff}' | '\u{fb50}'..='\u{fdff}' | '\u{fe70}'..='\u{fefc}'))
+}
+
+pub(crate) fn visible(c: char) -> bool {
+    !c.is_whitespace()
+        && !c.is_control()
+        && !matches!(c, '\u{00ad}' | '\u{061c}' | '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}'..='\u{206f}' | '\u{fe00}'..='\u{fe0f}' | '\u{feff}' | '\u{e0100}'..='\u{e01ef}')
+}
+
 pub fn starts_with_latin_in_persian(text: &str) -> Result<bool> {
     port::starts_with_latin_in_persian(text.into()).map_err(VisionError::kernel)
 }

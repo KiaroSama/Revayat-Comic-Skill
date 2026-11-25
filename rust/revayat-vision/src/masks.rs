@@ -91,6 +91,15 @@ fn fill_enclosed(paper: &mut GrayImage) {
 
 /// The enclosed paper, including ink holes, with a wall clearance in page pixels.
 pub fn balloon_interior(page: &RgbImage, balloon: Balloon, inset: u32) -> Result<RegionMask> {
+    seeded_interior(page, balloon, inset, None)
+}
+
+fn seeded_interior(
+    page: &RgbImage,
+    balloon: Balloon,
+    inset: u32,
+    clip: Option<Rect>,
+) -> Result<RegionMask> {
     let b = balloon.bounds.checked(page.dimensions())?;
     let text = balloon.text_bounds.checked(page.dimensions())?;
     let window = imageops::crop_imm(page, b.x(), b.y(), b.width(), b.height()).to_image();
@@ -102,58 +111,97 @@ pub fn balloon_interior(page: &RgbImage, balloon: Balloon, inset: u32) -> Result
             pixels: empty,
         });
     }
-    let center = text.center();
-    let wall = 125;
-    let seed_area = text
-        .expand(
-            text.width().max(text.height()) / 2 + 3,
-            page.width(),
-            page.height(),
-        )
-        .intersection(b)
-        .unwrap_or(b);
-    let best = oriented
-        .enumerate_pixels()
-        .filter(|(x, y, p)| p[0] >= 185 && seed_area.contains(x + b.x(), y + b.y()))
-        .min_by_key(|(x, y, p)| {
-            (
-                u64::from((x + b.x()).abs_diff(center[0]))
-                    .pow(2)
-                    .saturating_add(u64::from((y + b.y()).abs_diff(center[1])).pow(2)),
-                255 - p[0],
-            )
-        });
-    let Some((sx, sy, _)) = best else {
+    let Some(seed) = text.intersection(b) else {
         return Ok(RegionMask {
             bounds: b,
             pixels: empty,
         });
     };
-    let mut paper = from_raw(
-        oriented.dimensions(),
-        maskcore_rs::port::flood_balloon_interior(
-            Some(oriented.as_raw()),
-            i128::from(b.width()),
-            i128::from(b.height()),
-            i128::from(sx),
-            i128::from(sy),
-            wall,
-            70,
-            0,
-        )
-        .map_err(VisionError::kernel)?,
-    )?;
-    let hits = (0..b.width()).any(|x| paper.get_pixel(x, 0)[0] != 0) as u8
-        + (0..b.width()).any(|x| paper.get_pixel(x, b.height() - 1)[0] != 0) as u8
-        + (0..b.height()).any(|y| paper.get_pixel(0, y)[0] != 0) as u8
-        + (0..b.height()).any(|y| paper.get_pixel(b.width() - 1, y)[0] != 0) as u8;
-    if hits > 2 {
+    let paper = |threshold| {
+        GrayImage::from_fn(b.width(), b.height(), |x, y| {
+            Luma([if oriented.get_pixel(x, y)[0] >= threshold {
+                255
+            } else {
+                0
+            }])
+        })
+    };
+    let empty_mask = || GrayImage::new(b.width(), b.height());
+    let mut recovered = None;
+    for threshold in [220, 185] {
+        let bright = paper(threshold);
+        let labels = imageproc::region_labelling::connected_components(
+            &bright,
+            imageproc::region_labelling::Connectivity::Four,
+            Luma([0]),
+        );
+        let mut overlap = std::collections::BTreeMap::<u32, u64>::new();
+        for y in seed.y()..seed.bottom() {
+            for x in seed.x()..seed.right() {
+                let label = labels.get_pixel(x - b.x(), y - b.y())[0];
+                if label != 0 {
+                    *overlap.entry(label).or_default() += 1;
+                }
+            }
+        }
+        let Some((label, coverage)) = overlap.into_iter().max_by_key(|&(_, n)| n) else {
+            continue;
+        };
+        if coverage * 8 < seed.area() {
+            continue;
+        }
+        let mut candidate = empty_mask();
+        let mut count = 0u64;
+        for (out, p) in candidate.pixels_mut().zip(labels.pixels()) {
+            if p[0] == label {
+                out[0] = 255;
+                count += 1;
+            }
+        }
+        let Some(tight) = mask_bounds(&candidate) else {
+            continue;
+        };
+        let edges = [
+            tight.y() == 0,
+            tight.bottom() == b.height(),
+            tight.x() == 0,
+            tight.right() == b.width(),
+        ];
+        if edges.iter().filter(|&&edge| edge).count() > 2
+            || clip.is_some_and(|clip| {
+                edges
+                    .into_iter()
+                    .zip([
+                        b.y() == clip.y(),
+                        b.bottom() == clip.bottom(),
+                        b.x() == clip.x(),
+                        b.right() == clip.right(),
+                    ])
+                    .any(|(hit, boundary)| hit && !boundary)
+            })
+        {
+            continue;
+        }
+        fill_enclosed(&mut candidate);
+        let area_factor = if count * 20 >= tight.area() * 13 {
+            48
+        } else {
+            6
+        };
+        if clip.is_some()
+            && (count * 2 < tight.area() || count > text.area().saturating_mul(area_factor))
+        {
+            continue;
+        }
+        recovered = Some(candidate);
+        break;
+    }
+    let Some(mut paper) = recovered else {
         return Ok(RegionMask {
             bounds: b,
             pixels: empty,
         });
-    }
-    fill_enclosed(&mut paper);
+    };
     // A crop-edge pixel has no proven clearance from the contour.
     for (x, y, p) in paper.enumerate_pixels_mut() {
         if x < inset
@@ -178,49 +226,97 @@ pub fn balloon_interior(page: &RgbImage, balloon: Balloon, inset: u32) -> Result
     })
 }
 
-pub fn find_balloon(page: &RgbImage, text: Rect, dark: bool) -> Result<Option<Balloon>> {
+/// Resolve a saved contour seed or find an enclosure near the worksheet box.
+pub fn resolve_balloon(
+    page: &RgbImage,
+    text: Rect,
+    saved: Option<Balloon>,
+    panel: Option<Rect>,
+    dark: bool,
+) -> Result<Option<Balloon>> {
     text.checked(page.dimensions())?;
-    let page_gray = gray(page, dark);
-    let candidates = detectcore_rs::port::detect_speech_balloons(
-        Some(page_gray.as_raw()),
-        i64::from(page.width()),
-        i64::from(page.height()),
-        185,
-        24,
-        0.35,
-        0.40,
-    )
-    .map_err(VisionError::kernel)?;
-    let center = text.center();
-    let mut candidates = candidates
-        .into_iter()
-        .filter_map(|[x, y, w, h, _]| {
-            let b = Rect([x as u32, y as u32, w as u32, h as u32]).expand(
-                2,
-                page.width(),
-                page.height(),
-            );
-            b.contains(center[0], center[1]).then_some(b)
-        })
-        .collect::<Vec<_>>();
-    candidates.sort_unstable_by_key(|b| b.area());
-    for bounds in candidates {
-        let b = Balloon {
+    if let Some(saved) = saved
+        && saved.bounds.intersection(text).is_some()
+        && mask_bounds(&balloon_interior(page, saved, 1)?.pixels).is_some()
+    {
+        return Ok(Some(saved));
+    }
+    let clip = panel.unwrap_or(Rect([0, 0, page.width(), page.height()]));
+    clip.checked(page.dimensions())?;
+    let Some(seed) = clip.intersection(text) else {
+        return Ok(None);
+    };
+    let pad = seed.width().max(seed.height()).max(32);
+    for pad in [pad, pad * 2] {
+        let bounds = seed
+            .expand(pad, page.width(), page.height())
+            .intersection(clip)
+            .unwrap_or(clip);
+        let probe = Balloon {
             bounds,
-            text_bounds: text,
+            text_bounds: seed,
             dark,
         };
-        let mask = balloon_interior(page, b, 1)?;
-        let covered = mask
-            .pixels
-            .enumerate_pixels()
-            .filter(|(x, y, p)| p[0] != 0 && text.contains(x + bounds.x(), y + bounds.y()))
-            .count();
-        if covered as f64 >= 0.35 * text.area() as f64 {
-            return Ok(Some(b));
+        let inside = seeded_interior(page, probe, 0, Some(clip))?;
+        let Some(tight) = mask_bounds(&inside.pixels) else {
+            continue;
+        };
+        let tight = Rect([
+            tight.x() + bounds.x(),
+            tight.y() + bounds.y(),
+            tight.width(),
+            tight.height(),
+        ]);
+        let area = inside.pixels.pixels().filter(|p| p[0] != 0).count() as u64;
+        if tight.width().min(tight.height()) < 8
+            || area * 10 > clip.area() * 8
+            || !tight
+                .intersection(seed)
+                .is_some_and(|intersection| intersection.area() * 3 >= seed.area())
+        {
+            continue;
         }
+        let bounds = tight
+            .expand(2, page.width(), page.height())
+            .intersection(clip)
+            .unwrap_or(tight);
+        return Ok(Some(Balloon { bounds, ..probe }));
     }
     Ok(None)
+}
+
+pub fn balloon_geometry(page: &RgbImage, balloon: Balloon) -> Result<serde_json::Value> {
+    use imageproc::contours::{BorderType, find_contours};
+
+    let margin = text_inset(balloon.bounds);
+    let outline = balloon_interior(page, balloon, 1)?;
+    let mut value = serde_json::to_value(balloon)?;
+    let b = outline.bounds;
+    if let Some(contour) = find_contours::<i32>(&outline.pixels)
+        .into_iter()
+        .filter(|c| c.border_type == BorderType::Outer)
+        .max_by_key(|c| c.points.len())
+    {
+        value["contour"] = serde_json::json!(
+            contour
+                .points
+                .into_iter()
+                .map(|p| [p.x + b.x() as i32, p.y + b.y() as i32])
+                .collect::<Vec<_>>()
+        );
+    }
+    value["bbox"] = serde_json::json!(b);
+    value["center"] = serde_json::json!(b.center());
+    value["eroded_margin"] = serde_json::json!(margin);
+    Ok(value)
+}
+
+pub(crate) fn text_inset(b: Rect) -> u32 {
+    (b.width().min(b.height()) as f32 * 0.045).round().max(1.0) as u32
+}
+
+pub fn find_balloon(page: &RgbImage, text: Rect, dark: bool) -> Result<Option<Balloon>> {
+    resolve_balloon(page, text, None, None, dark)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -362,4 +458,59 @@ pub fn region_mask(
         });
     }
     Ok(RegionMask { bounds: b, pixels })
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+    use image::Rgb;
+
+    #[test]
+    fn paper_component_beats_the_white_counter_inside_a_source_glyph() -> Result<()> {
+        let mut page = RgbImage::from_pixel(180, 330, Rgb([116, 155, 190]));
+        for (x, y, p) in page.enumerate_pixels_mut() {
+            let dx = x.abs_diff(90);
+            let dy = y.abs_diff(165);
+            if dy <= 136 && dx <= 63 && 2 * dx + dy < 224 {
+                *p = Rgb([248; 3]);
+            }
+            if (71..110).contains(&x) && (144..187).contains(&y) {
+                *p = if (84..97).contains(&x) && (159..172).contains(&y) {
+                    Rgb([247; 3])
+                } else {
+                    Rgb([24; 3])
+                };
+            }
+        }
+        let text = Rect([57, 125, 66, 80]);
+        let found = resolve_balloon(&page, text, None, None, false)?;
+        assert!(found.is_some_and(|b| b.bounds.height() > 230), "{found:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn accepts_real_panel_clips_and_rejects_a_window_open_to_artwork() -> Result<()> {
+        let panel = Rect([30, 50, 140, 120]);
+        let art = RgbImage::from_pixel(210, 200, Rgb([40; 3]));
+        let mut page = art.clone();
+        for y in panel.y()..panel.bottom() {
+            for x in panel.x()..panel.right() {
+                let dx = (f64::from(x) - 38.) / 48.;
+                let dy = (f64::from(y) - 54.) / 43.;
+                if dx * dx + dy * dy < 1. {
+                    page.put_pixel(x, y, Rgb([244; 3]));
+                }
+            }
+        }
+        let text = Rect([40, 59, 20, 20]);
+        let found = resolve_balloon(&page, text, None, Some(panel), false)?;
+        assert!(found.is_some_and(|b| b.bounds.x() == panel.x() && b.bounds.y() == panel.y()));
+        let white = RgbImage::from_pixel(210, 200, Rgb([244; 3]));
+        assert_eq!(
+            resolve_balloon(&white, text, None, Some(panel), false)?,
+            None
+        );
+        assert_eq!(resolve_balloon(&art, text, None, Some(panel), false)?, None);
+        Ok(())
+    }
 }

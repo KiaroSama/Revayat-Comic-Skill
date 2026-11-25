@@ -1,5 +1,5 @@
 use crate::{
-    Rect, Result, VisionError, bidi, falint, gray,
+    Rect, Result, VisionError, bidi, falint,
     masks::{Balloon, from_raw},
     qachecks, same_geometry,
 };
@@ -216,7 +216,7 @@ pub fn run_strict_qa(page: QaPage<'_>) -> Result<QaReport> {
             continue;
         };
         b.checked(original.dimensions())?;
-        let sample = b.expand(4, original.width(), original.height());
+        let sample = b;
         let crop = |im: &RgbImage| {
             imageops::crop_imm(im, sample.x(), sample.y(), sample.width(), sample.height())
                 .to_image()
@@ -226,9 +226,21 @@ pub fn run_strict_qa(page: QaPage<'_>) -> Result<QaReport> {
         let (sw, sh) = (i64::from(sample.width()), i64::from(sample.height()));
         let changed = from_raw(
             before.dimensions(),
-            pixcore_rs::port::changed_mask_rgb(before.as_raw(), after.as_raw(), sw, sh, 32)
+            pixcore_rs::port::changed_mask_rgb(before.as_raw(), after.as_raw(), sw, sh, 8)
                 .map_err(VisionError::kernel)?,
         )?;
+        let visible = region.target.chars().filter(|&c| bidi::visible(c)).count();
+        let ink_count = changed.pixels().filter(|p| p[0] != 0).count();
+        let min_ink = region
+            .font_size
+            .map_or(1, |size| ((size * size) / 100.0).max(1.0) as usize);
+        if ink_count < visible.saturating_mul(min_ink) {
+            report.add(
+                "text-not-rendered",
+                Some(region.id),
+                format!("{ink_count} ink pixels for {visible} visible characters"),
+            );
+        }
         let contrast = qacore_rs::port::measure_region_contrast(
             Some(after.as_raw()),
             Some(changed.as_raw()),
@@ -247,44 +259,77 @@ pub fn run_strict_qa(page: QaPage<'_>) -> Result<QaReport> {
         if let Some(balloon) = region.balloon {
             let crossing =
                 qachecks::text_crosses_outline(original, cleaned, final_image, balloon, b)?;
-            let outline = |im: &RgbImage| gray(&crop(im), balloon.dark);
-            let (mut o, f) = (outline(original), outline(final_image));
-            let safe = qachecks::balloon_text_interior(original, balloon)?;
-            let mut shown = changed;
-            for (x, y, baseline) in o.enumerate_pixels_mut() {
-                let (gx, gy) = (x + sample.x(), y + sample.y());
-                if safe.bounds.contains(gx, gy)
-                    && safe
-                        .pixels
-                        .get_pixel(gx - safe.bounds.x(), gy - safe.bounds.y())[0]
-                        != 0
-                {
-                    // Original glyphs inside the balloon are supposed to be erased.
-                    baseline[0] = 255;
-                    shown.get_pixel_mut(x, y)[0] = 0;
-                }
-            }
-            let bleed = qacore_rs::port::detect_outline_bleed(
-                Some(o.as_raw()),
-                Some(f.as_raw()),
-                i128::from(sw),
-                i128::from(sh),
-                Some(shown.as_raw()),
-                90,
-                12,
-            )
-            .map_err(VisionError::kernel)?;
-            let affected = crossing.max(bleed.iter().take(2).copied().sum::<i64>() as u64);
-            if affected > 0 {
+            if crossing > 0 {
                 report.add(
                     "text-crosses-outline",
                     Some(region.id),
-                    format!("{affected} pixels outside the safe balloon interior"),
+                    format!("{crossing} pixels outside safe paper or on dark artwork"),
                 );
             }
         }
     }
     Ok(report)
+}
+
+/// Re-shape the recorded lines and compare each visible cluster with delivered pixels.
+pub fn missing_clusters(
+    shaper: &mut crate::typefont::Shaper,
+    target: &str,
+    lines: &[crate::typefit::PlacedLine],
+    size: f32,
+    style: &crate::typestyle::TextStyle,
+    clean: &RgbImage,
+    rendered: &RgbImage,
+) -> Result<usize> {
+    same_geometry(clean.dimensions(), rendered.dimensions())?;
+    let logical = |s: &str| s.chars().filter(|&c| bidi::visible(c)).collect::<String>();
+    let expected = logical(target);
+    if lines
+        .iter()
+        .map(|line| logical(&line.text))
+        .collect::<String>()
+        != expected
+    {
+        return Ok(expected.chars().count().max(1));
+    }
+    let mut missing = 0;
+    for line in lines {
+        line.bbox.checked(clean.dimensions())?;
+        let shaped = shaper.draw_in_direction(
+            &line.text,
+            size,
+            style.weight(),
+            bidi::is_rtl_text(target),
+        )?;
+        let expected_width = shaped.pixels.width()
+            + if style.italic {
+                (shaped.pixels.height() as f32 * 0.16).ceil() as u32
+            } else {
+                0
+            };
+        if line.bbox.width() != expected_width || line.bbox.height() != shaped.pixels.height() {
+            missing += shaped.clusters.len().max(1);
+            continue;
+        }
+        for ink in shaped.cluster_ink {
+            let present = ink
+                .iter()
+                .filter(|&&(x, y)| {
+                    let italic = if style.italic {
+                        ((shaped.pixels.height() - y - 1) as f32 * 0.16).round() as u32
+                    } else {
+                        0
+                    };
+                    let (x, y) = (line.bbox.x() + x + italic, line.bbox.y() + y);
+                    qachecks::pixel_changed(clean.get_pixel(x, y), rendered.get_pixel(x, y))
+                })
+                .count();
+            if present == 0 || present * 3 < ink.len() {
+                missing += 1;
+            }
+        }
+    }
+    Ok(missing)
 }
 
 /// Checks decoded package rasters in manifest order. Container integrity belongs to the reader.
@@ -317,4 +362,56 @@ pub fn check_package(expected: &[RgbImage], decoded: &[RgbImage]) -> QaReport {
         }
     }
     report
+}
+
+#[cfg(test)]
+mod coverage_tests {
+    use super::*;
+    use crate::{
+        typefont::Shaper,
+        typeset::{self, TextRegion},
+    };
+    use image::Rgb;
+
+    #[test]
+    fn finds_one_missing_leading_digit_when_the_rest_still_has_ink() -> Result<()> {
+        let original = RgbImage::from_pixel(220, 100, Rgb([245; 3]));
+        let target = "۳ و ۸…";
+        let request = TextRegion::new("digit", Rect([10, 10, 200, 80]), target);
+        let style = request.style.clone();
+        let result = typeset::typeset_page(&original, &[request])?;
+        let region = &result.regions[0];
+        let mut shaper = Shaper::new()?;
+        assert_eq!(
+            missing_clusters(
+                &mut shaper,
+                target,
+                &region.lines,
+                region.font_size,
+                &style,
+                &original,
+                &result.image
+            )?,
+            0
+        );
+        let mut broken = result.image.clone();
+        let line = &region.lines[0];
+        let shape = shaper.draw(&line.text, region.font_size, style.weight())?;
+        for &(x, y) in &shape.cluster_ink[0] {
+            broken.put_pixel(line.bbox.x() + x, line.bbox.y() + y, Rgb([245; 3]));
+        }
+        assert_eq!(
+            missing_clusters(
+                &mut shaper,
+                target,
+                &region.lines,
+                region.font_size,
+                &style,
+                &original,
+                &broken
+            )?,
+            1
+        );
+        Ok(())
+    }
 }
