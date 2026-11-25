@@ -110,7 +110,23 @@ impl Fixture {
 
 impl Drop for Fixture {
     fn drop(&mut self) {
-        fs::remove_dir_all(&self.root).unwrap();
+        let mut last_err = None;
+        for attempt in 0..8 {
+            match fs::remove_dir_all(&self.root) {
+                Ok(()) => return,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => return,
+                Err(err) => {
+                    last_err = Some(err);
+                    std::thread::sleep(std::time::Duration::from_millis(25 * (attempt + 1)));
+                }
+            }
+        }
+        if !std::thread::panicking() {
+            panic!(
+                "failed to remove test fixture {:?}: {:?}",
+                self.root, last_err
+            );
+        }
     }
 }
 
