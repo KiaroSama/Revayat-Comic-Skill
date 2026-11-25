@@ -41,7 +41,7 @@ pub struct ShapedLine {
 
 impl Shaper {
     pub fn new() -> Result<Self> {
-        let mut db = fontdb::Database::new();
+        let mut db = cosmic_text::fontdb::Database::new();
         for data in [VAZIR_REGULAR, VAZIR_MEDIUM, VAZIR_BOLD] {
             db.load_font_data(data.to_vec());
         }

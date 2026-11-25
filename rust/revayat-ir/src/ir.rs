@@ -4,7 +4,7 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs::{self, File};
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 pub type Fields = Map<String, Value>;
@@ -294,13 +294,36 @@ pub fn json_bytes(value: &impl Serialize) -> Result<Vec<u8>, IrError> {
     Ok(text)
 }
 
-pub fn sha256_file(path: impl AsRef<Path>) -> Result<String, IrError> {
-    let mut digest = Sha256::new();
-    io::copy(&mut File::open(path)?, &mut digest)?;
-    Ok(format!("{:x}", digest.finalize()))
+fn digest_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+
+    let mut hex = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(hex, "{b:02x}");
+    }
+    hex
 }
+
+pub fn sha256_reader(mut reader: impl Read) -> io::Result<String> {
+    let mut digest = Sha256::new();
+    let mut buf = [0; 8192];
+    loop {
+        match reader.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => digest.update(&buf[..n]),
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+            Err(err) => return Err(err),
+        }
+    }
+    Ok(digest_hex(&digest.finalize()))
+}
+
+pub fn sha256_file(path: impl AsRef<Path>) -> Result<String, IrError> {
+    Ok(sha256_reader(File::open(path)?)?)
+}
+
 pub fn sha256_bytes(payload: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(payload))
+    digest_hex(&Sha256::digest(payload))
 }
 pub fn doc_dir(path: impl AsRef<Path>) -> PathBuf {
     path.as_ref()
@@ -345,14 +368,14 @@ pub fn page_fingerprint(page: &PageRecord) -> String {
             region.id, bbox, region.kind, region.orientation
         ));
     }
-    format!("{:x}", hash.finalize())
+    digest_hex(&hash.finalize())
 }
 pub fn fingerprint(doc: &ComicDocument) -> String {
     let mut hash = Sha256::new();
     for page in &doc.pages {
         hash.update(page_fingerprint(page));
     }
-    format!("{:x}", hash.finalize())
+    digest_hex(&hash.finalize())
 }
 
 pub fn state_census(doc: &ComicDocument) -> Result<BTreeMap<RegionState, usize>, IrError> {

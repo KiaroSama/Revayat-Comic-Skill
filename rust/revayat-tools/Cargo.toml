@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 axum = "0.8"
-base64 = "0.22"
+base64 = "0.23"
 cosmic-text = { version = "0.19", default-features = false, features = ["std", "swash"] }
 fancy-regex = "0.20"
 getrandom = "0.4"
@@ -16,7 +16,7 @@ imageproc = { version = "0.27", default-features = false }
 regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["arbitrary_precision"] }
-sha2 = "0.10"
+sha2 = "0.11"
 subtle = "2"
 tempfile = "3"
 textcore_rs = { package = "textcore-rs", path = "../textcore-rs", default-features = false }

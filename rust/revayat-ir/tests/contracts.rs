@@ -4,6 +4,22 @@ use serde_json::json;
 use std::fs;
 
 #[test]
+fn sha256_file_and_bytes_keep_the_same_lowercase_wire_digest() -> Result<(), IrError> {
+    let input = b"block\0\xff".repeat(2400);
+    let expected = "333fbe53a7e71cc19976f21b30e9e5685cbdebe22ee93bef9b93f53cfd36386a";
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("digest sample.bin");
+    fs::write(&path, &input)?;
+    assert_eq!(ir::sha256_bytes(&input), expected);
+    assert_eq!(ir::sha256_file(&path)?, expected);
+    assert_eq!(
+        ir::sha256_bytes(b""),
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    );
+    Ok(())
+}
+
+#[test]
 fn original_records_keep_their_wire_fields() -> Result<(), IrError> {
     let doc: ComicDocument = serde_json::from_value(
         json!({"version":1,"pages":[{"id":"p0001","image":"pages/1.png","regions":[{"id":"p0001r003","source_text":"こんにちは","bbox":[1,2,3,4],"provider":"saved"}]}]}),
