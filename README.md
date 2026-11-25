@@ -193,12 +193,6 @@ cargo test --workspace --locked
 
 No real copyrighted comic pages are stored in this repository. All test suites generate synthetic fixtures at runtime. GitHub Actions builds and verifies all four 64-bit Linux and Windows targets, checks plugin manifest versions, and runs CodeQL, Gitleaks, Semgrep, and dependency review.
 
-## Credits
-
-The pipeline structure draws on prior open manga translation tools: [manga-image-translator](https://github.com/zyddnys/manga-image-translator), [BallonsTranslator](https://github.com/dmMaze/BallonsTranslator), and [comic-translate](https://github.com/ogkalu2/comic-translate).
-
-Pure Rust rendering and packaging rely on [cosmic-text](https://github.com/pop-os/cosmic-text), [lopdf](https://github.com/J-F-Liu/lopdf), [pdf-writer](https://github.com/typst/pdf-writer), [hayro](https://github.com/LaurenzV/hayro), [rars](https://github.com/g-vash/rars), [zip](https://github.com/zip-rs/zip), [image](https://github.com/image-rs/image), and [Vazirmatn](https://github.com/rastikerdar/vazirmatn).
-
 ## Author
 
 Author: Kiaro Sama
