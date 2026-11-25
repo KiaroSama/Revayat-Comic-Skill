@@ -40,11 +40,10 @@ pub struct Watermark {
 
 pub fn mark_page(id: impl Into<String>, bounds: Rect, dimensions: (u32, u32)) -> Result<Watermark> {
     let id = id.into();
-    let clamped = bounds.clip(dimensions.0, dimensions.1);
+    let bounds = bounds.checked(dimensions)?;
     if id.trim().is_empty()
-        || clamped.width().min(clamped.height()) < MIN_SIDE
-        || clamped.area() as f64
-            > MAX_AREA_SHARE * f64::from(dimensions.0) * f64::from(dimensions.1)
+        || bounds.width().min(bounds.height()) < MIN_SIDE
+        || bounds.area() as f64 > MAX_AREA_SHARE * f64::from(dimensions.0) * f64::from(dimensions.1)
     {
         return Err(VisionError::invalid(
             "watermark label or page-space box is invalid",
@@ -52,7 +51,7 @@ pub fn mark_page(id: impl Into<String>, bounds: Rect, dimensions: (u32, u32)) ->
     }
     Ok(Watermark {
         id,
-        bounds: clamped,
+        bounds,
         erase: true,
         locked: true,
     })

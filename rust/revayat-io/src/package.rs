@@ -20,6 +20,20 @@ use crate::{
     pdf::PdfDocument,
 };
 
+pub const CODES: &[&str] = &[
+    "archive-evidence",
+    "archive-image-unreadable",
+    "archive-invalid",
+    "archive-metadata",
+    "archive-package-bytes",
+    "archive-page-appearance",
+    "archive-page-bytes",
+    "archive-page-count",
+    "archive-page-order",
+    "archive-page-size",
+    "archive-pdf-page",
+];
+
 #[derive(Debug, Serialize)]
 pub struct Finding {
     pub code: &'static str,
@@ -39,6 +53,7 @@ pub struct PackageReport {
 
 impl PackageReport {
     fn add(&mut self, code: &'static str, location: impl Into<String>, message: impl Into<String>) {
+        debug_assert!(CODES.contains(&code), "undeclared package finding: {code}");
         self.ok = false;
         self.findings.push(Finding {
             code,

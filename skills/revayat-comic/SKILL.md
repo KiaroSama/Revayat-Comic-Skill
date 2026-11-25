@@ -3,7 +3,7 @@ name: revayat-comic
 description: Translate manga, manhwa, manhua and Western comics into Persian and produce a finished CBZ, PDF or folder of pages. Detects panels, speech balloons and sound effects, reads them with your own eyes from rendered crops, removes the original lettering without altering the artwork, and typesets real right-to-left Persian into each balloon. Use for translating a manga chapter, a webtoon, a comic, a CBZ/CBR archive or a comic PDF into Persian (فارسی).
 license: GPL-3.0-or-later
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, Agent, AskUserQuestion
-metadata: {"homepage":"https://github.com/KiaroSama/Revayat-Comic-Skill","version":"2.0.0","requires":{"bins":["revayat-comic"]}}
+metadata: {"homepage":"https://github.com/KiaroSama/Revayat-Comic-Skill","version":"2.0.1","requires":{"bins":["revayat-comic"]}}
 ---
 
 # Revayat Comic: comics into Persian
@@ -16,13 +16,13 @@ Set `WORK` to the chapter workspace and `OUTPUT` to the final CBZ, PDF or page f
 
 The examples use the standalone v2 `revayat-comic` on `PATH`. Set `DRAFT` to a UTF-8 file when linting draft prose and `BATCH` to a separate shard directory when using batch mode.
 
-### Six-stage workflow and full-page editing
+### Six-stage workflow and on-art editing
 
 Every comic translation runs through the **six-stage multi-agent workflow** in `references/multi-agent-workflow.md`:
 1. **Initial Translation (`ترجمه اولیه`)**: Web-search official series character names, honorifics, and canon terminology first; draft natural spoken Persian applying `references/voice/persian/SKILL.md` and `references/voice/humanizer/SKILL.md` (v4.0.0).
 2. **Layout & Typesetting Planning (`صفحه آرایی`)**: Set balanced line breaks, generous line spacing (`>= 1.38x`), RTL punctuation, anti-overlap badge/title checks, and classify each region as `typeset` (clean uniform bubble) vs `fullpage_edit` (on-art/speedlines/maps/covers/SFX).
 3. **Bilingual and tone review**: Check the Persian against the source crops and run `revayat-comic voice lint "$DRAFT" --check --style` on a UTF-8 draft file.
-4. **Apply the translation**: Merge the worksheets, then clean and typeset. For lettering on artwork, follow `references/fullpage-image-edit.md`: send the full page with empty balloons to the image editor and composite the approved result with `typeset --external-dir`. Include a `<page_id>.png` only for each approved external edit; the CLI typesets pages without a matching PNG normally.
+4. **Apply the translation**: Merge the worksheets, then clean and typeset. For lettering on artwork, follow `references/fullpage-image-edit.md`: send tight context crops to `antigravity/gemini-3.1-flash-image` and align approved edits back to their original rectangles. If visual review flags an edge defect, repair only that small strip. Pass the assembled `<page_id>.png` to `typeset --external-dir` for approved pages only; the CLI typesets pages without a matching PNG normally.
 5. **Visual recheck**: Open every rendered page with `Read`, then run `revayat-comic qa check --doc "$WORK/comic.json" --strict`. Fix remaining marks, overflows and missing glyphs.
 6. **Delivery**: Export the requested formats, verify each package with `qa package --package`, and update the translation and QA log.
 
@@ -145,10 +145,18 @@ and it is the only order that keeps the guarantee below true.
 Read `references/voice/index.md` before drafting or reviewing prose. For comic
 translation, use `references/voice/persian/SKILL.md` and its bundled guides
 (`register-guide.md`, `pitfalls.md`, and `ai-tells.md` inside that folder).
-Write dialogue in natural spoken Persian. Match how each character addresses
-this listener in this scene; keep formal speech where the source calls for it.
-Read lines aloud and compare them with the source. For stilted Persian or
-ambiguous replies, follow `references/persian-review.md`.
+Write every speech balloon in natural spoken Persian. Match the character's
+voice, their listener, and the scene's tension. Ordinary dialogue should not
+sound like an essay: avoid phrases such as `همان‌طور که پیش‌تر گفتم` and
+`ناگفته پیداست`. Reserve elevated wording for characters who actually speak
+that way. Read the lines aloud and compare them with the source. For stilted
+Persian or ambiguous replies, follow `references/persian-review.md`.
+
+For manga, always keep Japanese honorifics in Persian script: `-سان`, `-کون`,
+`-ساما`, `-چان`, `-تان`, `-سنپای`, and `-سنسی`. Write forms such as
+`میناتو-سان` and `ساهاشی-کون`. Do not drop them or replace them with `آقای`,
+`خانم`, `ارباب`, or `بانو` unless the user explicitly asks to localize them
+for that book. See `references/translation-policy.md`.
 
 Before translating any chapter, look up official character names, pronunciations,
 honorifics, and relationships on the web. Check publisher or creator material and
@@ -169,9 +177,9 @@ page 2  →  merge  →  glossary scan / lock  →  build page 3 context
 ```
 
 **The invariant this protects:** when page N is translated, pages 1…N−1 are in
-`comic.json`, so page N's context carries their exact source and Persian. That is
-what `test_page_two_sees_page_one_only_after_it_is_merged` pins, and it is only
-true page by page.
+`comic.json`, so page N's context carries their exact source and Persian. The
+Rust IR context and worksheet integration tests exercise this boundary; it is
+only true page by page.
 
 After each page, run `worksheet merge` (Step 6) with `--pages` and the ID you just completed, then run `glossary scan` (Step 7). A merge without `--pages` expects replies for the whole chapter.
 
@@ -277,7 +285,7 @@ assignment/snapshot contract from `references/parallel-workflow.md`:**
 > ```
 >
 > Output format — this is mechanical, get it exactly right:
-> - Preserve the `# fingerprint:` and `# scheme:` headers from the worksheet.
+> - Preserve the `# fingerprint:`, `# content-fingerprint:` and `# scheme:` headers from the worksheet. They bind geometry and current editable content; never edit a stamp to force an old reply through.
 > - Copy each `@@ <id> …` line **unchanged**, in the same order.
 > - Under it, `src:` is what the balloon says in the original, and `fa:` is the
 >   Persian.
@@ -440,6 +448,66 @@ revayat-comic qa check --doc "$WORK/comic.json" --strict
 
 Stop if `ok` is false. Review the page and region in each finding, fix the worksheet or mask as needed, and rerun the affected stages. If the artwork changed outside the approved edit areas, compare the original with the cleaned and rendered pages before trying again. Check `artwork_pixels_changed` and reopen the rendered pages after every repair.
 
+QA checks original integer color samples and alpha, including 16-bit precision,
+as well as the RGB lettering proof. Normal export also requires current cleaning,
+rendering and compression-review evidence. After a geometry or action change,
+regenerate masks, clean and typeset in that order. After a text-only change,
+rerun typeset and review any newly raised linguistic or compression findings.
+An export's own old stamp does not prevent producing a new edition.
+
+### QA findings and recovery
+
+The Rust vision, publication and package registries are checked against this table
+in CI. A named linguistic acknowledgement applies only to the reviewed content;
+it cannot waive pixel, glyph, geometry, freshness or package integrity failures.
+
+| Code | Meaning | Action |
+| --- | --- | --- |
+| `pending-region` | A region has no terminal decision. | Complete its translation or explicitly keep, drop or erase it in the worksheet. |
+| `page-not-rendered` | A page needs lettering but has no rendered artifact. | Clean and typeset the current page, then rerun strict QA. |
+| `page-not-cleaned` | An erase decision needs a cleaned artifact. | Regenerate its mask and clean the page. |
+| `missing-typeset-proof` | Current translated text lacks a successful placement record. | Rerun typeset after fixing any fit or external-edit refusal. |
+| `missing-glyph-coverage` | Shaped words, joining boundaries or glyph ink do not match the page. | Correct the logical text, layout or external lettering; rerender and inspect every glyph. |
+| `delivery-mismatch` | Artifact hashes or dimensions differ from committed evidence. | Restore the matching files or rerun the earliest affected processing stage; never edit evidence hashes to suppress this. |
+| `delivery-unverified` | A derived image has no committed file evidence. | Regenerate clean and/or rendered output from the immutable source. |
+| `stale-stages` | Current inputs differ from a recorded prerequisite. | Rerun the named stage and its downstream stages; rerun QA before export. |
+| `unverified-stages` | Required clean/typeset evidence is absent or from an older scheme. | Establish current evidence by rerunning the named stage and its dependents. |
+| `compressed-variant` | Displayed Persian differs from full wording without a current review. | Compare `fa_full` and `fa` against the source and layout, then record `reviewed: compressed-variant`; changed wording or layout reopens it. |
+| `artwork-changed` | Native color or alpha samples changed outside authorized masks. | Restore the source, correct edit boundaries, regenerate output and confirm zero outside-mask changes. |
+| `page-dimensions` | Original, cleaned and rendered page dimensions differ. | Restore native dimensions and regenerate the affected artifact. |
+| `mask-dimensions` | A page mask has the wrong dimensions. | Regenerate the mask from the current page; do not resize artwork. |
+| `balloon-ink-survives` | Source lettering remains in an approved balloon interior. | Inspect the mask and polarity, clean the actual glyphs, then typeset again. |
+| `halo-artifact` | Cleaning leaves visible edge or color residue. | Correct the cleaning region or approved external edit and inspect its boundary. |
+| `unsafe-balloon` | A balloon contour cannot safely authorize the requested lettering. | Inspect the current text anchor, panel, polarity and outline; correct the region and rebuild its mask. |
+| `text-crosses-outline` | Lettering alters or crosses a balloon border. | Reflow within the measured interior and rerender; keep the outline outside the mask. |
+| `text-overlap` | Placed lettering regions overlap. | Separate their layout or region geometry and rerender both. |
+| `text-not-rendered` | Text has no valid visible rendered placement. | Resolve fit or missing placement evidence and rerun typeset. |
+| `tight-line-spacing` | Line spacing is below the required readability floor. | Reflow with the required spacing; review a full/short variant if necessary. |
+| `low-contrast` | Text and its background lack sufficient contrast. | Match the balloon polarity and use a readable approved style. |
+| `arabic-forms` | Arabic variants or unwanted character forms remain in Persian. | Run falint fix, then review intentional quotations before a named acknowledgement. |
+| `double-punctuation` | Repeated punctuation needs correction. | Correct it in the worksheet and rerun the linter. |
+| `guillemets` | Persian quotation marks are unbalanced. | Restore paired quotes and check logical order. |
+| `latin-quotes` | Latin quotes remain in Persian dialogue. | Use Persian quotes unless the exact quotation was intentionally reviewed. |
+| `missing-rli-pdi` | A Latin-leading Persian sentence lacks valid isolation. | Apply balanced RLI/PDI in logical order; malformed bidi text cannot be waived. |
+| `script-collision` | Mixed script boundaries may join incorrectly. | Inspect each boundary and add appropriate spacing or isolation. |
+| `source-script-left` | Source-language script remains in target text. | Translate it or explicitly review a required retained name or quotation. |
+| `untranslated` | Target wording appears untranslated. | Compare with the source and supply Persian; review intentional retained terms individually. |
+| `zwnj-review` | A word boundary has an ambiguous ZWNJ interpretation. | Read the phrase in context, fix it or record a current `reviewed: zwnj-review` decision. |
+| `package-image-mismatch` | Decoded page pixels differ from the expected page. | Re-export the correct rendered image and recheck the package. |
+| `package-page-count` | Decoded package page count differs. | Restore every page and export in source order. |
+| `package-page-dimensions` | A decoded package page has the wrong dimensions. | Restore native page geometry before exporting again. |
+| `archive-evidence` | Export evidence is missing, ambiguous or incompatible. | Select the recorded edition or export a new edition with current evidence. |
+| `archive-image-unreadable` | An archived image cannot be decoded safely. | Restore the intact source artifact and re-export. |
+| `archive-invalid` | The package is malformed, unsafe or exceeds a read limit. | Inspect the reported cause and rebuild the package from valid current artifacts. |
+| `archive-metadata` | Required comic metadata is absent. | Re-export with the current writer and verify ComicInfo.xml. |
+| `archive-package-bytes` | The whole package hash differs from its recorded edition. | Restore the recorded package or export a fresh edition. |
+| `archive-page-appearance` | A PDF page differs from its exported full-page image. | Restore or regenerate the PDF and rerun package QA. |
+| `archive-page-bytes` | An archived page differs from its recorded bytes. | Re-export the current page; do not rewrite its manifest hash by hand. |
+| `archive-page-count` | The archive has a different number of pages. | Verify the page list and re-export the complete chapter. |
+| `archive-page-order` | Archive entries do not match the recorded reading order. | Re-export in source order and verify spreads and page numbering. |
+| `archive-page-size` | Archived pixel or PDF paper dimensions differ. | Restore native pixel dimensions and imported PDF points, then re-export. |
+| `archive-pdf-page` | A PDF page cannot provide exact image evidence. | Rebuild the PDF from the current rendered page and inspect the reported parse/render failure. |
+
 ## Step 11: Export and report
 
 Before packaging, open **every** rendered page listed in `comic.json` and compare it with its
@@ -475,13 +543,6 @@ coarse similarity and OCR do not. External originals and worksheets are protecte
 Read back the activity log beside `OUTPUT`, append the actual final result and
 artifact hash, and include its path with the delivery. An absent, empty or
 out-of-date activity log means the workflow is incomplete.
-
-| Code | Meaning | Action |
-| --- | --- | --- |
-| `archive-invalid` | the package will not open, its page names do not sort into reading order, one name is on two members, it is over a read limit, or a sheet does not show the page that was exported | re-run export, or check the package the document names |
-| `archive-unverified` | this package lacks enough evidence for integrity verification, including an incompatible or insufficient PDF reference | restore the recorded package or export again; this blocks package verification |
-| `archive-page-count` | the package has a different number of pages from the document | re-run export; if it repeats, a page failed to write |
-| `archive-page-size` | a page in the package is not the size the document says | re-run export; a mismatch means the wrong file was packed |
 
 Report the output path, page and balloon counts, sound-effect policy, and any QA findings you left unresolved. Explain the sound-effect policy if it affects the delivery:
 

@@ -74,6 +74,7 @@ struct Gutters<'a> {
     bg: u8,
     gutter: usize,
     minimum: usize,
+    max_ink: f64,
 }
 
 impl Gutters<'_> {
@@ -108,14 +109,25 @@ impl Gutters<'_> {
     fn split(&self, x: Range<usize>, y: Range<usize>, depth: u8, out: &mut Vec<[usize; 4]>) {
         if depth < 8 {
             if let Some(band) = self.widest(y.clone(), |row| {
-                self.image.row(row, x.clone()).iter().all(|p| *p >= self.bg)
+                self.image
+                    .row(row, x.clone())
+                    .iter()
+                    .filter(|p| **p < self.bg)
+                    .count() as f64
+                    / x.len() as f64
+                    <= self.max_ink
             }) {
                 self.split(x.clone(), y.start..band.start, depth + 1, out);
                 self.split(x, band.end..y.end, depth + 1, out);
                 return;
             }
             if let Some(band) = self.widest(x.clone(), |col| {
-                self.image.column(col, y.clone()).all(|p| p >= self.bg)
+                self.image
+                    .column(col, y.clone())
+                    .filter(|p| *p < self.bg)
+                    .count() as f64
+                    / y.len() as f64
+                    <= self.max_ink
             }) {
                 self.split(x.start..band.start, y.clone(), depth + 1, out);
                 self.split(band.end..x.end, y, depth + 1, out);
@@ -134,10 +146,26 @@ pub fn find_panel_gutters(
     min_gutter: i64,
     margin: i64,
 ) -> Result<Vec<[usize; 4]>, String> {
+    find_panel_gutters_with_ink(gray, width, height, bg_luma, min_gutter, margin, 0.0)
+}
+
+/// Split gutters allowing a bounded fraction of foreground pixels per cut line.
+pub fn find_panel_gutters_with_ink(
+    gray: Option<&[u8]>,
+    width: i64,
+    height: i64,
+    bg_luma: i64,
+    min_gutter: i64,
+    margin: i64,
+    max_ink: f64,
+) -> Result<Vec<[usize; 4]>, String> {
     let image = Image::new(gray, width, height)?;
     let bg = luma(bg_luma, "ValueError: background luma must be in 0..255")?;
     if min_gutter <= 0 || margin < 0 {
         return Err("ValueError: minimum gutter must be positive and margin nonnegative".into());
+    }
+    if !(0.0..=1.0).contains(&max_ink) {
+        return Err("ValueError: gutter ink fraction must be finite and in 0..1".into());
     }
     let gutter = usize::try_from(min_gutter).unwrap_or(usize::MAX);
     let margin = usize::try_from(margin).unwrap_or(usize::MAX);
@@ -164,6 +192,7 @@ pub fn find_panel_gutters(
             bg,
             gutter,
             minimum,
+            max_ink,
         }
         .split(x, y, 0, &mut result);
     }

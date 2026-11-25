@@ -8,10 +8,10 @@ use hayro::{
         },
         object::{Number, Object as SyntaxObject},
     },
-    kurbo::Affine,
+    kurbo::{Affine, Rect},
 };
 use lopdf::{Dictionary, Object, Stream};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 
 pub(super) struct Density<'a> {
     pub(super) pdf: &'a PdfDocument,
@@ -209,7 +209,8 @@ impl Density<'_> {
         };
         for value in annots.as_array()? {
             let annotation = self.pdf.doc.dereference(value)?.1.as_dict()?;
-            if annotation.get(b"F").and_then(Object::as_i64).unwrap_or(0) & 35 != 0 {
+            // Match Hayro's visible appearance selection, including standard Invisible annotations.
+            if annotation.get(b"F").and_then(Object::as_i64).unwrap_or(0) & 34 != 0 {
                 continue;
             }
             let Some(ap) = self.pdf.get(annotation, b"AP")? else {
@@ -218,42 +219,58 @@ impl Density<'_> {
             let Some(normal) = self.pdf.get(ap.as_dict()?, b"N")? else {
                 continue;
             };
-            let mut appearances = BTreeMap::new();
-            match normal {
-                Object::Stream(stream) => {
-                    appearances.insert(Vec::new(), stream);
-                }
+            let appearance = match normal {
+                Object::Stream(stream) => Some(stream),
                 Object::Dictionary(states) => {
+                    let mut selected = None;
                     if let Some(state) = self
                         .pdf
                         .get(annotation, b"AS")?
                         .and_then(|o| o.as_name().ok())
                         && let Some(item) = self.pdf.get(states, state)?
-                        && let Ok(stream) = item.as_stream()
                     {
-                        appearances.insert(state.to_vec(), stream);
+                        selected = item.as_stream().ok();
+                    }
+                    match selected {
+                        Some(stream) => Some(stream),
+                        None => self
+                            .pdf
+                            .get(states, b"Off")?
+                            .and_then(|item| item.as_stream().ok()),
                     }
                 }
-                _ => {}
+                _ => None,
+            };
+            let Some(stream) = appearance else {
+                continue;
+            };
+            let rect = self
+                .pdf
+                .get(annotation, b"Rect")?
+                .ok_or_else(|| invalid("PDF annotation has no rectangle"))?;
+            let [x, y, w, h] = self.rect(rect)?;
+            let bbox = self
+                .pdf
+                .get(&stream.dict, b"BBox")?
+                .ok_or_else(|| invalid("PDF annotation appearance has no bounding box"))?;
+            let [sx, sy, sw, sh] = self.rect(bbox)?;
+            let matrix = self
+                .pdf
+                .get(&stream.dict, b"Matrix")?
+                .map(|m| matrix_values(self.pdf, m.as_array()?))
+                .transpose()?
+                .map(Affine::new)
+                .unwrap_or(Affine::IDENTITY);
+            // ISO 32000-1, 12.5.5 fits the transformed BBox into Rect, before drawing the form.
+            let bounds = matrix.transform_rect_bbox(Rect::new(sx, sy, sx + sw, sy + sh));
+            let [sx, sy, sw, sh] = [bounds.x0, bounds.y0, bounds.width(), bounds.height()];
+            if ![sx, sy, sw, sh].into_iter().all(f64::is_finite) || sw <= 0.0 || sh <= 0.0 {
+                return Err(invalid("Invalid PDF annotation appearance transform"));
             }
-            for stream in appearances.into_values() {
-                let rect = self
-                    .pdf
-                    .get(annotation, b"Rect")?
-                    .ok_or_else(|| invalid("PDF annotation has no rectangle"))?;
-                let [x, y, w, h] = self.rect(rect)?;
-                let bbox = self
-                    .pdf
-                    .get(&stream.dict, b"BBox")?
-                    .ok_or_else(|| invalid("PDF annotation appearance has no bounding box"))?;
-                let [sx, sy, sw, sh] = self.rect(bbox)?;
-                if sw > 0.0 && sh > 0.0 {
-                    let transform = Affine::translate((x, y))
-                        * Affine::scale_non_uniform(w / sw, h / sh)
-                        * Affine::translate((-sx, -sy));
-                    self.visit(stream, res, base * transform)?;
-                }
-            }
+            let transform = Affine::translate((x, y))
+                * Affine::scale_non_uniform(w / sw, h / sh)
+                * Affine::translate((-sx, -sy));
+            self.visit(stream, res, base * transform)?;
         }
         Ok(())
     }

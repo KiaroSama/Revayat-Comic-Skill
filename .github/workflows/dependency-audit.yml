@@ -1,12 +1,19 @@
 name: Dependency audit
 
 on:
+  push:
+    branches: [main]
+  pull_request:
   schedule:
     - cron: "17 4 * * 1"
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: dependency-audit-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   audit:
@@ -21,6 +28,6 @@ jobs:
         run: |
           rustup toolchain install 1.100.0 --profile minimal
           rustup default 1.100.0
-          cargo install --locked cargo-audit
+          cargo install --locked --version 0.23.0 cargo-audit
       - name: Audit Cargo.lock for known advisories
         run: cargo audit

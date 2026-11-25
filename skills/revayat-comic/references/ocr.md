@@ -4,8 +4,8 @@ Why there is no OCR engine in the default pipeline, and when to add one.
 
 ## The reader is the OCR
 
-`crops` renders two images per page: the whole page with every region numbered,
-and the crops enlarged and labelled. The agent running this skill reads them.
+`crops` renders a numbered overview and one or more enlarged crop sheets for
+each page. The agent running this skill reads them.
 
 That is not a compromise. It is better than an OCR engine for this particular
 job, for a reason that has nothing to do with model quality:
@@ -35,34 +35,27 @@ front of you, and both go into the worksheet.
 
 - Read `overview.png` first and the crops second. Understand the page, then read
   the text.
-- Fill in `src:` even though nothing downstream requires it. It is how the
-  glossary finds recurring names, it is what `glossary check` compares against,
-  and it is what makes a mistake reviewable later.
+- Fill in `src:`. It is how the glossary finds recurring names, it is what
+  `glossary check` compares against, and it makes a mistake reviewable later.
 - If a crop is genuinely unreadable, say so in `note:` and leave `fa:` empty.
   QA will report it. That is a better outcome than a plausible invention.
 - Vertical Japanese reads top to bottom, right column first. The worksheet says
   which orientation the detector measured.
 
-## When to add manga-ocr
+## When to use an OCR cross-check
 
-`manga-ocr` is a specialist Japanese manga recogniser and it is genuinely good
-at exactly this. It is **optional** and not installed by default, because it
-pulls in torch and downloads about 400 MB of model on first use — a large cost
-for something the reader is already doing.
-
-Add it when:
-
-- you are processing a long series unattended and want a deterministic
-  cross-check against the reader's transcription
-- the scan quality is poor enough that a second opinion is worth having
-- you want a reproducible `src:` field that does not depend on which model ran
+An independently read crop can help investigate a doubtful transcription or a
+poor scan. Keep the page context in view and resolve disagreements from the
+visible source. A second model's answer is review material, not proof that a
+reading is correct. No OCR engine or model weights are installed by the default
+pipeline.
 
 ## The `ocr` stage
 
-There is an optional hosted HTTPS OCR stage, off by default:
+There is an optional OpenAI-compatible OCR stage, off by default:
 
 ```bash
-revayat-comic ocr --doc work/comic.json --provider <name>
+revayat-comic ocr --doc work/comic.json --provider openai --model MODEL
 ```
 
 Use it to cross-check a transcription, never to replace visually reading the
@@ -70,88 +63,33 @@ crops (`overview.png` and `sheet*.png`). Where OCR and your eyes disagree,
 look at the crop and decide. It is not part of the default pipeline and nothing
 runs it automatically.
 
-What it will not do is the point of it:
+The current Rust command fills eligible empty source fields:
 
 | Situation | What happens |
 | --- | --- |
-| region is empty, engine is confident | the reading is written, with provenance |
-| region is **locked** | the committed value is kept; the engine's reading is recorded as a disagreement and the region goes to review |
-| confidence below `--min-confidence` (0.65) | **nothing is written**; a review note says how unsure it was |
-| engine errors, times out or declines | recorded as a failed call; nothing is written; the run continues |
-| the stage is run a second time | work it already finished is **not re-requested** — no call, no cost, no chance of a different answer replacing a good one |
+| unlocked, translatable region with empty `source_text` and a nonempty provider answer | stores the reading and adds `review-hosted-ocr` |
+| locked region, existing source text, or a region kept/dropped/erased by policy | skips the region without a request |
+| empty or declined answer | leaves the source field empty |
+| transport, timeout, or invalid-response error | fails the operation; the document is not partially committed |
+| a second run after source fields were filled | skips those filled fields; this is not a crop-content cache |
 
-`--vision <name>` adds an optional third opinion: a vision provider is shown the
-crop and asked to comment on a *disagreement only*. It never writes to the
-document; its answer becomes a review note. Everything above works with it
-absent, which is the default.
+Set `REVAYAT_API_BASE` to the compatible API base, such as an HTTPS endpoint
+ending in `/v1`. Supply `REVAYAT_API_KEY` when required. `--model` can be omitted
+when `REVAYAT_OCR_MODEL` is set. A local endpoint can use loopback HTTP; a Bearer
+key is never sent over cleartext HTTP to a non-loopback host. Redirects are
+refused, so configure the canonical endpoint.
 
-Every outcome lands in `region["provenance"]` with the provider name, the
-status, the confidence and a timestamp, so a later run can tell a machine's
-guess from a person's decision. That record is what makes the `locked` rule
-enforceable rather than aspirational.
+There is no confidence-threshold flag, locked-text disagreement pass, or second
+vision-provider flag in this command. To compare OCR with a committed reading,
+review the current crops separately and preserve the accepted text until a
+human or reading agent resolves the difference. Do not clear accepted source
+text just to force a request.
 
-**Resumable.** Completed requests are reused only when the current rendered
-crop bytes and provider identity still match. The geometry-named crop cache is
-refreshed from the current renderer first; changing crop size, padding or pixels
-invalidates an old request. Locked or already-filled text is compared, not
-silently overwritten. An unchanged completed request makes no new call.
-
-Configure an optional hosted HTTPS vision-OCR provider via `--provider` (see `revayat-comic ocr --help`). Local Python adapters are no longer used in v2.0.
-
-It declines anything that is not Japanese rather than answering anyway, and
-reports `MANGA_OCR_CONFIDENCE` (0.80) — a judgement about the model, since it
-returns no score of its own.
-
-Verified against the package's real call shape with a stub; **not** verified
-against the actual 3 GB download on this machine. Writing your own is about
-twenty lines — anything with a
-`read(crop_path, language) -> (text, confidence)` method qualifies:
-
-```python
-import providers
-from manga_ocr import MangaOcr
-
-class MangaOcrProvider:
-    name = "manga-ocr"
-    def __init__(self):
-        self._mocr = MangaOcr()
-    def read(self, crop_path, language):
-        from PIL import Image
-        return self._mocr(Image.open(crop_path)), 0.9
-
-providers.register("ocr", "manga-ocr", MangaOcrProvider)
-```
-
-Register a *factory*, not an instance: nothing should download 400 MB of model
-because a module was imported.
-
-**Optional: `orientation`.** Name a third parameter and the stage will pass the
-writing direction the detector measured — `"vertical"` or `"horizontal"`:
-
-```python
-    def read(self, crop_path, language, orientation="horizontal"):
-        ...
-```
-
-It is the one thing an engine reading a lone crop cannot recover, because a
-vertical column with furigana beside it looks like two columns. Purely optional:
-an engine that does not name the parameter is called exactly as shown above, so
-no existing adapter has to change. `manga-ocr` finds the direction itself and
-does not ask; PaddleOCR is the case that wants it.
-
-## Other engines
-
-| Engine | Good for | Note |
-| --- | --- | --- |
-| `manga-ocr` | Japanese manga, vertical, furigana | the specialist; heavy |
-| PaddleOCR | Chinese, Korean, English | general; needs a text detector in front of it |
-| Tesseract | Latin scripts | poor on vertical CJK and on artwork |
-
-None of them ship with an adapter. The boundary above is what they plug into,
-and the crops this pipeline already renders are exactly what they take as input,
-so an adapter is the twenty lines shown above rather than a change to the
-pipeline — every region carries its `bbox`, its `orientation` and its page image
-path.
+The request implementation is `rust/revayat-tools/src/providers.rs`; eligibility
+and document writes are in `rust/revayat-comic-cli/src/providers.rs`. Python
+adapter registration is not part of this runtime. Other OCR tools can consume
+the exported crops as a separate review step; record their result and any
+accepted correction in the worksheet and translation activity log.
 
 ## What never to do
 

@@ -1,4 +1,10 @@
-use std::collections::HashSet;
+use std::{
+    collections::HashSet,
+    sync::{
+        Arc,
+        atomic::{AtomicU8, Ordering},
+    },
+};
 
 #[path = "pdf_density.rs"]
 mod density;
@@ -6,7 +12,7 @@ use density::Density;
 
 use hayro::{
     RenderCache, RenderSettings,
-    hayro_interpret::{InterpreterSettings, TransformExt},
+    hayro_interpret::{InterpreterSettings, InterpreterWarning, TransformExt},
     hayro_syntax::{
         Pdf,
         content::{
@@ -269,11 +275,25 @@ impl PdfDocument {
             .ok_or_else(|| invalid("PDF page index is out of range"))?;
         let dict = self.doc.get_dictionary(self.pages[index])?;
         let unit = self.sheet(index, dict)?.user_unit;
+        let warnings = Arc::new(AtomicU8::new(0));
+        let recorded = Arc::clone(&warnings);
+        let settings = InterpreterSettings {
+            warning_sink: Arc::new(move |warning| {
+                let flag = match warning {
+                    InterpreterWarning::UnsupportedFont => 1,
+                    InterpreterWarning::ImageDecodeFailure => 2,
+                    InterpreterWarning::UnresolvedAnnotationAppearance => 4,
+                    _ => 8,
+                };
+                recorded.fetch_or(flag, Ordering::Relaxed);
+            }),
+            ..InterpreterSettings::default()
+        };
         let mut context = RenderContext::new(w, h);
         hayro::render_into(
             page,
             &RenderCache::new(),
-            &InterpreterSettings::default(),
+            &settings,
             &RenderSettings::default(),
             &mut context,
             Affine::scale(inspection.native_scale * unit) * page.initial_transform(true).to_kurbo(),
@@ -288,6 +308,23 @@ impl PdfDocument {
                 ..Default::default()
             },
         );
+        let warnings = warnings.load(Ordering::Relaxed);
+        if warnings != 0 {
+            let failures = [
+                (1, "unsupported font"),
+                (2, "image decode failure"),
+                (4, "unresolved annotation appearance"),
+                (8, "unsupported page content"),
+            ]
+            .into_iter()
+            .filter_map(|(flag, description)| (warnings & flag != 0).then_some(description))
+            .collect::<Vec<_>>();
+            return Err(invalid(format!(
+                "PDF page {} could not be preserved: {}",
+                index + 1,
+                failures.join(", ")
+            )));
+        }
         let pixels = pixmap
             .data()
             .iter()

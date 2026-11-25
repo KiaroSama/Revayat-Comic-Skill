@@ -518,18 +518,55 @@ pub fn assign_reading_order(
     direction: &str,
     tolerance: f64,
 ) -> Result<(), IrError> {
+    if !matches!(direction, "rtl" | "ltr")
+        || !tolerance.is_finite()
+        || !(0.0..=1.0).contains(&tolerance)
+    {
+        return Err(IrError::refused(
+            "invalid_reading_order",
+            "direction and row tolerance must be valid",
+        ));
+    }
     let rtl = direction == "rtl";
+    let mut normalized = Vec::new();
     let panels: Vec<_> = page
         .panels
         .iter()
-        .map(|p| {
-            let id = p
-                .get("id")
-                .ok_or_else(|| IrError::refused("invalid_panel", "missing panel ID"))?;
-            let bbox: BBox = serde_json::from_value(p["bbox"].clone())?;
+        .enumerate()
+        .map(|(index, p)| {
+            let (id, value) = if p.is_array() {
+                (json!(format!("{}p{:03}", page.id, index + 1)), p)
+            } else {
+                (
+                    p.get("id")
+                        .cloned()
+                        .ok_or_else(|| IrError::refused("invalid_panel", "missing panel ID"))?,
+                    &p["bbox"],
+                )
+            };
+            let bbox: BBox = serde_json::from_value(value.clone())?;
+            if bbox[2] <= 0 || bbox[3] <= 0 || clamp_bbox(bbox, page.width, page.height) != bbox {
+                return Err(IrError::refused(
+                    "invalid_panel",
+                    "panel lies outside the page",
+                ));
+            }
+            normalized.push(if p.is_array() {
+                json!({"id":id,"bbox":bbox})
+            } else {
+                p.clone()
+            });
             Ok::<_, IrError>((id, bbox))
         })
         .collect::<Result<_, _>>()?;
+    page.panels = normalized;
+    for region in &mut page.regions {
+        let area = bbox_area(region.bbox);
+        region.panel = panels
+            .iter()
+            .find(|(_, panel)| area > 0.0 && bbox_intersection(region.bbox, *panel) / area >= 0.6)
+            .map(|(id, _)| id.clone());
+    }
     let panel_boxes: Vec<_> = panels.iter().map(|(_, bbox)| *bbox).collect();
     let ordered = order_boxes(&panel_boxes, rtl, tolerance);
     let mut groups = vec![Vec::new(); panels.len() + 1];
@@ -537,7 +574,7 @@ pub fn assign_reading_order(
         let group = r
             .panel
             .as_ref()
-            .and_then(|id| panels.iter().position(|(p, _)| id == *p))
+            .and_then(|id| panels.iter().position(|(p, _)| id == p))
             .unwrap_or(panels.len());
         groups[group].push(i);
     }

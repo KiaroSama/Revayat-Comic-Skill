@@ -8,14 +8,16 @@ Rebuild or download the `revayat-comic` binary for your platform (Linux or Windo
 
 ```bash
 cargo build --release --locked -p revayat-comic-cli
-./bin/revayat-comic doctor --json
+./target/release/revayat-comic doctor --json
 ```
 
-If a custom font path fails to load, omit `--font` to use the bundled Vazir font family (`Regular`, `Medium`, `Bold`), or pass a valid `.ttf` file path.
+The binary embeds the Vazir font family (`Regular`, `Medium`, `Bold`); the
+current CLI does not select a custom font. A source build goes into
+`target/release/`, unless `CARGO_TARGET_DIR` selects a different directory.
 
 ## Persian shaping
 
-Pure-Rust shaping via `cosmic-text` (HarfBuzz + FriBidi) with bundled Vazir
+Pure-Rust shaping via `cosmic-text` (HarfRust, `unicode-bidi`, and Swash) with bundled Vazir
 fonts is compiled into `revayat-comic` on both Linux and Windows (x64 and
 arm64). No external `libraqm`, FriBidi DLL, or fallback library is needed.
 
@@ -24,13 +26,12 @@ arm64). No external `libraqm`, FriBidi DLL, or fallback library is needed.
 Loose page files use the same encoded budgets as archive members: 512 MiB per
 image and 2 GiB per import. Copying counts actual bytes, including a file that
 grows after admission. Image decoding uses a file-backed reader, closes the
-handle before returning RGB pixels and retains the 80-million-pixel limit.
+handle before returning decoded pixels and retains the 80-million-pixel limit.
 A rejected input is not fixed by shrinking the immutable baseline.
 
-Accepted provider redirects retain the ordinary method/origin/loop rules, but
-each intermediate response is limited to 64 MiB as well as the final response.
-An oversized redirect closes and fails; point the configured base directly at
-the endpoint rather than treating a byte-limit refusal as a successful call.
+Provider redirects are refused. Point the configured base directly at the
+canonical endpoint. Successful JSON responses are limited to 64 MiB; an
+oversized or invalid response fails the operation.
 
 ## Import
 
@@ -47,29 +48,22 @@ the endpoint rather than treating a byte-limit refusal as a successful call.
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `no <role> provider named 'x'` | the name is not registered | the error lists what is; a provider is registered by importing the module that calls `providers.register` |
-| `--provider` was set and `provider_calls` is empty | every region was repaired exactly by the deterministic tiers | working as intended — an all-flat page costs no model call; check `totals.inpaint` if you expected escalation |
-| `clean` ran but `provider_calls` says `fell_back` | the model errored, timed out, refused or returned the wrong size | the reason is in the same record; the classical cleaners ran instead and the page is complete |
-| `ocr` wrote nothing | every reading was below `--min-confidence` (0.65) | look at the crops; a low-confidence reading is deliberately never written |
-| `ocr` reports disagreements | the engine read a **locked** region differently | not an error: the committed value was kept and the reading recorded beside it |
-| an OCR adapter's `orientation` argument is never set | the stage passes it only to a method whose signature names it, and a C callable or an un-introspectable wrapper is declined | name `orientation` (or `**kwargs`) directly on `read`; `stages.ocr.orientation_aware` in `comic.json` says which way it went |
-| `qa visual` findings look wrong | they are a model's opinions | they are advisory and never gate; `qa check` is the gate |
-| `serve http` answers 401 | the token is missing or wrong | it is printed to stderr when the server starts; send it as `X-Revayat-Token` |
-| `serve http` refuses to start | `--host` was not loopback | it runs stages that write files, so it accepts loopback only; remote serving requires separately authorized authentication/path-isolation design, not a casual proxy |
+| OCR provider name is refused | this binary supports `openai` only | use `ocr --provider openai --model MODEL`; there is no Python registration step |
+| `ocr` wrote nothing | the regions were locked, already had source text, were inactive, or the provider returned no reading | inspect the crops and eligibility; existing readings are not re-requested or compared automatically |
+| `ocr` or `translate` fails | the request timed out, failed, or returned invalid data | correct the endpoint/model and retry; the document write is transactional |
+| `clean` rejects an image-provider flag | cleaning accepts local external pages | obtain and review the repair separately, then use `clean --external-dir` |
+| `serve --http 127.0.0.1:PORT` answers 401 | the token is missing or wrong | set `REVAYAT_HTTP_TOKEN` before starting and send that value as `X-Revayat-Token` |
+| `serve --http ADDRESS` refuses to start | the address is not loopback or the token is missing | use a loopback address and configure `REVAYAT_HTTP_TOKEN` |
 | an MCP client hangs at the handshake | it is waiting for a reply to a notification | notifications have no `id` and are never answered; check the client, this server does not reply to them |
-| `REVAYAT_API_BASE is not set` | the hosted adapters have nowhere to send the request | point it at any OpenAI-compatible endpoint, hosted or local (`http://127.0.0.1:1234/v1`), and set `REVAYAT_TRANSLATION_MODEL` or `REVAYAT_IMAGE_MODEL` |
+| `REVAYAT_API_BASE is not set` | the provider has nowhere to send the request | use the canonical compatible base and set `REVAYAT_OCR_MODEL` or `REVAYAT_TRANSLATION_MODEL`, or pass `--model` |
 | `refusing to send REVAYAT_API_KEY ... over plain http` | a key is set and `REVAYAT_API_BASE` is a cleartext address off this machine, so the key would cross the network readable | switch the base to `https://`, or unset `REVAYAT_API_KEY` if that endpoint needs no credential; loopback (`http://127.0.0.1:1234/v1`) is exempt and still works |
-| a hosted image edit came back and nothing changed | the endpoint returned a URL instead of `b64_json` | it is declined on purpose — fetching it is a second request to a host nobody vetted; ask the endpoint for `response_format: b64_json` |
-| a sound effect looks wider or taller than the original | the pen's direction was matched | `typeset.contrast` records what was measured; below `MIN_CONTRAST` (0.18) nothing is applied, and `--flat-sfx` turns it off |
 | `context` refused: pages are translated but not merged | an earlier page’s `.done.txt` has not reached `comic.json`, so its Persian would be missing from this package | run `worksheet merge`, then build the context again; `--allow-unmerged` overrides and lists what is missing |
-| a sound effect’s outline looks too heavy or too light | it is matched to the weight the original was drawn at, clamped by `MIN_STROKE`/`MAX_STROKE` | `typeset.stroke` on the region records what was measured; `--flat-sfx` opts out of matching entirely |
-| a sound effect gets heavier toward one end | the original did, and it was matched | `typeset.modulation` records the trend, signed; below `MIN_MODULATION` (0.22) it is not applied at all, and `--flat-sfx` turns it off with everything else |
 | `translate` skipped everything | the regions already have Persian, or no `src:` yet | it fills empty regions only; a value already there is never replaced |
-| `translate`/`ocr` re-run did nothing | that work is recorded as complete | by design — rerunning costs no calls; edit the text to have it looked at again |
+| `translate`/`ocr` re-run did nothing | destination fields are already filled or locked | inspect the accepted text; these commands fill empty fields rather than replacing a reviewed reading |
 
 Provider failure details intentionally omit arbitrary network/SDK exception messages,
-response bodies and credential-bearing headers. Reports and persisted provenance keep
-an exception type with fixed configuration/service guidance. First-party adapters use
+response bodies and credential-bearing headers. Public errors use
+fixed configuration/service guidance. The Rust provider client uses
 bounded single-line public guidance; never include secrets in that contract or enable
 HTTP wire logging to recover raw errors. `REVAYAT_API_KEY` must be printable ASCII
 without whitespace; invalid values are refused before request/opener construction,
@@ -81,34 +75,32 @@ this repair does not rewrite old chapter files silently.
 
 | Symptom | Fix |
 | --- | --- |
-| `pages_without_text` on most pages | thresholds do not fit this book — see `detection.md` |
+| detected pages contain few or no text regions | thresholds may not fit this book — see `detection.md` |
 | whole panels detected as balloons | lower `--balloon-max-area`, or `drop: yes` the region and add the real balloons back with `box:` — see `detection.md` |
 | two balloons come back as one region | the same fix: drop it, add each one back with `box:` |
 | text on the page with no region on it | add it: `@@ +<name>` with `box: x y w h` |
 | balloons missed | raise `--ink-max`, lower `--balloon-min-solidity` |
 | dozens of low-confidence regions | `--no-sfx`, then `drop: yes` on what is left |
-| `reading-order-broken` at QA | a region has no reading order, or two share one. **Not** caused by `drop: yes` — dropping leaves a gap and that is fine |
+| numbered crops follow the wrong reading order | inspect the source direction and recorded region order; a dropped detection may leave a harmless gap, but narrative order still needs review |
 
-Detection never runs on a page whose regions have been answered. If you *want*
-to re-detect a page after translating it, clear `locked` on its regions — and
-accept that its worksheet is then stale.
+Detection skips pages with locked or answered regions and reports them in
+`skipped`. Preserve accepted text and review the current crops before replacing
+any detection mapping; clearing a lock alone does not erase the answered state.
 
 ## Masks
 
-`excessive_coverage` means a mask would repaint more than 28% of a page. Almost
-always a detection problem, not a mask problem: a region matched artwork rather
-than lettering. Fix the detection, or `drop: yes` the region, before cleaning.
+Inspect the generated mask before cleaning. An unexpectedly broad mask usually
+means a region matched artwork rather than lettering. Correct the box or use
+`drop: yes` for a false detection. Balloon masks are clipped to the recovered
+interior; the current CLI has no configurable growth or page-coverage flag.
 
-Growing the mask cannot cause this on a balloon — a balloon's mask is clipped to
-the balloon and cannot spread past it.
-
-`clean` refusing with *"the masks for this document were built with
-`mask --free-lettering solid`"* is not a fault: solid masks cover each piece of
+`clean` refusing with *"a solid erase mask needs an approved external repair"*
+means solid masks cover each piece of
 free lettering as a whole patch, which is for a generative cleaner. Pass
-`--external` with your reconstructed pages, or rebuild the masks with
-`--free-lettering glyphs`.
+`--external-dir` with your reconstructed pages, or rebuild the masks with
+`--free-lettering glyph`.
 
-`source-text-survived` at QA, on a region you added yourself, usually means the
+`balloon-ink-survives` at QA, on a region you added yourself, can mean the
 `box:` was drawn a little too tight and clipped a letter. Widen the box; do not
 widen the gate.
 
@@ -121,10 +113,10 @@ widen the gate.
 | `unknown_regions` | an id was invented or mistyped | re-do that page |
 | `duplicate_regions` | an id appears twice | re-do that page |
 | `empty_translation` | `src:` filled, `fa:` empty | fill it, or `drop: yes` |
-| `bad_kind` | `kind:` is not one of the six | fix the value |
+| `bad_kind` | `kind:` is not an accepted region kind | fix the value |
 | `bad_added_regions` | an `@@ +<name>` block has no usable `box: x y w h` | add one; there is no default for *where* |
 | `stale_worksheets` | the reply cannot prove the current region mapping | preserve its Persian and review/reconcile only the affected pages; see `recovery.md` |
-| `invalid_fields` | a `keep`, `drop`, `erase` or `polarity` value is not understood | correct the exact field spelling before merge or `worksheet reconcile`; do not guess a decision |
+| `invalid_fields` | a `keep`, `drop`, `erase` or `polarity` value is not understood | correct the exact field spelling before merge; do not guess a decision |
 | worksheet status finds no external replies after changing working directory | an old recorded relative folder may have meant a different invocation directory | pass the actual folder once with `--worksheets`; preserve existing reply files and see `recovery.md` |
 
 `added` in the report lists regions you created with `@@ +<name>`. They have no
@@ -147,27 +139,28 @@ instead of after it.
 | --- | --- | --- |
 | letters not joined up (`ک ت ا ب`) | no shaping ran at all | check `doctor` |
 | digits at the wrong end of a line | no bidi ran | check `doctor` |
-| empty boxes instead of letters | the font has no Persian | `--font` with one that does |
+| empty boxes instead of letters | unsupported characters or a rendering defect | check the logical input and bundled-font result; report the specific characters |
 | `overflow` lists regions | actual glyph ink does not fit | reflow first; preserve full meaning in `fa_full` if a reviewed shorter variant is needed |
 | text sits high or low in a balloon | the interior was measured on artwork | check the balloon was detected, not just the text |
-| text over the balloon border | should be impossible; report it | check `qa` for `artwork-modified` |
-| a sound effect set at an angle you did not want | its mask showed the original lettering on a slant, so the Persian matched it | `--flat-sfx` sets every effect horizontally; `typeset.style` in the region says which path ran |
+| text over the balloon border | placement crossed its approved interior | inspect `text-crosses-outline` and `artwork-changed`; do not deliver it |
+| a sound effect needs a drawn angle or shape | the CLI local path does not automatically match brush geometry | use a reviewed full-page edit; see `sound-effects.md` |
 
-Overflow is not a bug to work around. Lowering `--min-size` until it fits
-produces type nobody can read. See `persian-typesetting.md`.
+Treat overflow as a layout and translation review problem. Do not shrink text
+below the agreed readable size to make a report pass. The current CLI does not
+expose a minimum-size flag. See `persian-typesetting.md`.
 
 ## Cleaning
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | all `inpaint`, no `flat` | balloons sit on textured backgrounds — or detection is off | look at a cleaned page |
-| a smear where artwork was | Telea on a gradient; it smooths, it does not redraw | `--external` with a better cleaner |
-| a rim of the original text survives | the mask did not reach the anti-aliased edge | raise `--grow` a little |
+| a smear where artwork was | diffusion smooths neighboring colors rather than redrawing detail | supply a reviewed reconstruction with `--external-dir` |
+| a rim of the original text survives | the region or enclosure may omit part of a glyph | correct the box/polarity, then rerun mask and clean |
 | the balloon outline is gone | should be impossible; the interior clip prevents it | check `qa` and report it |
 
 ## QA
 
-`artwork-modified` is the one to take seriously. It means pixels outside the
+`artwork-changed` means pixels outside the
 authorised mask differ from the original. Do not ship the page. Re-run `clean`
 and `typeset` for it; if it persists, something outside this pipeline edited the
 file.
@@ -183,7 +176,7 @@ re-import from scratch.
 | `already contains ... image(s)` | you pointed `--out` at a folder that has other images in it; use an empty one |
 | `archive-page-count` | a page failed to write; re-run export |
 | pages in the wrong order in a reader | check `ComicInfo.xml` has `<Manga>YesAndRightToLeft</Manga>` for a right-to-left comic |
-| the file is bigger with `--jpeg-quality` | expected for line art; PNG compresses flat whites better |
+| a lossless file is larger than expected | retain the primary edition's exact pixels; any lossy reading derivative must be separately labeled |
 
 ## Windows
 
@@ -216,7 +209,7 @@ Fix what it names and export again. `--draft` still ships what is there —
 and says so in the report *and* in the package's `ComicInfo.xml`, so a draft
 cannot be mistaken for an approved edition later.
 
-## `stale-stage`, on a stage I definitely ran
+## `stale-stages`, on a stage I definitely ran
 
 The result is real; what changed is one of its inputs. Each stage records the
 page-by-page facts it was made from, so:
@@ -232,14 +225,15 @@ page-by-page facts it was made from, so:
 Re-run the stage it names. Running it with no change rewrites identical bytes,
 so doing it twice costs nothing and settles nothing wrongly.
 
-`stage-unverified` is different: that stage was stamped by an older build, so
+`unverified-stages` is different: the required stage proof is missing or not
+comparable to the current build, so
 its freshness cannot be judged at all. Run it once and the question is answered
 — it is never a reason to translate a chapter again.
 
-## `clean-refused`
+## Solid-patch cleaning was refused
 
 `clean` had no repair for a solid free-lettering patch and left the original
 lettering on the page. The region takes no Persian overlay — drawing one would
 ship two layers of text in one balloon — and publication is blocked. Give it
-`--external`, a working `--provider`, or re-run
-`mask --free-lettering glyphs` for that page.
+`--external-dir`, or rebuild the masks with
+`mask --free-lettering glyph` after reviewing the intended repair.

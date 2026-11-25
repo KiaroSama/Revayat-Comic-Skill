@@ -252,11 +252,29 @@ pub fn export_document(
     format: Option<ExportFormat>,
     options: &ExportOptions,
 ) -> Result<ExportReport, IoError> {
+    export_document_with_preflight(doc_path, out, format, options, |_| Ok(()))
+}
+
+/// Run application QA under the same workspace claim as publication.
+///
+/// The compatibility `export_document` API retains artifact-level certification.
+/// Applications with image/linguistic QA should supply it here; drafts explicitly
+/// skip application QA and are labelled as drafts by the existing writers.
+pub fn export_document_with_preflight(
+    doc_path: &Path,
+    out: &Path,
+    format: Option<ExportFormat>,
+    options: &ExportOptions,
+    preflight: impl FnOnce(&Path) -> Result<(), IoError>,
+) -> Result<ExportReport, IoError> {
     let doc_path = fs::canonicalize(doc_path)?;
     let doc_path = doc_path.as_path();
     let root = parent(doc_path);
     let _lock = workspace::workspace_lock(root, "export")?;
     recover_pending_claimed(doc_path)?;
+    if !options.draft {
+        preflight(doc_path)?;
+    }
     let raw = read_file(doc_path, 64 << 20)?;
     let mut typed = ir::decode_doc(&raw)?;
     let doc: Value = serde_json::from_slice(&raw)?;
@@ -276,6 +294,14 @@ pub fn export_document(
         .and_then(Value::as_str)
         .unwrap_or("keep");
     let mut resolved = options.clone();
+    if !resolved.draft
+        && let Some(finding) = certify::certify_publication(root, &typed)?.first()
+    {
+        return Err(invalid(format!(
+            "{}: {}: {}",
+            finding.page, finding.code, finding.detail
+        )));
+    }
     for (key, target) in [
         ("title", &mut resolved.title),
         ("chapter", &mut resolved.chapter),
@@ -295,17 +321,6 @@ pub fn export_document(
     for (index, page) in entries.iter().enumerate() {
         if page["index"].as_u64() != Some(index as u64) {
             return Err(invalid("Chapter page indices are not ordered"));
-        }
-        if !resolved.draft {
-            let page = &typed.pages[index];
-            if let Some(finding) = certify::certify_artifact(root, page, policy) {
-                return Err(invalid(format!("{}: {}", finding.page, finding.detail)));
-            }
-            let mut findings = certify::certify_delivery(root, page)?;
-            findings.extend(certify::certify_cleaning(root, page)?);
-            if let Some(finding) = findings.first() {
-                return Err(invalid(format!("{}: {}", finding.page, finding.detail)));
-            }
         }
         let (page, pending) = read_page(root, page, policy, resolved.draft)?;
         if pending && let Some(id) = &page.id {

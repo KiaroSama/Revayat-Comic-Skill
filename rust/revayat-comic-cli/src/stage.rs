@@ -55,6 +55,70 @@ struct Doc {
     doc: PathBuf,
 }
 
+#[derive(Args)]
+struct DetectionArgs {
+    #[command(flatten)]
+    doc: Doc,
+    #[arg(long)]
+    pages: Option<String>,
+    #[arg(long)]
+    no_sfx: bool,
+    #[arg(long, default_value_t = revayat_vision::detect::DetectionOptions::default().balloon_min_area)]
+    balloon_min_area: f64,
+    #[arg(long, default_value_t = revayat_vision::detect::DetectionOptions::default().balloon_max_area)]
+    balloon_max_area: f64,
+    #[arg(long, default_value_t = revayat_vision::detect::DetectionOptions::default().balloon_min_side)]
+    balloon_min_side: f64,
+    #[arg(long, default_value_t = revayat_vision::detect::DetectionOptions::default().balloon_min_solidity)]
+    balloon_min_solidity: f64,
+    #[arg(long, default_value_t = revayat_vision::detect::DetectionOptions::default().ink_min)]
+    ink_min: f64,
+    #[arg(long, default_value_t = revayat_vision::detect::DetectionOptions::default().ink_max)]
+    ink_max: f64,
+    #[arg(long, default_value_t = revayat_vision::detect::DetectionOptions::default().glyph_min)]
+    glyph_min: f64,
+    #[arg(long, default_value_t = revayat_vision::detect::DetectionOptions::default().glyph_max)]
+    glyph_max: f64,
+    #[arg(long, default_value_t = revayat_vision::detect::DetectionOptions::default().gutter_max_ink)]
+    gutter_max_ink: f64,
+    #[arg(long, default_value_t = revayat_vision::detect::DetectionOptions::default().gutter_min_span)]
+    gutter_min_span: f64,
+    #[arg(long, default_value_t = revayat_vision::detect::DetectionOptions::default().panel_min_area)]
+    panel_min_area: f64,
+    #[arg(long, default_value_t = revayat_vision::detect::DetectionOptions::default().sfx_min_side)]
+    sfx_min_side: f64,
+    #[arg(long, default_value_t = revayat_vision::detect::DetectionOptions::default().sfx_min_glyphs)]
+    sfx_min_glyphs: u32,
+    #[arg(long, default_value_t = revayat_vision::detect::DetectionOptions::default().sfx_size_uniformity)]
+    sfx_size_uniformity: f64,
+    #[arg(long, default_value_t = revayat_vision::detect::DetectionOptions::default().sfx_max_spread)]
+    sfx_max_spread: f64,
+}
+
+impl DetectionArgs {
+    fn options(&self) -> revayat_vision::detect::DetectionOptions {
+        revayat_vision::detect::DetectionOptions {
+            balloon_min_area: self.balloon_min_area,
+            balloon_max_area: self.balloon_max_area,
+            balloon_min_side: self.balloon_min_side,
+            balloon_min_solidity: self.balloon_min_solidity,
+            ink_min: self.ink_min,
+            ink_max: self.ink_max,
+            glyph_min: self.glyph_min,
+            glyph_max: self.glyph_max,
+            gutter_max_ink: self.gutter_max_ink,
+            gutter_min_span: self.gutter_min_span,
+            panel_min_area: self.panel_min_area,
+            sfx_min_side: self.sfx_min_side,
+            sfx_min_glyphs: self.sfx_min_glyphs,
+            sfx_size_uniformity: self.sfx_size_uniformity,
+            sfx_max_spread: self.sfx_max_spread,
+            find_sfx: !self.no_sfx,
+            rtl: true,
+        }
+    }
+}
+
 #[derive(Clone, Copy, ValueEnum)]
 enum Direction {
     Rtl,
@@ -147,7 +211,7 @@ enum Stage {
         chapter: String,
     },
     /// Find panels and lettering regions.
-    Detect(Doc),
+    Detect(DetectionArgs),
     /// Build masks for editable lettering.
     Mask {
         #[command(flatten)]
@@ -199,7 +263,7 @@ enum Stage {
         #[arg(long)]
         external_dir: Option<PathBuf>,
     },
-    /// Build a full-page image-edit manifest.
+    /// Build a page-level manifest for cropped on-art lettering edits.
     FullpagePrompt {
         #[command(flatten)]
         doc: Doc,
@@ -436,6 +500,15 @@ fn report(output: &mut dyn Write, result: impl Serialize, status: i32) -> Result
     Ok(status)
 }
 
+fn batch_root(document: &std::path::Path) -> Result<PathBuf, StageError> {
+    if document.file_name().is_none_or(|name| name != "comic.json") {
+        return Err(usage(
+            "batch --doc must name comic.json; other document filenames are not supported",
+        ));
+    }
+    Ok(ir::doc_dir(document))
+}
+
 fn stage_output(stage: Stage, output: &mut dyn Write) -> Result<i32, StageError> {
     let value = match stage {
         Stage::Import {
@@ -461,7 +534,14 @@ fn stage_output(stage: Stage, output: &mut dyn Write) -> Result<i32, StageError>
             };
             json!(readers::import_input(&source, &out, &options).map_err(failed)?)
         }
-        Stage::Detect(doc) => processing::detect(&doc.doc)?,
+        Stage::Detect(args) => {
+            let options = args.options();
+            options
+                .validate()
+                .map_err(|error| usage(error.to_string()))?;
+            let pages = args.pages.as_deref().map(workspace::parse_pages);
+            processing::detect(&args.doc.doc, options, pages.as_deref())?
+        }
         Stage::Mask {
             doc,
             free_lettering,
@@ -553,7 +633,18 @@ fn stage_output(stage: Stage, output: &mut dyn Write) -> Result<i32, StageError>
                 draft,
                 ..ExportOptions::default()
             };
-            let comic = export::export_document(&doc.doc, &out, None, &options).map_err(failed)?;
+            let comic = export::export_document_with_preflight(&doc.doc, &out, None, &options, |path| {
+                let qa = processing::qa(path, true).map_err(|error| revayat_io::IoError::Invalid(error.to_string()))?;
+                if qa["ok"] != true {
+                    let codes = qa["findings"].as_array().into_iter().flatten().filter_map(|finding| {
+                        finding.get("code").or_else(|| finding["finding"].get("code")).and_then(serde_json::Value::as_str)
+                    }).take(8).collect::<Vec<_>>().join(", ");
+                    return Err(revayat_io::IoError::Invalid(format!(
+                        "strict publication QA failed ({codes}); resolve qa check --strict findings before exporting"
+                    )));
+                }
+                Ok(())
+            }).map_err(failed)?;
             if let Some(path) = review_docx {
                 let review = reviewdocx::export_review_document(&doc.doc, &path).map_err(failed)?;
                 json!({"comic":comic,"review":review})
@@ -574,14 +665,14 @@ fn stage_output(stage: Stage, output: &mut dyn Write) -> Result<i32, StageError>
             BatchAction::Plan => {
                 let doc = doc.ok_or_else(|| usage("batch plan requires --doc"))?;
                 json!(
-                    batch::plan_shards(&ir::doc_dir(&doc), shards, out.as_deref())
+                    batch::plan_shards(&batch_root(&doc)?, shards, out.as_deref())
                         .map_err(failed)?
                 )
             }
             BatchAction::Merge => {
                 let doc = doc.ok_or_else(|| usage("batch merge requires --doc"))?;
                 let folder = folder.ok_or_else(|| usage("batch merge requires --batch"))?;
-                json!(batch::merge_shards(&folder, &ir::doc_dir(&doc)).map_err(failed)?)
+                json!(batch::merge_shards(&folder, &batch_root(&doc)?).map_err(failed)?)
             }
             BatchAction::Status => json!(
                 batch::read_manifest(

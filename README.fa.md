@@ -17,11 +17,11 @@
 [![مستندات به انگلیسی و فارسی](https://img.shields.io/badge/docs-English%20%7C%20Persian-0284c7?style=flat-square)](README.md)
 [![حجم مخزن در گیت‌هاب](https://img.shields.io/github/repo-size/KiaroSama/Revayat-Comic-Skill?style=flat-square&color=ca8a04)](#توسعه)
 [![اجرا با Rust خالص بدون هیچ وابستگی پایتونی](https://img.shields.io/badge/runtime-pure%20Rust%20%7C%20zero%20Python-059669?style=flat-square)](#معماری)
-[![گردش‌کار شش‌مرحله‌ای چندعاملی و ویرایش تمام‌صفحه](https://img.shields.io/badge/workflow-6%20agents%20%7C%20full--page%20edit-7c3aed?style=flat-square)](skills/revayat-comic/references/multi-agent-workflow.md)
+[![گردش‌کار شش‌مرحله‌ای چندعاملی و ویرایش برش‌ها](https://img.shields.io/badge/workflow-6%20agents%20%7C%20crop%20edits-7c3aed?style=flat-square)](skills/revayat-comic/references/multi-agent-workflow.md)
 [![راهنماهای لحن Humanizer ۴.۰ و فارسی همراه بسته](https://img.shields.io/badge/voice-Humanizer%204.0%20%7C%20Persian-b45309?style=flat-square)](skills/revayat-comic/references/voice/index.md)
 [![حمایت مالی](https://img.shields.io/badge/Support-donations-d04a9a?style=flat-square)](#donate)
 
-[English](README.md) · [فارسی](README.fa.md) · [مشخصات مهارت](skills/revayat-comic/SKILL.md) · [گردش‌کار شش‌مرحله‌ای](skills/revayat-comic/references/multi-agent-workflow.md) · [ویرایش تمام‌صفحه](skills/revayat-comic/references/fullpage-image-edit.md)
+[English](README.md) · [فارسی](README.fa.md) · [مشخصات مهارت](skills/revayat-comic/SKILL.md) · [گردش‌کار شش‌مرحله‌ای](skills/revayat-comic/references/multi-agent-workflow.md) · [ویرایش نوشته‌های روی تصویر](skills/revayat-comic/references/fullpage-image-edit.md)
 
 </div>
 
@@ -32,8 +32,8 @@
 - بازنویسی کامل به Rust خالص با نسخهٔ ثابت `1.100.0` (`edition = "2024"` و `#![forbid(unsafe_code)]`) و حذف کامل پایتون، PyMuPDF، OpenCV و ابزارهای بیرونی unrar.
 - خواندن، بررسی، رندر و ساخت PDF بی‌افت در Rust خالص با `lopdf`، `pdf-writer` و `hayro` به همراه کنترل بودجهٔ پیکسلی ماسک‌های شابلونی و Form XObject پیش از تخصیص حافظهٔ تصویر.
 - پشتیبانی بومی و خالص Rust از آرشیو CBR (`rars`)، CBZ (`zip`) و فایل بازبینی DOCX راست‌به‌چپ (`quick-xml`).
-- شکل‌دهی و راست‌به‌چپ‌سازی اصولی فارسی روی همهٔ سیستم‌عامل‌ها با `cosmic-text` (مبتنی بر HarfBuzz و FriBidi) و قلم‌های وزیر همراه مخزن (`Regular`، `Medium` و `Bold`)، با حداقل فاصلهٔ سطر `1.38x`، پاک‌سازی کامل نقطه‌های جا‌مانده درون حباب و محافظ ضدتداخل متن.
-- گردش‌کار ویرایش تمام‌صفحه (`fullpage-prompt`) برای جلدها، خطوط سرعت، عنوان فصل‌ها و افکت‌های صوتی روی نقاشی: ابتدا فقط حباب‌های یکنواخت خالی می‌شوند، سپس کل صفحه همراه با متن OCR تاییدشده، مختصات دقیق و معادل فارسی به مدل ویرایش تصویر سپرده می‌شود و فقط ناحیه‌های ویرایش‌شده با حاشیهٔ نرم روی اسکن اصلی دست‌نخورده می‌نشینند.
+- شکل‌دهی و راست‌به‌چپ‌سازی اصولی فارسی روی همهٔ سیستم‌عامل‌ها با `cosmic-text` (شکل‌دهی با HarfRust، ترتیب دوسویه با `unicode-bidi` و رندر با Swash) و قلم‌های وزیر همراه مخزن (`Regular`، `Medium` و `Bold`)، با حداقل فاصلهٔ سطر `1.38x`، پاک‌سازی کامل نقطه‌های جا‌مانده درون حباب و محافظ ضدتداخل متن.
+- برای ویرایش نوشته‌های روی جلد، عنوان فصل و افکت‌های صوتی (`fullpage-prompt`)، اول حباب‌های گفت‌وگو را خالی کنید. برش کوچکی از دور نوشته را با متن اصلیِ بررسی‌شده و متن دقیق فارسی به مدل بدهید. نوشتهٔ تأییدشده را در همان جای قبلی روی صفحه بنشانید.
 - گردش‌کار شش‌مرحله‌ای چندعاملی با قالب پرامپت آماده برای ترجمهٔ اولیه، صفحه‌آرایی، بازبینی، اعمال ترجمه، چک مجدد فایل و رفع اشکال، و بازبینی نهایی و تحویل، همراه با جست‌وجوی نام‌های رسمی شخصیت‌ها و اصطلاحات مجموعه پیش از شروع ترجمه.
 
 ## معماری
@@ -78,7 +78,7 @@
 
 فایل ZIP انتشار، برنامهٔ خط فرمان را در خود دارد. مهارت را از تعریف‌های افزونه در مخزن یا با [نصب‌کنندهٔ مهارت](install/README.md) نصب کنید و `revayat-comic` را در `PATH` نگه دارید.
 
-مخزن برای پنج نوع افزونه فایل تعریف نسخهٔ `2.0.0` دارد: Agent Plugins (`plugin.json` و `.agents/plugins/marketplace.json`)، Claude Code (`.claude-plugin/`)، Codex (`.codex-plugin/`)، Cursor (`.cursor-plugin/`) و Antigravity (`.antigravity-plugin/`).
+مخزن برای پنج نوع افزونه فایل تعریف نسخهٔ `2.0.1` دارد: Agent Plugins (`plugin.json` و `.agents/plugins/marketplace.json`)، Claude Code (`.claude-plugin/`)، Codex (`.codex-plugin/`)، Cursor (`.cursor-plugin/`) و Antigravity (`.antigravity-plugin/`).
 
 در Claude Code:
 
@@ -170,7 +170,7 @@ cp target/release/revayat-comic bin/revayat-comic
 
 دستورهای دیگر:
 
-- `fullpage-prompt --doc <comic.json> --page <id>`: اطلاعات ویرایش تمام‌صفحه را در خروجی استاندارد می‌نویسد. مدل پیش‌فرض `openai/gpt-image-2.6-sunburst` است.
+- `fullpage-prompt --doc <comic.json> --page <id>`: اطلاعات صفحه را برای ویرایش برش‌ها در خروجی استاندارد می‌نویسد. مدل پیش‌فرض `antigravity/gemini-3.1-flash-image` است.
 - `review-docx --doc <comic.json> --out <review.docx>`: خروجی فایل Word دوزبانهٔ بازبینی با جهت راست‌به‌چپ.
 - `watermark --doc <comic.json> ...`: مشخص‌کردن کادر دقیق واترمارک مجاز برای حذف.
 - `batch plan|merge|status`: تقسیم فصل‌های بلند به بخش‌های موازی و ادغام امن.
@@ -184,9 +184,9 @@ cp target/release/revayat-comic bin/revayat-comic
 برای ترجمهٔ کامل فصل‌ها، راهنمای [references/multi-agent-workflow.md](skills/revayat-comic/references/multi-agent-workflow.md) شش نقش مشخص دارد:
 
 ۱. ترجمهٔ اولیه: جست‌وجوی نام‌های رسمی شخصیت‌ها و اصطلاحات مجموعه پیش از شروع، و ترجمه به فارسی گفتاری روان.
-۲. صفحه‌آرایی: تنظیم سطرشکن، نشانه‌گذاری، مقیاس قلم و ناحیه‌های ویرایش تمام‌صفحه.
+۲. صفحه‌آرایی: تنظیم سطرشکن، نشانه‌گذاری، مقیاس قلم و ناحیه‌های ویرایش روی تصویر.
 ۳. بازبینی: تطبیق دقیق با برش‌های اصلی، یکدستی واژه‌نامه و سلامت نگارشی.
-۴. اعمال ترجمه: ادغام برگه‌ها، اجرای `clean` و `typeset` و نشاندن دقیق صفحات ویرایش‌شده روی ابعاد اصلی.
+۴. اعمال ترجمه: ادغام برگه‌ها، اجرای `clean` و `typeset` و نشاندن برش‌های تأییدشده در جای اصلی خود روی صفحه.
 ۵. چک مجدد فایل و اصلاح مشکلات: بازبینی چشمی همهٔ صفحه‌ها، اجرای `qa check --strict` و رفع یک‌جای همهٔ ایرادها.
 ۶. بازبینی نهایی و تحویل: ساخت خروجی بی‌افت CBZ و PDF و تایید بسته با `qa package`.
 
@@ -198,7 +198,7 @@ cp target/release/revayat-comic bin/revayat-comic
 
 - [SKILL.md](skills/revayat-comic/SKILL.md): گردش‌کار کامل عامل و جدول کدهای QA
 - [references/multi-agent-workflow.md](skills/revayat-comic/references/multi-agent-workflow.md): نقش‌های شش‌مرحله‌ای و قالب پرامپت‌ها
-- [references/fullpage-image-edit.md](skills/revayat-comic/references/fullpage-image-edit.md): روش ویرایش تمام‌صفحه پس از خالی‌کردن حباب‌ها
+- [references/fullpage-image-edit.md](skills/revayat-comic/references/fullpage-image-edit.md): ویرایش برش‌ها و ترمیم لبه‌ها پس از خالی‌کردن حباب‌ها
 - [references/translation-policy.md](skills/revayat-comic/references/translation-policy.md): اصول ترجمه، لحن گفتاری و واژه‌نامه
 - [references/persian-typesetting.md](skills/revayat-comic/references/persian-typesetting.md): راست‌به‌چپ، فاصلهٔ سطر و جاسازی در حباب
 - [references/detection.md](skills/revayat-comic/references/detection.md): آستانه‌های تشخیص و اصلاح دستی نواحی

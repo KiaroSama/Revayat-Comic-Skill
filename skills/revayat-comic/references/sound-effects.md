@@ -137,19 +137,19 @@ See `detection.md` for the same mechanism used to split a merged pair.
 ## Reconstructing what was under it
 
 Under `translate` the original lettering has to come off the artwork, and the
-built-in cleaners are honest but limited: Telea propagates surrounding structure
+built-in cleaners are limited: diffusion carries surrounding pixel values
 inwards and will not redraw a speed line it has erased. For effects that sit on
 real drawing, hand the whole patch to a generative cleaner instead of asking it
 to paint inside letter shapes:
 
 ```bash
 revayat-comic mask  --doc work/comic.json --free-lettering solid
-revayat-comic clean --doc work/comic.json --external reconstructed/
+revayat-comic clean --doc work/comic.json --external-dir reconstructed/
 ```
 
-`clean` refuses an unrepaired solid patch without `--external` or a working
-`--provider`, because deterministic flat/Telea fallback blanks or smears the
-artwork. A failed provider does not authorize that fallback. Full reasoning in
+`clean` refuses an unrepaired solid patch without an approved image supplied
+through `--external-dir`, because flat fill or diffusion can blank or smear the
+artwork. A missing external repair does not authorize that fallback. See
 `artwork-preservation.md`.
 
 ## Leaving one effect as drawn under `translate`
@@ -174,106 +174,35 @@ billboard, because `keep` did not exist yet.
 
 ## Matching lettering that was drawn
 
-Under `translate`, a sound effect is set the way it was drawn. Nothing here is
-guessed: `clean` has already erased the lettering by the time the typesetter
-runs, so every number comes from the region's own mask — the shape of what was
-erased. `lettering.measure` reads it and returns one verdict.
+The current CLI sets local text with the shared Persian fitter and explicit
+worksheet styles such as `bold`, `outline`, and `shadow`. It does not
+automatically measure an effect's brush weight or reproduce its rotation,
+curvature, perspective, or per-stroke pressure. It has no `--flat-sfx` flag or
+automatic `typeset.contrast`, `stroke`, or `modulation` records.
 
-| Verdict | What the mask showed | What happens |
-| --- | --- | --- |
-| `flat` | straight lettering | the ordinary path, unchanged |
-| `rotated` | a baseline on a slant | set on the same slant |
-| `curved` | a baseline following an arc | bent along the same arc |
-| `warped` | one end drawn smaller than the other | warped into the same trapezoid |
-| `unreliable` | the geometry could not be read | **left as drawn**, sent to review |
+For an effect whose drawn form matters, use `fullpage-prompt` and a reviewed
+external page, then `typeset --external-dir`. The full-page request carries the
+source, Persian, and geometry; the compositor limits the accepted edit to the
+approved area. Inspect joins, line direction, stroke quality, and the repaired
+artwork after composition. This workflow is described in
+`artwork-preservation.md`.
 
-**The gates are the point, not an afterthought.** `minAreaRect` always returns an
-angle and a quadratic always fits, so what decides whether an answer means
-anything is measured separately: `MIN_ELONGATION` on the ink's aspect ratio
-(no long axis, no baseline), a residual check on the curve fit (a quadratic
-through a cloud is not an arc), `MAX_CURVE` (a fold that deep is usually two
-effects caught in one mask), and `MAX_SPILL` on the finished bitmap, so a
-transform that has gone wrong cannot stamp type across a neighbouring panel.
+The Rust library has separate measurement and transformed-lettering helpers in
+`rust/revayat-vision/src/lettering.rs`, with synthetic tests for rotated and
+curved output. Those helpers are not called by the current CLI typesetting
+stage. Their presence is not evidence that a delivered page matched the source
+lettering automatically.
 
-**The whole line is shaped once and only the bitmap is bent.** Persian joins;
-placing characters one at a time around an arc produces isolated letters, not a
-word. The text goes through the same fitter every balloon uses, horizontally,
-and the finished image is displaced column by column for a curve or warped
-through four points for perspective. Every letter keeps the form its neighbours
-gave it.
+## A placement under review stays unresolved
 
-A shadow is drawn under everything at `SHADOW_OFFSET` of the type size, and the
-outline **matches the weight the original was drawn at**. The distance transform
-of the mask gives every ink pixel its distance to the nearest edge, so the ridge
-of that field is the half-width of the stroke it sits in; a high percentile of it
-rather than the maximum keeps a junction of three strokes from speaking for the
-whole hand. A delicate effect stays delicate and a heavy one stays heavy.
+If the local typesetter cannot establish a safe lettering area, it records an
+`unreliable` status and omits that overlay. QA blocks publication until the
+region has an accepted result or an explicit policy decision. Check the cleaned
+page as well: absence of a Persian overlay does not prove the earlier cleaner
+left the original lettering in place.
 
-Clamped at both ends by `MIN_STROKE` and `MAX_STROKE`: too thick closes the
-counters of the Persian and turns a word into a blob, too thin stops doing the
-job an outline is there for, which on artwork is the only thing keeping the word
-legible. With nothing to measure it falls back to `size // 8`.
-
-**And the weight changes along the word, if the original's did.** A brush that
-starts light and swells is the difference between hand lettering and type, and
-one uniform weight is what throws it away. The upright mask is split into five
-bands, each band's stroke half-width taken at the same percentile, and the two
-ends compared; the bands in between have to agree on the direction, so a single
-blot at one end is not mistaken for a swell. Past `MIN_MODULATION` (0.22) the
-lettering is drawn twice, at a lighter and a heavier outline, and cross-faded
-along the same axis the measurement ran down. Below it, the render is
-byte-identical to the single-weight path — an ordinary effect pays nothing.
-
-The weight is carried by the **outline** rather than by the font's `wght` axis,
-and that is a measured decision rather than a limitation. Vazirmatn ships the
-axis and Pillow can set it, but the advance width changes with the weight — 104
-px against 113 px for one word at size 40, about 9% — so two renders drift apart
-across the strip and the blend ghosts. Growing the outline leaves every glyph at
-exactly the same position in both passes, and grows the mark the way a heavier
-brush does. The blend is premultiplied, or the new ring picks up a dark fringe
-from the transparent side.
-
-**And the direction the pen was wide in.** A round pen lays the same mark
-whichever way it moves; a brush or a chisel nib does not, and that difference
-survives being measured from an erased mask. Every ink pixel gets two numbers —
-how far the ink runs across it and how far it runs down — and the larger says
-which kind of stroke it belongs to while the smaller is that stroke's thickness.
-Comparing the two populations gives the nib. Past `MIN_CONTRAST` (0.18) the
-drawn lettering is widened in the matching direction, by dilating its alpha with
-a flat kernel rather than by an outline, which grows a glyph the same amount on
-every side and is a ballpoint.
-
-Measured on a deliberately broad-nibbed grid: 0.000 for a round hand, +0.538
-broad, −0.538 flat. At type size 92 the rendered word goes from 211×77 to
-216×77 broad and 211×81 flat — one dimension moves and the other does not,
-which an isotropic stroke could not do.
-
-`--flat-sfx` turns every transform off. `typeset.style` on the region records
-which path ran, and `typeset.angle`, `curvature`, `taper`, `stroke`,
-`modulation` and `contrast` record what was measured.
-
-## `unreliable` means keep, and that is deliberate
-
-When the measurement does not hold up, the effect **stays drawn** and the region
-carries a `review` note saying why. It reaches `needs_review` in the terminal
-census — never `translated`, because nothing was put on the page.
-
-This is the one place the code declines to replace lettering. Stamping type that
-is confidently wrong about its own angle over a hand-drawn effect is worse than
-leaving the Japanese, which is the judgement this file has always made. It is
-not an override of the reader: an explicit `keep: yes` is honoured earlier and
-separately, and nothing here ever contradicts one.
-
-## Still not implemented
-
-Matching the original's **typeface** and its per-glyph flourishes is out, and so
-is anything needing a mesh warp finer than the four-point one. Weight is now
-matched three ways: overall, along the word, and by direction (above).
-
-What is left is one thing, and it is genuinely a lettering artist's job: where
-the pressure went *along a single stroke* — a stem heavy at the top and lifting
-at the foot. That is not measurable from an erased mask, because the mask shows
-where ink was and not the order it was laid down, and reproducing it means a
-face drawn that way rather than a transform applied to one that was not. A
-half-hearted version looks worse than leaving the source in place.
+An explicit `keep: yes` is the way to preserve an effect as drawn. Do not mark an
+unrendered effect as translated to make the census pass. Source typeface
+matching and individual brush flourishes require an externally reviewed edit
+or lettering work; they are not inferred by the local command.
 

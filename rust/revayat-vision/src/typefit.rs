@@ -182,11 +182,25 @@ pub(crate) fn fit_region(
             let centered =
                 ((bounds.height() as f32 - line_height * lines.len() as f32) / 2.0).floor() as i32;
             let mut shaped_lines = Vec::new();
+            let mut isolates = Vec::new();
             for (i, text) in lines.into_iter().enumerate() {
                 if text.is_empty() {
                     continue;
                 }
-                let text = bidi::ensure_rli_pdi(&text)?;
+                // Each visual line closes and reopens authored isolates across a wrap boundary.
+                let mut balanced = isolates.iter().collect::<String>();
+                balanced.push_str(&text);
+                for ch in text.chars() {
+                    match ch {
+                        '\u{2066}'..='\u{2068}' => isolates.push(ch),
+                        bidi::PDI if isolates.pop().is_none() => {
+                            return Err(VisionError::invalid("unmatched directional isolate"));
+                        }
+                        _ => {}
+                    }
+                }
+                balanced.extend(std::iter::repeat_n(bidi::PDI, isolates.len()));
+                let text = bidi::ensure_rli_pdi(&balanced)?;
                 let shaped = shaper.draw_in_direction(
                     &text,
                     size as f32,

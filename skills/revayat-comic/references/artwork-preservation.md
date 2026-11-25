@@ -55,14 +55,13 @@ mask:
 
     out = original * (1 - alpha) + repaired * alpha        where alpha <= mask
 
-`alpha` is a blurred mask clamped back to the hard mask, so the blend ramp lives
-*inside* the authorised area. A Gaussian spreads outward, and without the clamp
-the ramp leaks a few pixels past the mask and fails the very check it exists to
-pass.
+Generated authorization masks are binary. The compositor computes its feather
+from the distance to the mask boundary and keeps the blend ramp *inside* the
+authorized area. Pixels outside the mask have zero alpha.
 
 Because `alpha` is zero everywhere the mask is zero, preservation holds by
 construction rather than by good behaviour. That is what makes
-`clean --external` safe: hand it a page a generative model redrew from scratch,
+`clean --external-dir` safe: hand it a page a generative model redrew from scratch,
 and only the masked pixels of it are ever used.
 
 ### 3. QA proves it anyway
@@ -72,6 +71,15 @@ compares. It also re-hashes the original page file: if that changed after
 import, every box and mask was measured against pixels that no longer exist,
 and the run is invalid (`source-modified`).
 
+Cleaning and typesetting keep 8-bit and 16-bit integer source samples, including
+alpha, in their PNG artifacts. RGB8 processing edits are composited into a copy
+of the native source: unmasked samples remain exact, unchanged color channels
+retain their original precision, and alpha remains unchanged. Colored edits to
+a grayscale source promote it to RGB or RGBA at the original bit depth. Native
+QA compares integer RGBA values at 16-bit precision, so low-bit or alpha changes
+cannot disappear in an RGB8 comparison. Floating-point/HDR processing is refused
+because these PNG artifacts cannot preserve that source representation.
+
 ## The writable area is larger than the clean mask
 
 Cleaning may repaint the glyph shapes. Typesetting may draw Persian anywhere in
@@ -80,24 +88,22 @@ text mask alone would be too small.
 
 So there are two authorised areas, and the union of them is what QA checks:
 
-- `masks/pNNNN/union.png` — the cleaning mask, the glyph shapes
-- `masks/pNNNN/writable.png` — that, plus independently approved balloon
-  interiors or free-lettering mask boxes, constructed before typesetting
+- `page.clean_mask` in `comic.json` — the pixels authorized by the cleaning pass
+- `page.authorized_mask` — that mask plus independently approved balloon
+  interiors or free-lettering areas used by typesetting
 
-`writable.png` records permission derived from approved geometry, never from
-whatever ink the renderer happened to paint. Drawing cannot enlarge authority.
+These fields point to content-addressed PNG artifacts. Follow the recorded
+paths rather than assuming a fixed filename. Authorization comes from approved
+geometry, never from whatever ink the renderer happened to paint.
 
 **Each region is bounded by its own area, not by that union.** The union is
 what QA measures the finished page against; it is not a permission the
 typesetter may spend. Ink from one balloon landing inside the next balloon is
 outside *this* region's authority however legitimately that balloon belongs to
-somebody else, so the line is reported as `text-overflow` and taken back off
-the page. Two balloons side by side is the ordinary case, not a corner one.
-
-A rejected line restores the page **as it stands**, with every region already
-set on it — not as it was before any region drew. Restoring the older snapshot
-erased the finished translation of every neighbour whose ink shared a rectangle
-with the one that did not fit.
+somebody else. The fitter checks each region's own boundary and already occupied
+pixels. If a requested region cannot fit, it returns an overflow error without
+publishing a partially typeset page. Two balloons side by side are an ordinary
+case, and their shared enclosure is partitioned before placement.
 
 ## The cleaning tiers
 
@@ -106,9 +112,8 @@ Escalate; do not reach for the expensive tool first.
 | Tier | When | What it does |
 | --- | --- | --- |
 | `flat` | the background inside the balloon is uniform | reads the balloon's own colour and paints it back — exact, no model |
-| `inpaint` | there is line art or texture under the lettering | OpenCV Telea propagates the surrounding structure inwards |
-| `external` | you have something better | your image, composited through the mask |
-| `external` via `--provider` | an image model, called for you | its page, composited through the same mask |
+| `inpaint` | the unmasked background is not uniform | the pure-Rust cleaner diffuses neighboring RGB values into the masked area |
+| `external` | you supply an approved reconstruction | your image, composited through the mask |
 | `keep` | a sound effect under the `keep` or `annotate` policy | nothing; the artwork is the sound effect |
 
 "Uniform" is measured on the pixels *inside the balloon* that are not being
@@ -116,20 +121,20 @@ repainted. Sampling the whole crop picks up the outline and the artwork behind
 the balloon, and a plain white balloon on screentone then measures as textured —
 nine balloons out of nine went to the inpainter before that was fixed.
 
-Telea is not a generative model. It will not invent a face; on a screentone
-gradient it produces a smooth patch. That is the honest failure and it is
-visible in review, which is why `clean` reports `inpaint_heavy_pages`.
+Diffusion is not a generative model. It will not redraw a face or reconstruct
+detailed screentone. Inspect the cleaned image and the `fill` strategy recorded
+on free-lettering regions; the current CLI does not emit an
+`inpaint_heavy_pages` summary.
 
 ## Plugging in a better cleaner
 
-There is no LaMa, no diffusion model and no cloud image API in this repository,
-on purpose: each is a large dependency, a separately licensed model checkpoint,
-and a decision about sending someone's artwork to a third party. The hook is
-one flag instead.
+The CLI accepts page images made with an external editing tool. It does not
+invoke an image model from `clean`; selecting an editor and submitting artwork
+remain separate, explicit actions.
 
 ```bash
 # clean the pages with whatever you like, into cleaned/pNNNN.png
-revayat-comic clean --doc work/comic.json --external cleaned/
+revayat-comic clean --doc work/comic.json --external-dir cleaned/
 ```
 
 The images must be the same size as the originals; a different size is refused
@@ -137,51 +142,30 @@ rather than resampled. Only their masked pixels are used, so the preservation
 guarantee still holds — which is the point. A generative cleaner is exactly the
 tool you most want a hard boundary around.
 
-### Or let `clean` make the call for you
+### Full-page editing with local balloon text
+
+For titles and lettering integrated into the drawing, use the full-page prompt
+workflow:
 
 ```bash
-revayat-comic clean --doc work/comic.json --provider <name>
+revayat-comic clean --doc work/comic.json --bubbles-only
+revayat-comic fullpage-prompt --doc work/comic.json --page p0001 --model MODEL
+# Submit the generated page/prompt with your editing tool and save p0001.png.
+revayat-comic typeset --doc work/comic.json --external-dir edited/
 ```
 
-Same composite, one fewer step: the model's page goes through the identical
-per-region masking and participates in none of the arithmetic that bounds it.
+The prompt command prepares instructions; it does not call the provider. Review
+the returned image before supplying it. `typeset` composites only approved
+on-art regions, shields closed balloons from the external page, and draws the
+balloon text locally. Missing external pages use the local path; an external
+image with different dimensions fails the operation instead of being resized.
 
-One real provider ships: `openai-compatible-image`, which posts to whatever is
-at `REVAYAT_API_BASE` — a hosted image endpoint or a server on your own machine.
-Set `REVAYAT_IMAGE_MODEL`, and `REVAYAT_API_KEY` when the endpoint wants one.
-See the module docstring in `scripts/adapters.py` for writing another; it is
-about twenty lines and nothing in this file changes for it.
-
-**But it is not treated like `--external`, and the difference is deliberate.**
-
-| | who decided | which regions |
-| --- | --- | --- |
-| `--external` | a person, about the whole page | **every** authorised region |
-| `--provider` | the pipeline, per region | only where the deterministic tiers give up |
-
-`--external` means somebody looked at the chapter and replaced these pages. It
-would be wrong to second-guess that region by region and quietly use only a
-fraction of what they supplied.
-
-A provider is the pipeline choosing to spend a model call, so it escalates: a
-flat balloon is repaired by reading its own colour and painting it back — exact,
-instant, better than any model — and the provider is reached only for a region
-that needs inpainting, or a solid free-lettering patch.
-
-**Which means an all-flat page never calls the model at all.** The call is made
-lazily, at the first region that actually needs it, once per page. A chapter of
-ordinary dialogue balloons costs nothing.
-
-**Proved against a hostile provider, not a polite one.** The test fake discards
-the page entirely and returns flat red — every pixel changed — and the assertion
-is that **zero** pixels outside the mask differ from the original, on every page.
-The same test then checks that pixels *inside* the mask did change, because a
-guarantee that passes because nothing happened proves nothing.
-
-Any failure at all — a timeout, an exception, a refusal, a page that came back
-the wrong size — falls back to the classical tiers above and records why. A
-generative cleaner having a bad day cannot stall a chapter or leave a page
-half-written.
+`clean --external-dir` supplies reconstruction pixels for free lettering while
+closed balloons still use deterministic cleaning. A solid free-lettering patch
+needs an approved external repair; a failed or missing image does not authorize
+blanking the artwork as a fallback. The implementation is in
+`rust/revayat-vision/src/clean.rs` and
+`rust/revayat-comic-cli/src/processing/lettering.rs`.
 
 ### Give it the whole patch, not the letter shapes
 
@@ -194,7 +178,7 @@ lands on a glyph edge, which is exactly where the eye goes. The result reads as
 
 ```bash
 revayat-comic mask  --doc work/comic.json --free-lettering solid
-revayat-comic clean --doc work/comic.json --external reconstructed/
+revayat-comic clean --doc work/comic.json --external-dir reconstructed/
 ```
 
 `solid` covers each region with no balloon as one filled patch, so the model gets
@@ -202,13 +186,9 @@ a coherent area and can redraw what was under the lettering. Balloons are
 untouched by the flag — a solid mask over a balloon would take its outline with
 it, which is the defect the interior clip exists to prevent.
 
-**This mode requires `--external` or a working `--provider`.** The choice is
-recorded in the document, and `clean` refuses its deterministic fallback for
-unrepaired solid patches: painting a
-solid patch flat, or handing it to Telea, blanks a rectangle out of the drawing.
-Measured with Telea standing in for a model, it erased the speed lines around a
-`BUMP` and left a soft grey blob — worse than the glyph mask, and a fair picture
-of what "not a generative model" means.
+**This mode requires `--external-dir` for a repair.** `clean` refuses a solid
+erase mask without an approved external image. Filling that patch with one
+color or diffusing its edges cannot reconstruct the drawing it covers.
 
 ## And the other direction: did the lettering actually go?
 
@@ -217,7 +197,7 @@ leaves the mirror-image hole: **nothing proved that what should have gone,
 went.** A mask that misses the tail of a stroke leaves a rim of the source
 script inside the balloon; the page has the right number of balloons, the right
 translations, and Japanese still on it. `qa check` reports that as
-`source-text-survived`.
+`balloon-ink-survives`.
 
 It measures inside the **balloon interior only**, and that restriction is the
 whole reason it means anything: there the paper is flat, so ink left after
@@ -228,30 +208,31 @@ separation — leftover ink is indistinguishable from the drawing it sits on —
 those regions are not judged, and that is listed below as a gap rather than
 papered over.
 
-The fix when it fires is a wider mask, not a looser check: re-run `mask` with a
-larger `--grow` for that page, then `clean` again.
+Review the current text box, balloon enclosure, and polarity when it fires.
+Correct a clipped box or wrong enclosure, then run `mask` and `clean` again.
+The current CLI has no mask-growth flag; do not loosen the QA check to hide
+remaining source ink.
 
 ## What this does not cover
 
-- **Free lettering.** `source-text-survived` judges balloons only. A sound
+- **Free lettering.** `balloon-ink-survives` judges balloons only. A sound
   effect on artwork whose mask missed a stroke is not caught by anything.
 - **Inside the mask, anything goes.** If the inpainter produces a smear where
-  the artwork had detail, no check here will notice. Look at
-  `inpaint_heavy_pages`.
+  the artwork had detail, the outside-mask comparison cannot judge that repair.
+  Inspect every reconstructed region.
 - **A sound effect that was replaced is gone.** Under `translate`, the original
   lettering is removed and the artwork under it reconstructed. That is the
   policy doing what it was asked; it is not reversible.
-- **JPEG round-tripping.** Exporting with `--jpeg-quality` re-encodes every page
-  and changes pixels everywhere, by design. Verify with `qa check` *before*
-  exporting, and note that JPEG is not even smaller for line art — flat whites
-  and hard ink edges compress better as PNG.
+- **Lossy derivatives.** Re-encoding a delivered page as JPEG in another tool
+  can change pixels outside text masks. Keep it separate from the certified
+  primary edition. The current export command has no JPEG-quality option.
 
 ## Page dimensions, resolution and poor scans
 
 The primary translated edition keeps page count/order, spreads, strip height,
 aspect ratios and native raster dimensions. Never crop, pad, split, join or
-downsample pages merely to fit Persian or reduce file size. Export without
-`--jpeg-quality` by default. Keep original source files and their hashes.
+downsample pages merely to fit Persian or reduce file size. Keep the lossless
+processed pages, original source files, and their hashes.
 
 PDF paper size is separate from pixel resolution: a 400x600 image placed on a
 200x300-point sheet must retain both measurements. New PDF imports record the

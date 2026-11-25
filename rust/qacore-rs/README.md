@@ -1,11 +1,10 @@
 # qacore-rs
 
-Optional PyO3 kernels for checking balloon outlines, lettering contrast, cleanup
-halos, preserved artwork, residual ink, and changed pixel bounds. The Python
-reference in `skills/revayat-comic/scripts/qacore/kernels.py` runs without the
-extension. To force it, set `REVAYAT_QACORE=python` before importing `qacore`.
+Pure-Rust kernels for checking balloon outlines, lettering contrast, cleanup
+halos, preserved artwork, residual ink, and changed pixel bounds. The public
+functions live in [`qacore_rs::port`](src/port.rs) and are used by `revayat-vision`.
 
-Inputs are tightly packed row-major `bytes` with positive dimensions. Any
+Inputs are tightly packed row-major byte slices with positive dimensions. Any
 nonzero mask byte is active. Contrast uses the mean WCAG 2.1 relative luminance
 of ink and its nearby background. Contrast and halo neighborhoods use
 Chebyshev distance and stop at the image edges. The halo maximum includes all
@@ -17,29 +16,18 @@ all pixels in qualifying 8-connected clusters and rounds each coordinate down.
 Ink bounds always return an empty result for identical images. With a zero
 threshold, non-identical images return the full image bounds and pixel count.
 
-## Build and install
+## Build and verify
 
-Use Python 3.12 or later, Rust 1.100.0 or later, and a platform linker. Run this
-from the repository root in the Python environment that runs Revayat Comic:
-
-```console
-python -m pip install ./rust/qacore-rs
-```
-
-Maturin builds the PEP 517 wheel and installs `qacore_rs._native`. The PyO3
-bridge borrows the input buffers. If you regenerate it with `rust-anything
-refresh`, preserve the borrowed buffers and the input validation.
-
-## Verify
+Use the repository-pinned Rust 1.100.0 toolchain and a platform linker. Run from
+the repository root:
 
 ```console
-cargo fmt --manifest-path rust/qacore-rs/Cargo.toml --check
-cargo clippy --manifest-path rust/qacore-rs/Cargo.toml --locked -- -D warnings
-cargo test --manifest-path rust/qacore-rs/Cargo.toml --locked
-python -c "import qacore_rs"
-python -m pytest -q tests/test_qacore_parity.py
+cargo build --locked -p qacore-rs
+cargo fmt -p qacore-rs --check
+cargo clippy --locked -p qacore-rs --all-targets -- -D warnings
+cargo test --locked -p qacore-rs
 ```
 
-Native parity requires the wheel. Confirm `qacore.BACKEND == "rust"` and run
-without native tests being skipped. The migration recordings and bridge metadata
-are local artifacts and are not included in the wheel.
+Cargo builds an `rlib` linked into the standalone CLI. Crate tests exercise
+the kernels directly; `cargo test --workspace --locked` also checks publication
+and artwork-preservation behavior. Preserve borrowed buffers and input validation.

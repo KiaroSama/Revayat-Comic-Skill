@@ -227,14 +227,20 @@ pub fn input_problem(record: &Journal) -> Result<(), IrError> {
     Ok(())
 }
 fn check_files(record: &Journal) -> Result<(), IrError> {
-    let mut directories = vec![workspace::suffix(&record.destination, ".revayat-kept")?];
+    let mut directories = vec![(
+        workspace::suffix(&record.destination, ".revayat-kept")?,
+        false,
+    )];
     if out_is_dir(record) {
         directories.extend([
-            record.destination.clone(),
-            workspace::suffix(&record.destination, ".revayat-part")?,
+            (record.destination.clone(), true),
+            (
+                workspace::suffix(&record.destination, ".revayat-part")?,
+                false,
+            ),
         ]);
     }
-    for folder in directories {
+    for (folder, allows_sidecars) in directories {
         if !exists(&folder)? {
             continue;
         }
@@ -246,11 +252,18 @@ fn check_files(record: &Journal) -> Result<(), IrError> {
         }
         for file in fs::read_dir(&folder)? {
             let file = file?;
-            if !file
+            let owned = file
                 .file_name()
                 .to_str()
-                .is_some_and(|n| record.published.contains_key(n))
-            {
+                .is_some_and(|n| record.published.contains_key(n));
+            let page = file
+                .path()
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| {
+                    ir::IMAGE_SUFFIXES.contains(&extension.to_ascii_lowercase().as_str())
+                });
+            if !owned && (!allows_sidecars || page) {
                 return Err(bad(format!(
                     "{} contains unowned entries",
                     folder.display()

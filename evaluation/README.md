@@ -6,21 +6,29 @@ whether the Persian is any good.
 Every gate the tool has is mechanical. `qa` proves the artwork survived,
 `falint` proves the typography is Persian, `glossary check` proves a locked name
 did not drift. All three pass on a chapter that reads like a machine wrote it.
-`references/evaluation.md` in the skill says what to measure and why; this
-folder is the set and the scorer.
+[`references/evaluation.md`](../skills/revayat-comic/references/evaluation.md)
+in the skill says what to measure and why. This folder contains the cases;
+the generator and scorer are implemented in the Rust `revayat-tools` crate.
 
 ## What is here
 
-| | |
+| Component | Purpose |
 | --- | --- |
 | `cases.json` | 38 cases across Japanese, Korean, Chinese, English, French and Spanish, each with difficulty tags, a semantic-unit count and **several** Persian candidates. The original 20, including five adversarial controls, are retained. Fourteen context-sensitive cases await bilingual review |
-| `build_pages.py` | draws a layout template for each case — two speakers, a balloon, a second balloon for a continuation — and exports its source/context in an answer-free `.input.json` companion |
-| `score.py` | scores axis by axis, and refuses to produce one number |
+| `revayat-comic eval build` | draws a layout template for each case — two speakers, a balloon, a second balloon for a continuation — and exports its source/context in an answer-free `.input.json` companion |
+| `revayat-comic eval score` | scores axis by axis and leaves human judgments unscored |
+| [`rust/revayat-tools/src/eval.rs`](../rust/revayat-tools/src/eval.rs) | generator, validation, and scoring implementation |
 
-```bash
-python evaluation/build_pages.py --out evaluation/pages
-python evaluation/score.py --answers my-answers.json
+With the release binary on `PATH`, run from the repository root:
+
+```powershell
+revayat-comic eval build --out evaluation/pages
+revayat-comic eval score my-answers.json --complete
 ```
+
+For a source checkout, replace `revayat-comic` with
+`cargo run --locked -p revayat-comic-cli --`. Both commands accept
+`--cases custom-cases.json`; omitting it uses the bundled case set.
 
 Custom cases are validated as a complete set before drawing or scoring: unique
 safe ASCII IDs unique even under case-insensitive filenames (Windows device
@@ -32,7 +40,10 @@ crash. Invalid records refuse before creating output pages. Answers must be an
 object of strings. Unknown answer keys are refused before scoring so a typo
 cannot silently make a submitted answer disappear.
 
-`--answers` is `{"case-id": "the Persian"}`. `--json` prints the report and returns the same status the text form does; `--complete` additionally fails when a case has no answer, so an evaluation cannot pass by leaving the hard ones out.
+The positional answer file is an object such as
+`{"case-id": "the Persian"}`. The Rust CLI writes JSON reports directly;
+`--complete` additionally fails when a case has no answer, so an evaluation
+cannot pass by leaving the hard ones out.
 
 Give the translator both `pages/<id>.png` and `pages/<id>.input.json`. The
 template has empty balloons: it is not an OCR fixture. The companion supplies
@@ -120,9 +131,11 @@ that a chapter of a real book came out well.
 
 ## Adding pages you have the right to share
 
-Put the image in `pages/` and add a `"page": "pages/<name>.png"` field to the
-case. Rights matter: your own work, public domain, a Creative Commons release,
-or pages the rights holder has given you in writing for this purpose.
+Keep real scans in a separate benchmark with their provenance and expected
+pipeline outputs. The current `eval build` command generates templates from
+case data; it does not load a scan from a `page` field. Rights matter: your own
+work, public domain, a Creative Commons release, or pages the rights holder has
+given you in writing for this purpose.
 Publisher scans are not cleared by being easy to download, and a set you cannot
 show anybody is a set nobody can check.
 
@@ -130,13 +143,16 @@ show anybody is a set nobody can check.
 
 Adequacy and fluency pull against each other. A fluent Persian sentence that
 says something else scores well on exactly one axis and should fail; averaging
-them hides the trade-off that matters. `score.py` has no field for a total and
-will not grow one.
+them hides the trade-off that matters. The Rust scorer reports separate axes
+and has no overall score.
 
 The scorer checks limited textual signals: selected negation forms, numbers,
 required terms, an ellipsis and a contrastive subject. Its unit count is an
-approximation. It also measures whether the line sets inside the balloon with
-the pipeline's real fitter. None of these establishes full semantic fidelity.
+approximation. Its layout check shapes and rasterizes the bundled Vazir font
+through `cosmic-text`, trying sizes from 48 down to 13 pixels and testing the
+visible ink against the case's elliptical balloon. This benchmark fitter is
+separate from the page typesetter. None of these checks establishes full
+semantic fidelity.
 Adequacy in full, fluency and voice consistency come back `null` with the
 question a person has to answer. A case tagged `human_only` has no machine
 adequacy checks; layout fit and approximate unit-count warnings can still be
@@ -156,8 +172,9 @@ work is not evidence, and neither is a regex pass rate.
 - Keep some cases back and do not look at them while changing anything. A score
   that only ever goes up is measuring the thing you tuned against.
 
-Both evaluation CLIs use the shared UTF-8 run logger. With no document argument,
-logs go under `skills/revayat-comic/scripts/logs/`; inputs and answers are not
-written to these logs. Source/context companions are generated artifacts, not
-new tracked fixtures. Actual scan/OCR robustness and human translation quality
-remain separate checks.
+Both evaluation commands use the shared UTF-8 run logger. With no document
+argument, logs go in a `logs/` directory beside the executable, or one level
+above its directory when the executable is in `bin/`. The logger records fixed
+run metadata, not input text, answers, or credentials. Source/context companions
+are generated artifacts, not new tracked fixtures. Actual scan/OCR robustness
+and human translation quality remain separate checks.

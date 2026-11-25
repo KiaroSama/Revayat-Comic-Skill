@@ -5,12 +5,13 @@ use std::{
     fs,
     io::Cursor,
     path::{Component, Path, PathBuf},
+    thread,
 };
 
-use image::{DynamicImage, GrayImage, ImageFormat, Luma, RgbImage};
+use image::{DynamicImage, GrayImage, ImageEncoder, ImageFormat, Luma, RgbImage};
 use revayat_io::{images, inputs::MAX_PAGE_PIXELS};
 use revayat_ir::{
-    PageRecord, RegionRecord, ir, regions, stages,
+    PageRecord, RegionRecord, ir, regions, review, stages,
     workspace::{self, LoadedDocument},
 };
 use revayat_tools::server::StageError;
@@ -63,14 +64,16 @@ pub fn asset(root: &Path, relative: &str) -> Result<PathBuf> {
 }
 
 pub fn original(root: &Path, page: &PageRecord) -> Result<RgbImage> {
+    Ok(original_native(root, page)?.into_rgb8())
+}
+
+fn original_native(root: &Path, page: &PageRecord) -> Result<DynamicImage> {
     let path = asset(root, &page.image)?;
     if ir::sha256_file(&path).map_err(failed)? != page.sha256 {
         return Err(failed("immutable source page changed"));
     }
-    let image = images::load_image(&path, MAX_PAGE_PIXELS)
-        .map_err(failed)?
-        .into_rgb8();
-    if image.dimensions() != (page.width, page.height) {
+    let image = images::load_image(&path, MAX_PAGE_PIXELS).map_err(failed)?;
+    if (image.width(), image.height()) != (page.width, page.height) {
         return Err(failed("source page dimensions changed"));
     }
     Ok(image)
@@ -85,6 +88,25 @@ pub fn png(image: &DynamicImage) -> Result<Vec<u8>> {
 }
 
 fn save_image(root: &Path, folder: &str, id: &str, image: DynamicImage) -> Result<String> {
+    save_png(root, folder, id, png(&image)?)
+}
+
+fn save_mask(root: &Path, id: &str, mask: &GrayImage) -> Result<String> {
+    use image::codecs::png::{CompressionType, FilterType, PngEncoder};
+
+    let mut bytes = Vec::new();
+    PngEncoder::new_with_quality(&mut bytes, CompressionType::Fast, FilterType::NoFilter)
+        .write_image(
+            mask.as_raw(),
+            mask.width(),
+            mask.height(),
+            image::ExtendedColorType::L8,
+        )
+        .map_err(failed)?;
+    save_png(root, "masks", id, bytes)
+}
+
+fn save_png(root: &Path, folder: &str, id: &str, bytes: Vec<u8>) -> Result<String> {
     let id = safe_id(id)?;
     let dir = root.join(folder);
     match fs::create_dir(&dir) {
@@ -97,7 +119,6 @@ fn save_image(root: &Path, folder: &str, id: &str, image: DynamicImage) -> Resul
             "output directory must not redirect outside its workspace path",
         ));
     }
-    let bytes = png(&image)?;
     let digest = ir::sha256_bytes(&bytes);
     let relative = format!("{folder}/{id}-{digest}.png");
     ir::write_bytes(root.join(&relative), &bytes).map_err(failed)?;
@@ -132,7 +153,11 @@ fn stamp(loaded: &mut LoadedDocument, stage: &str) -> Result<()> {
     stages::stamp_stage(&mut loaded.document, stage, ir::Fields::new(), None, None).map_err(failed)
 }
 
-pub fn detect(path: &Path) -> Result<Value> {
+pub fn detect(
+    path: &Path,
+    mut options: detect::DetectionOptions,
+    selection: Option<&[String]>,
+) -> Result<Value> {
     write_doc(path, "detect", |loaded| {
         let root = ir::doc_dir(loaded.path()).to_owned();
         let rtl = loaded
@@ -141,20 +166,27 @@ pub fn detect(path: &Path) -> Result<Value> {
             .get("reading_direction")
             .and_then(Value::as_str)
             != Some("ltr");
-        let options = detect::DetectionOptions {
-            rtl,
-            ..detect::DetectionOptions::default()
-        };
+        options.rtl = rtl;
+        let selected: std::collections::BTreeSet<_> =
+            workspace::selected_pages(&loaded.document, selection)
+                .map_err(failed)?
+                .into_iter()
+                .map(|page| page.id.clone())
+                .collect();
         let mut count = 0;
+        let mut processed = Vec::new();
+        let mut skipped = Vec::new();
         for page in &mut loaded.document.pages {
+            if !selected.contains(&page.id) {
+                continue;
+            }
             if page
                 .regions
                 .iter()
                 .any(|r| !r.source_text.is_empty() || !r.target_text.is_empty() || r.locked)
             {
-                return Err(failed(
-                    "detect would replace reviewed regions; import a fresh workspace",
-                ));
+                skipped.push(json!({"page":page.id,"reason":"reviewed"}));
+                continue;
             }
             let source = original(&root, page)?;
             let found = detect::detect_page(&source, &options).map_err(failed)?;
@@ -186,10 +218,20 @@ pub fn detect(path: &Path) -> Result<Value> {
                     Ok(region)
                 })
                 .collect::<Result<Vec<_>>>()?;
+            ir::assign_reading_order(page, if rtl { "rtl" } else { "ltr" }, 0.35)
+                .map_err(failed)?;
             count += page.regions.len();
+            processed.push(page.id.clone());
         }
-        stamp(loaded, "detect")?;
-        Ok(json!({"regions":count,"pages":loaded.document.pages.len()}))
+        stages::stamp_stage(
+            &mut loaded.document,
+            "detect",
+            ir::Fields::new(),
+            Some(json!(options)),
+            Some(&processed),
+        )
+        .map_err(failed)?;
+        Ok(json!({"regions":count,"pages":processed.len(),"processed":processed,"skipped":skipped}))
     })
 }
 
@@ -205,7 +247,9 @@ fn editable(region: &RegionRecord, policy: &str) -> bool {
 fn page_panels(page: &PageRecord) -> Result<Vec<Rect>> {
     page.panels
         .iter()
-        .map(|panel| serde_json::from_value(panel.clone()).map_err(failed))
+        .map(|panel| {
+            serde_json::from_value(panel.get("bbox").unwrap_or(panel).clone()).map_err(failed)
+        })
         .collect()
 }
 
@@ -228,6 +272,26 @@ fn resolve_balloon(
     neighbors: &[Rect],
     detected: Option<masks::Balloon>,
 ) -> Result<Option<masks::Balloon>> {
+    resolve_region_balloon(
+        region,
+        panels,
+        neighbors,
+        detected,
+        page.dimensions(),
+        |text, saved, panel, dark| {
+            masks::resolve_balloon(page, text, saved, panel, dark).map_err(failed)
+        },
+    )
+}
+
+fn resolve_region_balloon<T>(
+    region: &RegionRecord,
+    panels: &[Rect],
+    neighbors: &[Rect],
+    detected: Option<masks::Balloon>,
+    size: (u32, u32),
+    resolve: impl Fn(Rect, Option<masks::Balloon>, Option<Rect>, bool) -> Result<Option<T>>,
+) -> Result<Option<T>> {
     if !bubble_kind(region) {
         return Ok(None);
     }
@@ -239,12 +303,10 @@ fn resolve_balloon(
         .filter(|panel| panel.contains(x, y))
         .min_by_key(|panel| panel.area());
     let saved = detected.or(balloon(region)?);
-    if let Some(balloon) =
-        masks::resolve_balloon(page, text, saved, panel, dark(region)).map_err(failed)?
-    {
+    if let Some(balloon) = resolve(text, saved, panel, dark(region))? {
         return Ok(Some(balloon));
     }
-    let full = panel.unwrap_or(Rect([0, 0, page.width(), page.height()]));
+    let full = panel.unwrap_or(Rect([0, 0, size.0, size.1]));
     let mut clipped = full;
     for &other in neighbors {
         if other.y() >= text.bottom()
@@ -257,7 +319,7 @@ fn resolve_balloon(
         }
     }
     if clipped != full {
-        masks::resolve_balloon(page, text, None, Some(clipped), dark(region)).map_err(failed)
+        resolve(text, None, Some(clipped), dark(region))
     } else {
         Ok(None)
     }
@@ -276,12 +338,11 @@ fn record_balloon(
 }
 
 fn region_mask(
-    page: &RgbImage,
+    page: &GrayImage,
     region: &RegionRecord,
-    selected: Option<masks::Balloon>,
+    selected: Option<&masks::RegionMask>,
     solid: bool,
 ) -> Result<masks::RegionMask> {
-    let dark = dark(region);
     if region.kind == "watermark" && region.erase {
         if !region.locked {
             return Err(failed("watermark removal requires a locked erase decision"));
@@ -294,11 +355,11 @@ fn region_mask(
             pixels: GrayImage::from_pixel(approved.width(), approved.height(), Luma([255])),
         });
     }
-    masks::region_mask(
+    masks::region_mask_with_interior(
         page,
         bounds(region)?,
         selected,
-        dark,
+        dark(region),
         masks::MaskOptions {
             solid_free: solid && !bubble_kind(region),
             full_balloon: selected.is_some(),
@@ -308,49 +369,91 @@ fn region_mask(
     .map_err(failed)
 }
 
+fn mask_page(root: &Path, page: &mut PageRecord, policy: &str, solid: bool) -> Result<usize> {
+    let image = original(root, page)?;
+    let luma = masks::page_luminance(&image);
+    drop(image);
+    let mut mask = GrayImage::new(page.width, page.height);
+    let panels = page_panels(page)?;
+    let neighbors = on_art_bounds(page)?;
+    let mut count = 0;
+    for region in &mut page.regions {
+        if !editable(region, policy) {
+            region.mask = None;
+            region.extra.remove("mask_bounds");
+            continue;
+        }
+        let resolved = resolve_region_balloon(
+            region,
+            &panels,
+            &neighbors,
+            None,
+            luma.dimensions(),
+            |text, saved, panel, dark| {
+                masks::resolve_balloon_with_interior(&luma, text, saved, panel, dark)
+                    .map_err(failed)
+            },
+        )?;
+        if let Some((balloon, paper)) = &resolved {
+            let geometry =
+                masks::balloon_geometry_from_interior(*balloon, paper).map_err(failed)?;
+            region.extra.insert("balloon".into(), geometry);
+        }
+        let local = region_mask(
+            &luma,
+            region,
+            resolved.as_ref().map(|(_, paper)| paper),
+            solid,
+        )?;
+        local.apply_to(&mut mask).map_err(failed)?;
+        region.mask = Some(save_mask(root, &region.id, &local.pixels)?);
+        region
+            .extra
+            .insert("mask_bounds".into(), json!(local.bounds));
+        count += 1;
+    }
+    page.extra
+        .insert("mask".into(), json!(save_mask(root, &page.id, &mask)?));
+    Ok(count)
+}
+
 pub fn mask(path: &Path, solid: bool) -> Result<Value> {
     write_doc(path, "masks", |loaded| {
         let root = ir::doc_dir(loaded.path()).to_owned();
         let policy = loaded.document.policy().to_owned();
-        let mut total = 0;
-        for page in &mut loaded.document.pages {
-            let image = original(&root, page)?;
-            let mut mask = GrayImage::new(page.width, page.height);
-            let panels = page_panels(page)?;
-            let neighbors = on_art_bounds(page)?;
-            for region in &mut page.regions {
-                if editable(region, &policy) {
-                    let balloon = resolve_balloon(&image, region, &panels, &neighbors, None)?;
-                    if let Some(balloon) = balloon {
-                        record_balloon(&image, region, balloon)?;
-                    }
-                    let local = region_mask(&image, region, balloon, solid)?;
-                    local.apply_to(&mut mask).map_err(failed)?;
-                    region.mask = Some(save_image(
-                        &root,
-                        "masks",
-                        &region.id,
-                        DynamicImage::ImageLuma8(local.pixels),
-                    )?);
-                    region
-                        .extra
-                        .insert("mask_bounds".into(), json!(local.bounds));
-                    total += 1;
-                } else {
-                    region.mask = None;
-                    region.extra.remove("mask_bounds");
-                }
+        let largest = loaded
+            .document
+            .pages
+            .iter()
+            .map(|p| u64::from(p.width) * u64::from(p.height))
+            .max()
+            .unwrap_or(1)
+            .max(1);
+        // Keep concurrent decodes and working masks bounded for oversized pages.
+        let memory_cap = (MAX_PAGE_PIXELS / largest).clamp(1, 8) as usize;
+        let capacity = thread::available_parallelism()
+            .map_or(1, usize::from)
+            .min(memory_cap);
+        let chunk_size = loaded.document.pages.len().div_ceil(capacity).max(1);
+        let total = thread::scope(|scope| {
+            let mut workers = Vec::new();
+            for pages in loaded.document.pages.chunks_mut(chunk_size) {
+                let (root, policy) = (&root, &policy);
+                workers.push(scope.spawn(move || {
+                    pages.iter_mut().try_fold(0, |sum, page| {
+                        Ok(sum + mask_page(root, page, policy, solid)?)
+                    })
+                }));
             }
-            page.extra.insert(
-                "mask".into(),
-                json!(save_image(
-                    &root,
-                    "masks",
-                    &page.id,
-                    DynamicImage::ImageLuma8(mask)
-                )?),
-            );
-        }
+            let mut result = Ok(0);
+            for worker in workers {
+                let count = worker
+                    .join()
+                    .unwrap_or_else(|_| Err(failed("mask page worker panicked")));
+                result = result.and_then(|sum| count.map(|count| sum + count));
+            }
+            result
+        })?;
         stamp(loaded, "masks")?;
         Ok(json!({"masks":total}))
     })
@@ -438,7 +541,11 @@ pub fn falint(path: &Path, fix: bool) -> Result<(Value, i32)> {
                     region.typeset.clear();
                 }
             }
-            let issues = falint::lint_text(&region.target_text).map_err(failed)?;
+            let acknowledged = review::acknowledged(region);
+            let spans = review::acknowledged_spans(region);
+            let issues =
+                falint::lint_acknowledged(&region.target_text, &acknowledged, spans.as_deref())
+                    .map_err(failed)?;
             if !issues.is_empty() {
                 findings.push(json!({"region":region.id,"issues":issues}));
             }

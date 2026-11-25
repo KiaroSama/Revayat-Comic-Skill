@@ -190,6 +190,47 @@ fn children(path: &Path) -> Result<Vec<PathBuf>, IrError> {
         Err(e) => Err(e.into()),
     }
 }
+
+fn page_artifact(
+    root: &Path,
+    name: &str,
+    directories: &[&str],
+    page: &str,
+    region: Option<&str>,
+) -> Result<PathBuf, IrError> {
+    let path = owned(root, Path::new(name))?;
+    let stem = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or_default();
+    let stem = stem
+        .rsplit_once('-')
+        .filter(|(_, digest)| valid_digest(digest))
+        .map_or(stem, |(stem, _)| stem);
+    let owned_stem = region.map_or_else(
+        || {
+            stem == page
+                || stem
+                    .strip_prefix(page)
+                    .is_some_and(|tail| tail.starts_with('-'))
+        },
+        |region| stem == region,
+    );
+    let valid = directories.iter().any(|directory| {
+        let folder = root.join(directory);
+        // Legacy workspaces place all page artifacts in a dedicated subdirectory.
+        path.parent() == Some(folder.join(page).as_path())
+            || (path.parent() == Some(folder.as_path()) && owned_stem)
+    });
+    if !valid {
+        return Err(bad(
+            "unsafe_asset",
+            format!("{page}: artifact not in page scope: {name}"),
+        ));
+    }
+    Ok(path)
+}
+
 fn page_files(
     root: &Path,
     page: &PageRecord,
@@ -201,20 +242,39 @@ fn page_files(
     if include_source {
         files.insert(page_asset(root, &page.image, "pages", id, false)?);
     }
-    for (dir, name) in [
-        ("clean", page.cleaned.as_deref()),
-        ("final", page.rendered.as_deref()),
+    for (directories, name) in [
+        (["clean", "cleaned"], page.cleaned.as_deref()),
+        (["final", "rendered"], page.rendered.as_deref()),
     ] {
         if let Some(name) = name {
-            files.insert(page_asset(root, name, dir, id, false)?);
+            files.insert(page_artifact(root, name, &directories, id, None)?);
         }
     }
-    for name in ["mask", "writable"]
-        .into_iter()
-        .filter_map(|key| page.extra.get(key).and_then(Value::as_str))
-        .chain(page.regions.iter().filter_map(|r| r.mask.as_deref()))
-    {
-        page_asset(root, name, "masks", id, true)?;
+    for (key, directories) in [
+        ("mask", &["masks"][..]),
+        ("writable", &["masks"][..]),
+        ("clean_mask", &["clean", "cleaned", "masks"][..]),
+        ("authorized_mask", &["final", "rendered", "masks"][..]),
+    ] {
+        if let Some(name) = page.extra.get(key).and_then(Value::as_str) {
+            files.insert(page_artifact(root, name, directories, id, None)?);
+        }
+    }
+    for region in &page.regions {
+        for (directory, name) in [
+            ("masks", region.mask.as_deref()),
+            ("crops", region.extra.get("crop").and_then(Value::as_str)),
+        ] {
+            if let Some(name) = name {
+                files.insert(page_artifact(
+                    root,
+                    name,
+                    &[directory],
+                    id,
+                    Some(&region.id),
+                )?);
+            }
+        }
     }
     for name in page
         .extra
@@ -230,7 +290,13 @@ fn page_files(
                 .filter_map(Value::as_str),
         )
     {
-        page_asset(root, name, "crops", id, true)?;
+        files.insert(page_artifact(
+            root,
+            name,
+            &["crops", "sheets", "overviews"],
+            id,
+            None,
+        )?);
     }
     for dir in ["masks", "crops"] {
         for path in children(&owned(root, &Path::new(dir).join(id))?)? {
@@ -724,4 +790,53 @@ fn publish(
         return Err(error);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod transaction_tests {
+    use super::*;
+
+    #[test]
+    fn failed_document_commit_rolls_back_existing_and_new_assets() -> Result<(), IrError> {
+        let root = tempfile::tempdir()?;
+        let worker = tempfile::tempdir()?;
+        let doc_path = root.path().join("comic.json");
+        ir::save_doc(&ComicDocument::default(), &doc_path)?;
+        let mut loaded = workspace::LoadedDocument::open(&doc_path)?;
+        ir::write_text(root.path().join("existing.txt"), "previous")?;
+        ir::write_text(worker.path().join("existing.txt"), "worker update")?;
+        ir::write_text(worker.path().join("new.txt"), "new worker asset")?;
+        let pending = ["existing.txt", "new.txt"]
+            .into_iter()
+            .map(|name| (root.path().join(name), worker.path().join(name)))
+            .collect();
+        let mut concurrent = loaded.document.clone();
+        concurrent
+            .meta
+            .insert("title".into(), json!("newer canonical answer"));
+        let concurrent = ir::json_bytes(&concurrent)?;
+        ir::write_bytes(&doc_path, &concurrent)?;
+        let claim = workspace::workspace_lock(root.path(), "merge-test")?;
+        assert_eq!(
+            publish(root.path(), &mut loaded, &claim, &pending)
+                .err()
+                .map(|error| error.code()),
+            Some("document_changed")
+        );
+        assert_eq!(
+            fs::read_to_string(root.path().join("existing.txt"))?,
+            "previous"
+        );
+        assert!(!root.path().join("new.txt").exists());
+        assert_eq!(fs::read(doc_path)?, concurrent);
+        assert!(fs::read_dir(root.path())?.all(|entry| {
+            entry.is_ok_and(|entry| {
+                !entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".revayat-merge-")
+            })
+        }));
+        Ok(())
+    }
 }

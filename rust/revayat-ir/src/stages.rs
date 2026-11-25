@@ -1,4 +1,4 @@
-use crate::{ComicDocument, IrError, PageRecord, RegionRecord, ir, workspace};
+use crate::{ComicDocument, IrError, PageRecord, RegionRecord, ir, regions, workspace};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -88,13 +88,14 @@ fn str_field<'a>(fields: &'a ir::Fields, name: &str) -> &'a str {
     fields.get(name).and_then(Value::as_str).unwrap_or_default()
 }
 fn region_text(region: &RegionRecord) -> Result<String, IrError> {
+    let [dropped, kept, erased] = regions::actions(region);
     let mut fields = vec![
         region.id.as_str(),
         &region.target_text,
         str_field(&region.extra, "target_full"),
-        py_bool(region.dropped),
-        py_bool(region.keep),
-        py_bool(region.erase),
+        py_bool(dropped),
+        py_bool(kept),
+        py_bool(erased),
         region.fill.as_str(),
     ];
     let style = str_field(&region.extra, "style").trim();
@@ -105,12 +106,13 @@ fn region_text(region: &RegionRecord) -> Result<String, IrError> {
     sorted_json(&json!(fields))
 }
 fn region_render(region: &RegionRecord) -> Result<String, IrError> {
+    let [dropped, kept, erased] = regions::actions(region);
     let bbox = region.bbox.map(|v| v.to_string()).join(",");
     Ok([
         &region.id,
-        py_bool(region.dropped),
-        py_bool(region.keep),
-        py_bool(region.erase),
+        py_bool(dropped),
+        py_bool(kept),
+        py_bool(erased),
         &bbox,
         &region.kind,
         &region.orientation,
@@ -164,6 +166,9 @@ pub fn facet_revision(page: &PageRecord, facet: &str) -> Result<String, IrError>
                     region.mask.as_deref().unwrap_or("None"),
                     stable(region.extra.get("mask_box"))?
                 );
+                if let Some(bounds) = region.extra.get("mask_bounds") {
+                    let _ = write!(data, "bounds:{}|", stable(Some(bounds))?);
+                }
             }
         }
         _ => return Err(IrError::refused("unknown_facet", facet)),
