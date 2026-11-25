@@ -224,12 +224,6 @@ cargo test --workspace --locked
 
 در مخزن صفحه‌ای از کمیک‌های تحت حق نشر نگه نمی‌داریم. آزمون‌ها از نمونه‌های ساختگی استفاده می‌کنند. گردش‌کارهای GitHub Actions هر چهار هدف ۶۴ بیتی لینوکس و ویندوز را می‌سازند، نسخهٔ مانیفست‌های افزونه را می‌سنجند و اسکن‌های CodeQL، Gitleaks، Semgrep و بررسی وابستگی‌ها را اجرا می‌کنند.
 
-## سپاس
-
-ساختار کلی خط لوله از پروژه‌های متن‌باز پیشین الهام گرفته است: [manga-image-translator](https://github.com/zyddnys/manga-image-translator)، [BallonsTranslator](https://github.com/dmMaze/BallonsTranslator) و [comic-translate](https://github.com/ogkalu2/comic-translate).
-
-رندر و بسته‌بندی در Rust خالص بر دوش کتابخانه‌های [cosmic-text](https://github.com/pop-os/cosmic-text)، [lopdf](https://github.com/J-F-Liu/lopdf)، [pdf-writer](https://github.com/typst/pdf-writer)، [hayro](https://github.com/LaurenzV/hayro)، [rars](https://github.com/g-vash/rars)، [zip](https://github.com/zip-rs/zip)، [image](https://github.com/image-rs/image) و قلم [Vazirmatn](https://github.com/rastikerdar/vazirmatn) است.
-
 ## نویسنده
 
 نویسنده: Kiaro Sama
