@@ -4,26 +4,12 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-use sha2::{Digest, Sha256};
-
 use crate::{IoError, invalid};
 
-pub fn digest(data: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(data))
-}
+pub use revayat_ir::ir::sha256_bytes as digest;
 
 pub fn file_digest(path: &Path) -> Result<String, IoError> {
-    let mut file = File::open(path)?;
-    let mut hash = Sha256::new();
-    let mut chunk = vec![0; 64 * 1024];
-    loop {
-        let n = file.read(&mut chunk)?;
-        if n == 0 {
-            break;
-        }
-        hash.update(&chunk[..n]);
-    }
-    Ok(format!("{:x}", hash.finalize()))
+    Ok(revayat_ir::ir::sha256_reader(File::open(path)?)?)
 }
 
 pub fn parent(path: &Path) -> &Path {
