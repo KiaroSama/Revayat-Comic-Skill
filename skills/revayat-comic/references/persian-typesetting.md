@@ -43,47 +43,16 @@ Arabic-script text needs two things done to it before it can be drawn:
 - **Bidi** — resolving the direction of a mixed run, so `نسخهٔ 2.5 را دانلود کن`
   puts the numeral in the right place inside the Persian.
 
-There are two ways this happens here, and `doctor` says which one you have.
+### Pure-Rust shaping via `cosmic-text`
 
-### RAQM — the good path
-
-Pillow, built against libraqm, does both properly through HarfBuzz and FriBidi.
-The text stays logical all the way to the draw call, and Pillow is told
-`direction="rtl", language="fa"`.
-
-**RAQM is not a Linux-only feature, whatever this project used to say.**
-Pillow's wheels carry libraqm on every platform; libraqm loads **FriBiDi** at run
-time, and Linux images normally have one while Windows and macOS normally do not.
-Put a FriBiDi DLL on `PATH` — `fribidi.dll`, `fribidi-0.dll` or
-`libfribidi-0.dll` — and `features.check("raqm")` turns true on Windows.
-Measured: one already on this machine beside another tool flipped it on, and the
-RAQM test that had never run here passed. Beside `python.exe` is **not** enough;
-it has to be a directory in the DLL search order.
-
-There is no `pip install` that supplies FriBiDi; it is a system library. On
-Windows it ships with several common tools, and any one of their DLLs will do.
-
-### The reshaper fallback — what runs without FriBiDi
-
-`arabic-reshaper` picks the right form for every letter, and `python-bidi`
-reorders the result for display. The page is correct to read. Two things differ:
-
-- The string drawn is **presentation forms in visual order**. It is a picture of
-  Persian, so text copied out of the image would not be searchable Persian.
-- Line breaking has to happen *before* shaping, on the logical text, or lines
-  break in the wrong place. This is why `fit_region` wraps first and shapes each
-  line separately, and why you must not pre-shape text in a worksheet.
-
-Two settings matter and are set explicitly:
-
-- `delete_harakat: False`. The default is `True`, and it deletes U+0654 — the
-  hamza that carries the Persian ezafe. `خانهٔ ما` (*our house*) silently becomes
-  `خانه ما`, which is a different construction. This was measured, not assumed.
-- `support_zwj: True`, so the zero-width non-joiner does its job.
-
-The ZWNJ itself does not survive into the drawn string, and that is correct: it
-is a boundary-neutral character and the bidi algorithm removes it after it has
-forced the letter forms. `کتاب‌ها` keeps its beh isolated; `کتابها` joins it.
+`revayat-comic` shapes and orders Persian directly in Rust with `cosmic-text`
+(HarfBuzz + FriBidi) and the bundled Vazir font family (`Regular`, `Medium`,
+`Bold`). There is no external `libraqm`, FriBidi DLL, or Python fallback
+dependency: logical UTF-8 Persian is shaped and wrapped consistently on both
+Linux and Windows (x64 and arm64), preserving U+0654 (ezafe hamza) and U+200C
+(ZWNJ, نیم‌فاصله). Line spacing stays at least `1.38x` the font size so tall
+ascenders and stacked lines never collide, and narrow bubbles keep punctuation
+inside the bubble boundary.
 
 ## Fonts
 

@@ -4,33 +4,20 @@ The failures you are most likely to hit, in the order they happen.
 
 ## `doctor` says `"ready": false`
 
-Read the `required` block. A `MISSING` line names the package and what it is
-for.
+Rebuild or download the `revayat-comic` binary for your platform (Linux or Windows 64-bit):
 
 ```bash
-pip install -r $SKILL_DIR/requirements.txt
+cargo build --release --locked -p revayat-comic-cli
+./bin/revayat-comic doctor --json
 ```
 
-If `persian.font` is `null`, no font on this machine can draw Persian. Install
-Vazirmatn from https://github.com/rastikerdar/vazirmatn/releases and pass it at
-step 9 with `--font`.
+If a custom font path fails to load, omit `--font` to use the bundled Vazir font family (`Regular`, `Medium`, `Bold`), or pass a valid `.ttf` file path.
 
-If `persian.shaping_error` appears, there is neither RAQM nor the fallback:
+## Persian shaping
 
-```bash
-pip install arabic-reshaper python-bidi
-```
-
-## `"raqm": false` — is this broken?
-
-No — and it is fixable, which this page used to deny. Pillow carries libraqm on
-every platform; what is missing is **FriBiDi**, which libraqm loads at run time.
-Put `fribidi.dll`, `fribidi-0.dll` or `libfribidi-0.dll` on `PATH` and `doctor`
-reports `"raqm": true` on the next run. It must be a directory in the DLL search
-order — beside `python.exe` does not work.
-
-Without it the fallback runs, the pages are correct to read, and `doctor` says
-so. See `persian-typesetting.md` for what differs between the two paths.
+Pure-Rust shaping via `cosmic-text` (HarfBuzz + FriBidi) with bundled Vazir
+fonts is compiled into `revayat-comic` on both Linux and Windows (x64 and
+arm64). No external `libraqm`, FriBidi DLL, or fallback library is needed.
 
 ## Input and provider byte limits
 
@@ -50,8 +37,7 @@ the endpoint rather than treating a byte-limit refusal as a successful call.
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | `no images` | the CBZ holds something else | check it opens in a comic reader |
-| an error naming `rarfile` | CBR support is optional | `pip install rarfile`, and install an unrar binary — or convert to CBZ |
-| an error naming `unrar` | rarfile is installed but has no backend | Linux/macOS: install `unrar` or `libarchive-tools`; Windows: install WinRAR |
+| CBR archive fails to decode | unsupported or corrupted RAR entry | verify the archive is readable, or re-pack as lossless CBZ |
 | pages in the wrong order | rare; the archive uses a naming scheme nothing can sort | extract to a folder, rename `0001.png`… and import the folder |
 | `webtoon_strips` is not empty | this is a webtoon | `--direction ltr` |
 | PDF import is slow | pages are being rendered, not extracted | expected when a page is not one embedded image |
@@ -201,19 +187,15 @@ re-import from scratch.
 
 ## Windows
 
-- Use `PY=python` or `PY="py -3"`. `python3` does not exist on most Windows
-  installations.
-- Persian in the console needs UTF-8. Every entry point sets it; a bare
-  `python -c` of your own does not, and will raise `UnicodeEncodeError` on the
-  first Persian character.
-- Paths with spaces need quoting, including `$SKILL_DIR` and `$WORK`.
+- Use PowerShell 7 (`pwsh`) with `.\bin\revayat-comic.exe`.
+- Console output and run logs are always UTF-8; quote paths with spaces (`"$WORK"`).
 
 ## Nothing here matches
 
 Re-run the failing stage on **one page** and read its whole report:
 
 ```bash
-$PY $SKILL_DIR/scripts/revayat-comic.py detect --doc $WORK/comic.json --pages p0007
+revayat-comic detect --doc "$WORK/comic.json" --pages p0007
 ```
 
 Then look at `work/crops/p0007/overview.png`. Most of what looks like a mystery
@@ -227,7 +209,7 @@ whose render was stale, whose lines had overflowed, or whose erasures had never
 been cleaned went into a package without `qa` ever running.
 
 ```bash
-"$PY" "$SKILL_DIR/scripts/revayat-comic.py" qa check --doc "$WORK/comic.json"
+revayat-comic qa check --doc "$WORK/comic.json" --strict
 ```
 
 Fix what it names and export again. `--draft` still ships what is there —

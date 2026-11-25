@@ -1,27 +1,28 @@
 # Install, upgrade and recover
 
-The Bash and PowerShell entry points use one standard-library Python bootstrap.
-**Python 3.12 or newer must be available before installation**, not only before
-running the translation pipeline. Use a maintained interpreter where possible;
-3.12 is the project's tested compatibility floor. No third-party
-package, network access, model or GPU is needed to copy the skill. The ordinary
-pipeline dependencies are still installed separately from `requirements.txt`.
+The Bash and PowerShell entry points call the pure-Rust `revayat-comic install`
+subcommand (`bin/revayat-comic` on Linux, `bin/revayat-comic.exe` on Windows).
+No Python runtime, virtual environment, network access, model, or GPU is needed
+to install or run the skill.
 
 ## Native entry points
 
 PowerShell 7, from the repository root:
 
 ```powershell
-$env:REVAYAT_PYTHON = 'G:\Program Files\Python\python.exe'
 .\install\install.ps1 -Agent codex -Scope project -Path 'G:\Program Files\Portable\Scripts\my-comic' -Force
 ```
 
-The example interpreter is a placeholder for an existing installation; the
-installer does not download or install Python. Omit `REVAYAT_PYTHON` to discover
-`python`/`python3` on PATH. POSIX equivalent:
+POSIX equivalent:
 
 ```bash
 bash install/install.sh --agent codex --scope project --path /path/to/project --force
+```
+
+You can also invoke the binary directly:
+
+```powershell
+.\bin\revayat-comic.exe install --agent codex --scope project --path 'G:\Program Files\Portable\Scripts\my-comic' --force
 ```
 
 The selected project directory must already exist. User scope (the default)

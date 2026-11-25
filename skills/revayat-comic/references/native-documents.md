@@ -13,7 +13,7 @@ it may be a new file inside that folder. `OUTPUT` keeps its meaning from the
 main skill; do not append filenames to a primary edition's file path. Run:
 
 ```bash
-$PY "$SKILL_DIR/scripts/revayat-comic.py" review-docx \
+revayat-comic review-docx \
   --doc "$WORK/comic.json" --out "$REVIEW_OUTPUT"
 ```
 
@@ -89,7 +89,7 @@ file when its folder differs from the primary edition's folder.
 For a comic PDF, follow the main import workflow:
 
 ```bash
-$PY "$SKILL_DIR/scripts/revayat-comic.py" import "$INPUT" --out "$WORK"
+revayat-comic import "$INPUT" --out "$WORK"
 ```
 
 Specify the source reading direction/language as described in the main skill.
@@ -106,10 +106,10 @@ below, `OUTPUT` is the actual new primary PDF path, such as
 `out/chapter-fa.pdf`; its parent is the delivery directory:
 
 ```bash
-$PY "$SKILL_DIR/scripts/revayat-comic.py" qa check --doc "$WORK/comic.json"
-$PY "$SKILL_DIR/scripts/revayat-comic.py" export \
+revayat-comic qa check --doc "$WORK/comic.json"
+revayat-comic export \
   --doc "$WORK/comic.json" --out "$OUTPUT"
-$PY "$SKILL_DIR/scripts/revayat-comic.py" qa package \
+revayat-comic qa package \
   --doc "$WORK/comic.json" --file "$OUTPUT"
 ```
 

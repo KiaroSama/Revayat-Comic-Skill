@@ -2,502 +2,203 @@
 
 # Revayat Comic (روایت کمیک)
 
-**Translate manga, manhwa, manhua and Western comics into Persian, and get a CBZ or PDF with the artwork provably untouched.**
+**Translate manga, manhwa, manhua and Western comics into Persian, and deliver a lossless CBZ or PDF with verified artwork preservation.**
 
-[![GitHub Actions CI workflow on push, pull requests, and manual dispatch](https://img.shields.io/badge/CI-GitHub%20Actions-16a34a)](.github/workflows/ci.yml)
-[![GNU General Public License v3.0 or later](https://img.shields.io/badge/license-GPL--3.0--or--later-2563eb)](LICENSE)
-[![Latest GitHub version tag](https://img.shields.io/github/v/tag/KiaroSama/Revayat-Comic-Skill?label=version&color=ea580c)](https://github.com/KiaroSama/Revayat-Comic-Skill/tags)
-[![Automated pytest suite across CI matrices](https://img.shields.io/badge/tests-pytest%20suite-0d9488)](tests/README.md)
-[![Python 3.13.15 measured locally, requires Python 3.12 or newer](https://img.shields.io/badge/Python-3.13.15-8b5cf6)](skills/revayat-comic/requirements.txt)
-[![Rust 1.100.0 pinned for the kernel crates and standalone CLI](https://img.shields.io/badge/Rust-1.100.0-9a3412)](rust-toolchain.toml)
-[![Runs on Windows, Linux, and macOS](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-0891b2)](.github/workflows/ci.yml)
-[![Install via five plugin formats or standalone scripts](https://img.shields.io/badge/install-5%20plugins%20%7C%20standalone-4f46e5)](#install)
-[![Documentation in English and Persian](https://img.shields.io/badge/docs-English%20%7C%20Persian-0284c7)](README.fa.md)
-[![Repository files total 3.6 MB](https://img.shields.io/badge/repo%20size-3.6%20MB-ca8a04)](#development)
-[![Pillow image IO and Persian text rendering with bundled SIL OFL Vazir fonts](https://img.shields.io/badge/typography-Vazir%20%7C%20Pillow-15803d)](skills/revayat-comic/assets/fonts/OFL.txt)
-[![PyMuPDF PDF import and export](https://img.shields.io/badge/pdf-PyMuPDF-b45309)](skills/revayat-comic/requirements.txt)
-[![OpenCV balloon detection, masks, and inpainting](https://img.shields.io/badge/vision-OpenCV-334155)](skills/revayat-comic/requirements.txt)
-[![Three bundled MIT voice guides for Persian, English, and Russian](https://img.shields.io/badge/voice%20guides-3%20bundled-7c3aed)](skills/revayat-comic/references/voice/index.md)
-[![CodeQL static analysis and Gitleaks secret scanning](https://img.shields.io/badge/security-CodeQL%20%7C%20Gitleaks-c2410c)](.github/workflows/codeql.yml)
-[![Support donations](https://img.shields.io/badge/Support-donations-d04a9a)](#donate)
+[![GitHub Actions CI workflow status](https://img.shields.io/github/actions/workflow/status/KiaroSama/Revayat-Comic-Skill/ci.yml?branch=main&style=flat-square&label=CI&color=16a34a)](.github/workflows/ci.yml)
+[![GNU General Public License v3.0 or later](https://img.shields.io/github/license/KiaroSama/Revayat-Comic-Skill?style=flat-square&color=2563eb)](LICENSE)
+[![Latest GitHub version tag](https://img.shields.io/github/v/tag/KiaroSama/Revayat-Comic-Skill?style=flat-square&label=version&color=ea580c)](https://github.com/KiaroSama/Revayat-Comic-Skill/tags)
+[![Latest GitHub release](https://img.shields.io/github/v/release/KiaroSama/Revayat-Comic-Skill?style=flat-square&label=release&color=dc2626)](https://github.com/KiaroSama/Revayat-Comic-Skill/releases)
+[![Automated Cargo workspace tests](https://img.shields.io/badge/tests-Cargo%20workspace-0d9488?style=flat-square)](#development)
+[![Rust 1.100.0 pinned toolchain](https://img.shields.io/badge/Rust-1.100.0-8b5cf6?style=flat-square)](rust-toolchain.toml)
+[![Supported platforms: Linux and Windows 64-bit x64 and arm64](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%28x64%20%7C%20arm64%29-0891b2?style=flat-square)](.github/workflows/ci.yml)
+[![Install via five plugin formats or standalone CLI binary](https://img.shields.io/badge/install-5%20plugins%20%7C%20CLI%20binary-4f46e5?style=flat-square)](#install)
+[![Documentation in English and Persian](https://img.shields.io/badge/docs-English%20%7C%20Persian-0284c7?style=flat-square)](README.fa.md)
+[![GitHub repository size](https://img.shields.io/github/repo-size/KiaroSama/Revayat-Comic-Skill?style=flat-square&color=ca8a04)](#development)
+[![Pure Rust runtime with zero Python dependencies](https://img.shields.io/badge/runtime-pure%20Rust%20%7C%20zero%20Python-059669?style=flat-square)](#architecture)
+[![Six-stage multi-agent workflow and full-page image editing](https://img.shields.io/badge/workflow-6%20agents%20%7C%20full--page%20edit-7c3aed?style=flat-square)](skills/revayat-comic/references/multi-agent-workflow.md)
+[![Bundled Humanizer 4.0 and Persian voice guides](https://img.shields.io/badge/voice-Humanizer%204.0%20%7C%20Persian-b45309?style=flat-square)](skills/revayat-comic/references/voice/index.md)
+[![Support donations](https://img.shields.io/badge/Support-donations-d04a9a?style=flat-square)](#donate)
+
+[English](README.md) · [فارسی](README.fa.md) · [Skill spec](skills/revayat-comic/SKILL.md) · [Multi-agent workflow](skills/revayat-comic/references/multi-agent-workflow.md) · [Full-page editing](skills/revayat-comic/references/fullpage-image-edit.md)
 
 </div>
 
-An agent skill for Claude Code, Claude Desktop, Codex, Antigravity, Hermes,
-OpenCode, Kiro, Cursor, Cline and any other coding agent that can read a
-`SKILL.md`. It handles the parts that make comic translation actually hard:
-finding a balloon to the pixel, removing the original lettering without damaging
-the drawing, and Persian right-to-left typesetting that has to be right rather
-than approximately right.
+Revayat Comic is a pure Rust CLI binary (`revayat-comic`) paired with an AI agent skill for translating comics into natural Persian. It accepts CBZ, CBR, PDF, image folders, and single pages, detects panels and balloons, lets you review text directly from rendered crops, removes source lettering inside verified masks, typesets right-to-left Persian with bundled Vazir fonts, checks every page against pixel and layout gates, and exports a lossless CBZ, PDF, image folder, or bilingual review DOCX.
 
-<div align="left"><a href="LICENSE">GPL-3.0 licensed</a></div>
-<div align="right"><a href="README.fa.md">فارسی</a></div>
+## What makes v2.0 different
 
----
+- Pure Rust from input to export, compiled with Rust `1.100.0` (`edition = "2024"`, `#![forbid(unsafe_code)]`) and zero Python, PyMuPDF, OpenCV, or external unrar binaries at runtime.
+- Pure Rust PDF inspection, rasterization, and lossless PDF writing via `lopdf`, `pdf-writer`, and `hayro`, including stencil-mask and Form XObject pixel-budget checks before raster allocation.
+- Pure Rust CBR (`rars`), CBZ (`zip`), and Persian RTL DOCX (`quick-xml`) support.
+- Real Persian shaping and bidi layout on every platform via `cosmic-text` (HarfBuzz and FriBidi) with bundled Vazir TTF fonts (`Regular`, `Medium`, `Bold`), at least `1.38x` line spacing, zero-dot interior bubble sweeps, and non-overlapping text guards.
+- Full-page image-edit workflow (`fullpage-prompt`) for covers, speedlines, chapter titles, and art-integrated sound effects: empty uniform speech bubbles first, submit the full page with OCR-verified source texts, exact coordinates, and Persian replacements, then composite only the padded edited zones back onto the immutable original scan.
+- Six-stage multi-agent workflow with reusable prompt templates for initial translation, typesetting, review, application, recheck and fixing, and final delivery, plus series canon lookup before drafting.
 
-## What it does that a generic manga translator does not
+## Architecture
 
-| | |
-| --- | --- |
-| **The model sees the page** | Instead of an OCR engine handing a context-free string to a translator, two images are rendered per page: the whole page with every region numbered in reading order, and the crops themselves, enlarged and labelled. The model reads both and transcribes and translates in one pass — with the character's face, the balloon answering back and the tone of the scene in front of it. |
-| **Artwork preservation is a guarantee, not an intention** | "We try not to touch the art" is not enough. The finished page is compared against the original and every pixel outside the authorised mask is proved **byte-identical**. `qa check` reports `artwork_pixels_changed`, and on a correct run it is zero. |
-| **The mask is the balloon's shape, not its box** | The corners of a box around an ellipse are outside the balloon. Clipping to the box repaints the artwork in those corners and erases the outline crossing them. Here the mask is clipped to the balloon's **real interior**, inset so the outline is structurally out of reach. |
-| **Cleaning escalates** | A flat balloon is filled with its own colour — exact, no model involved. Only lettering that sits on artwork goes to a reconstructor. A better cleaner plugs in with `--external`, and still only its masked pixels are used. |
-| **Text is fitted to the balloon's actual shape** | A round balloon is narrow at the top, wide in the middle and narrow again at the bottom. Every line asks how wide it is allowed to be *in its own vertical band* — which is what a letterer does by hand. |
-| **Right-to-left done properly** | No string is ever reversed. Direction and letter joining are HarfBuzz and FriBidi's job — or, on Windows and macOS, `arabic-reshaper` and `python-bidi`. `doctor` says which path is active. |
-| **Panel-aware reading order** | A balloon at the top of the next panel is read after one at the bottom of this panel, even though it sits higher on the paper. Right-to-left for manga, left-to-right for webtoons and Western comics. |
-| **The size floor is a floor** | When Persian will not fit, the text does not silently shrink: the region is reported as `text-overflow` so the translation can be shortened instead. |
-| **Sound effects are artwork** | SFX are classified separately from dialogue and the default is `keep`. Erasing hand-lettering to put a guess in its place is worse than not translating it. |
-| **Deterministic quality gates** | Untranslated regions, source script surviving anywhere inside the full balloon interior, text overflow, rendered text overlap, outline crossing, page dimension mismatch, broken reading order, modified artwork, glossary drift. Counts and pixel comparisons, not a second opinion from a model. |
-| **Bundled Vazir typography and text effects** | Official SIL OFL-1.1 Vazir fonts (`Regular`, `Medium`, `Bold`) ship inside `skills/revayat-comic/assets/fonts/` and are selected by default. Regions support `bold`, `italic`, `bold-italic`, `outline`, `shadow`, and `shout` effects plus page-level font-size harmonization and Unicode RLI/PDI isolation (`U+2067`/`U+2069`) on Latin-initial Persian sentences. |
-| **Optional Rust PyO3 hot-path acceleration** | Nine safe Rust PyO3 crates (`#![forbid(unsafe_code)]`, PEP 517 `maturin` builds) accelerate geometry (`hotcore-rs`), pixel QA (`pixcore-rs`), balloon masks (`maskcore-rs`), Persian bidi and wrap (`textcore-rs`), panel and balloon vision (`detectcore-rs`), outline/halo/SSIM checks (`qacore-rs`), cleaning and diffusion (`cleancore-rs`), band layout (`layoutcore-rs`), and packaging checks (`packcore-rs`), each with automatic pure-Python fallback, plus bulk sharding via `batch plan-shards`, `batch merge-shards`, and `batch plan-books`. |
+The workspace has 14 crates under `rust/`:
+
+- Core kernels: `hotcore-rs`, `pixcore-rs`, `maskcore-rs`, `textcore-rs`, `detectcore-rs`, `qacore-rs`, `cleancore-rs`, `layoutcore-rs`, `packcore-rs`.
+- Domain crates: `revayat-ir` (document state, worksheets, glossary, batching, atomic journaled I/O, UTC run logs), `revayat-io` (CBZ, CBR, PDF, folder, and bilingual DOCX), `revayat-vision` (detection, masking, bubble cleaning, `cosmic-text` typesetting, full-page edit prompt builder, strict QA), and `revayat-tools` (MCP stdio and loopback HTTP server, hosted OCR/translation clients with HTTPS Bearer guards, Persian linter and lexicon lookup, transactional installer, evaluation harness).
+- Binary entry point: `revayat-comic-cli`, built to `bin/revayat-comic.exe` on Windows and `bin/revayat-comic` on Linux.
+
+## Supported platforms
+
+Prebuilt release binaries and CI cover four 64-bit targets:
+
+| OS | Architecture | Target triple |
+| --- | --- | --- |
+| Linux | x64 | `x86_64-unknown-linux-gnu` |
+| Linux | arm64 | `aarch64-unknown-linux-gnu` |
+| Windows | x64 | `x86_64-pc-windows-msvc` |
+| Windows | arm64 | `aarch64-pc-windows-msvc` |
+
+32-bit platforms and macOS are not built by default.
 
 ## Install
 
-**Python 3.12 or newer.** NumPy 2.5+ and the runtime dependency floors require
-Python 3.12 or newer. CI tests 3.12, 3.13 and 3.14 on Linux, macOS and Windows,
-plus a Python 3.12 lane pinned to the literal runtime dependency minima.
+### Prerequisites
 
-```bash
-git clone https://github.com/KiaroSama/Revayat-Comic-Skill.git
-cd Revayat-Comic-Skill
-pip install -r skills/revayat-comic/requirements.txt
-```
+- To use a prebuilt binary from [GitHub Releases](https://github.com/KiaroSama/Revayat-Comic-Skill/releases): download the archive for your 64-bit Linux or Windows target and extract `revayat-comic` (or `revayat-comic.exe`).
+- To build from source: Rust `1.100.0` (pinned in `rust-toolchain.toml`), `git`, and PowerShell 7 (`pwsh`) on Windows or Bash on Linux.
 
-Then install the skill into whichever agents you use:
+### Plugin install
 
-```bash
-# macOS / Linux
-./install/install.sh
-
-# Windows
-powershell -ExecutionPolicy Bypass -File .\install\install.ps1
-```
-
-By default this installs into every agent it finds — Claude Code, Kiro, Codex,
-Cursor, Cline, Hermes, OpenCode and Antigravity. The last two also get an
-`AGENTS.md` pointer, because that is how they discover instructions. Use
-`--agent claude` for one, and `--scope project --path <dir>` for a single
-project. Both installers behave identically on Linux, macOS and Windows.
-
-### As a plugin (five supported formats)
-
-The repository ships synchronized manifests for five plugin ecosystems: Agent
-Plugins 1.0.0 (`plugin.json` and `.agents/plugins/marketplace.json`), Claude
-Code (`.claude-plugin/`), Codex (`.codex-plugin/`), Cursor (`.cursor-plugin/`),
-and Antigravity (`.antigravity-plugin/`).
+The repository ships synchronized v2.0.0 manifests for five plugin ecosystems: Agent Plugins (`plugin.json` and `.agents/plugins/marketplace.json`), Claude Code (`.claude-plugin/`), Codex (`.codex-plugin/`), Cursor (`.cursor-plugin/`), and Antigravity (`.antigravity-plugin/`).
 
 In Claude Code:
 
-```
+```text
 /plugin marketplace add KiaroSama/Revayat-Comic-Skill
 /plugin install revayat-comic@revayat-comic-skill
 ```
 
-### Voice guides included in the package
+### Build from source
 
-Revayat Comic delivers finished comics in Persian. It uses `persian` for that
-translation even when the source comic is English or Russian. For prose written
-in English or Russian, use `humanizer` or `great-russian`, respectively. Claude
-Code exposes the three as `revayat-comic:persian`, `revayat-comic:humanizer` and
-`revayat-comic:great-russian`. The standalone skill reads the same bundled files
-without another install. See the [voice guide and credits](skills/revayat-comic/references/voice/index.md).
-
-### Check the install
-
-```bash
-python skills/revayat-comic/scripts/revayat-comic.py doctor
-```
-
-`"ready": true` and you are done. Two fields under `persian` decide whether the
-output is *correct* rather than merely present:
-
-- **`"font"`** and **`"vazir"`** — the Persian face it will draw with, and
-  whether that face is the house one. **Persian here is set in Vazir**;
-  The repository ships official SIL OFL-1.1 **Vazir** fonts
-  (`Vazir-Regular.ttf`, `Vazir-Medium.ttf`, and `Vazir-Bold.ttf`, with
-  `OFL.txt`) under `skills/revayat-comic/assets/fonts/` and selects them by
-  default across Windows, Linux, and macOS unless `--font` overrides it. System
-  [Vazirmatn](https://github.com/rastikerdar/vazirmatn/releases) or any Persian
-  font can still be selected explicitly with `--font`. Tahoma, Noto Naskh Arabic,
-  and Geeza Pro draw correct Persian as fallbacks, which is why `"vazir": false`
-  is reported when a non-Vazir face is explicitly chosen.
-- **`"raqm"`** — whether Pillow shapes Arabic script itself. **This is not a
-  platform limit.** Pillow ships libraqm in the wheel on every platform; what
-  libraqm loads at run time is **FriBiDi**, and Linux images usually have one
-  while Windows and macOS usually do not. Put a `fribidi.dll` — `fribidi-0.dll`
-  or `libfribidi-0.dll` also work — in a directory on `PATH` (a directory in the
-  DLL search order; beside `python.exe` is not enough) and `raqm` turns true on
-  Windows. On Linux and macOS, install `libfribidi`. Without it the
-  `arabic-reshaper` + `python-bidi` fallback runs and the pages are still
-  correct to read.
-
-### Standalone Rust CLI
-
-`bin/revayat-comic` (`bin/revayat-comic.exe` on Windows) runs the nine Rust
-kernels without a Python runtime. Use the Python skill for full comic
-translation. The release ZIPs target 64-bit Linux and Windows on x64 and Arm64.
-
-To build from the repository root, install [Rust 1.100.0](rust-toolchain.toml)
-and the host linker. Use PowerShell 7 and the MSVC build tools on Windows:
+Windows (PowerShell 7):
 
 ```powershell
-cargo build --release --locked --manifest-path rust/revayat-comic-cli/Cargo.toml
-New-Item -ItemType Directory -Force bin | Out-Null
-Copy-Item rust/revayat-comic-cli/target/release/revayat-comic.exe bin/revayat-comic.exe
-./bin/revayat-comic.exe doctor --json
+cargo build --release --locked -p revayat-comic-cli
+New-Item -ItemType Directory -Force -Path bin | Out-Null
+Copy-Item target\release\revayat-comic.exe bin\revayat-comic.exe -Force
+.\bin\revayat-comic.exe doctor --json
 ```
 
-On Linux:
+Linux:
 
-```sh
-cargo build --release --locked --manifest-path rust/revayat-comic-cli/Cargo.toml
+```bash
+cargo build --release --locked -p revayat-comic-cli
 mkdir -p bin
-cp rust/revayat-comic-cli/target/release/revayat-comic bin/revayat-comic
+cp target/release/revayat-comic bin/revayat-comic
 ./bin/revayat-comic doctor --json
 ```
 
-| Command | What it does |
-| --- | --- |
-| `doctor --json` | Reports the version and verifies all nine kernels. |
-| `normalize-persian` | Normalizes UTF-8 Persian text from standard input. |
-| `wrap-lines` | Takes word, space, and band widths as JSON and returns word-index ranges. |
-| `sort-pages` | Sorts a JSON array of page names naturally without renaming any files. |
-| `check-geometry` | Checks JSON page dimensions against the limits you supply. |
+### Bundled voice guides
 
-See the [CLI reference](rust/revayat-comic-cli/README.md) for input examples,
-limits, and exit codes.
+Revayat Comic bundles three local writing guides under `skills/revayat-comic/references/voice/`:
 
-Each run writes a private UTF-8 `logs/revayat-comic_YYYY-MM-DD_HH-mm-ss_UTC.log`
-beside `bin/`, or under the executable's directory if it is not in `bin/`.
-Entries use `[YYYY-MM-DD HH:mm:ss UTC] [LEVEL] [revayat-comic]`. The CLI
-records the command name, version, run ID, exit code, and duration. It omits
-arguments, input, filenames, and credentials. It does not rotate or delete logs.
-Restrict access to the install directory, remove logs you no longer need, and
-review a log before sharing it.
+- `persian` for comic dialogue, narration, captions, sound effects, and Persian prose (`revayat-comic voice lint` and `revayat-comic voice lookup`).
+- `humanizer` v4.0.0 (`revayat-comic:humanizer`) for English documentation and editorial prose.
+- `great-russian` (`revayat-comic:great-russian`) for Russian prose when requested.
 
-#### Verify a release ZIP
+See [the voice index](skills/revayat-comic/references/voice/index.md) for license attribution and upstream commit pins.
 
-From the [tagged source](https://github.com/KiaroSama/Revayat-Comic-Skill/tags)
-for the release, obtain [`docs/signing/publisher.json`](docs/signing/publisher.json).
-Use that copy to establish trust before opening the ZIP. Download the ZIP, its
-`.sig`, `SHA256SUMS`, and `SHA256SUMS.sig` from the matching
-[GitHub release](https://github.com/KiaroSama/Revayat-Comic-Skill/releases). In
-the download directory, set `METADATA` to the trusted JSON file's path; set
-`ZIP`, `TAG`, and `SHA` to the archive filename, its tag, and the full commit
-SHA the annotated tag points to. In Bash with OpenSSL, Python 3, and GitHub CLI:
+## Usage
 
-```sh
-python3 -c 'import json,sys; from pathlib import Path; p=Path(sys.argv[1]); Path("publisher.pem").write_bytes(json.loads(p.read_text(encoding="utf-8"))["public_key_pem"].encode("ascii"))' "$METADATA"
-openssl dgst -sha256 -verify publisher.pem -signature SHA256SUMS.sig SHA256SUMS
-openssl dgst -sha256 -verify publisher.pem -signature "$ZIP.sig" "$ZIP"
-gh attestation verify "$ZIP" --repo KiaroSama/Revayat-Comic-Skill \
-  --signer-workflow KiaroSama/Revayat-Comic-Skill/.github/workflows/release.yml \
-  --source-ref "refs/tags/$TAG" --source-digest "$SHA" --deny-self-hosted-runners
+### Pipeline commands
+
+Every stage reads and writes the workspace `doc.json` created by `import`, leaving original pages untouched in `originals/`.
+
+Windows (PowerShell 7):
+
+```powershell
+.\bin\revayat-comic.exe import chapter.cbz --work .\work --direction rtl
+.\bin\revayat-comic.exe detect --doc .\work\doc.json
+.\bin\revayat-comic.exe mask --doc .\work\doc.json
+.\bin\revayat-comic.exe crops --doc .\work\doc.json
+.\bin\revayat-comic.exe worksheet build --doc .\work\doc.json --out .\work\worksheets
 ```
 
-Require every command to succeed, and compare the ZIP's SHA-256 digest with
-its entry in the signed `SHA256SUMS`. The project signs with its own self-signed
-publisher key. This is a detached signature, not commercial Windows
-Authenticode or Apple notarization.
+After filling the worksheets (manually or through the six-stage agent workflow):
 
-## Use
-
-Tell the agent:
-
-> Translate this manga chapter into Persian: `chapter-01.cbz`
-
-It does the rest. `SKILL.md` holds eleven steps and the agent runs them in
-order. Step 5 — reading the page and translating it — is the agent's own work,
-not a script's.
-
-### Or drive it yourself
-
-```bash
-PY=python   # or python3
-SKILL=skills/revayat-comic
-
-$PY $SKILL/scripts/revayat-comic.py doctor
-$PY $SKILL/scripts/revayat-comic.py import chapter-01.cbz --out work/ --source-language ja --direction rtl
-$PY $SKILL/scripts/revayat-comic.py detect --doc work/comic.json
-$PY $SKILL/scripts/revayat-comic.py mask   --doc work/comic.json
-$PY $SKILL/scripts/revayat-comic.py crops  --doc work/comic.json
-$PY $SKILL/scripts/revayat-comic.py worksheet build --doc work/comic.json
-#   … look at work/crops/pNNNN/*.png and translate the worksheets …
-$PY $SKILL/scripts/revayat-comic.py worksheet merge --doc work/comic.json
-$PY $SKILL/scripts/revayat-comic.py glossary scan --doc work/comic.json
-$PY $SKILL/scripts/revayat-comic.py falint fix --doc work/comic.json
-#   … a watermark in the same place on every page? mark it, then re-run mask …
-#   $PY $SKILL/scripts/revayat-comic.py watermark --doc work/comic.json --box "12 1840 300 44"
-$PY $SKILL/scripts/revayat-comic.py clean   --doc work/comic.json
-$PY $SKILL/scripts/revayat-comic.py typeset --doc work/comic.json
-$PY $SKILL/scripts/revayat-comic.py qa check --doc work/comic.json
-$PY $SKILL/scripts/revayat-comic.py export --doc work/comic.json --out out/chapter-fa.cbz
+```powershell
+.\bin\revayat-comic.exe worksheet merge --doc .\work\doc.json --in .\work\worksheets
+.\bin\revayat-comic.exe glossary check --doc .\work\doc.json
+.\bin\revayat-comic.exe falint check --doc .\work\doc.json
+.\bin\revayat-comic.exe clean --doc .\work\doc.json
+.\bin\revayat-comic.exe typeset --doc .\work\doc.json
+.\bin\revayat-comic.exe qa check --doc .\work\doc.json --strict
+.\bin\revayat-comic.exe export --doc .\work\doc.json --format cbz --out .\work\chapter-fa.cbz
+.\bin\revayat-comic.exe qa package --doc .\work\doc.json --out .\work\chapter-fa.cbz
 ```
 
-**In:** CBZ, CBR, a comic PDF, a folder of images, or one image.
-**Out:** CBZ, PDF, or a folder of pages — with a `ComicInfo.xml` that records the
-reading direction, so readers do not pair every two-page spread back to front.
+Additional commands:
 
-**Source languages:** Japanese, Korean, Chinese, English — and anything else the
-agent can read off a crop. **Target:** Persian.
+- `fullpage-prompt --doc <doc.json> --page <id> --out <manifest.json>`: build an OCR-verified full-page image-edit manifest and prompt for pages with art-integrated text, speedlines, or complex covers.
+- `review-docx --doc <doc.json> --out <review.docx>`: export an RTL Persian bilingual review document.
+- `watermark --doc <doc.json> ...`: mark an exact authorized watermark rectangle for removal.
+- `batch plan|merge|status`: split long chapters into shards and merge them safely.
+- `voice lint [--check|--fix] [--style]` and `voice lookup <file>`: run the pure Rust Persian linter and terminology lookup.
+- `serve --mcp` or `serve --http 127.0.0.1:0`: expose all pipeline stages over MCP stdio or concurrent loopback HTTP.
+- `ocr` and `translate`: optional hosted model helpers (require explicit HTTPS endpoint and Bearer token).
+- `install`: transactional skill installer.
+- `eval`: synthetic fixture generator and scorer.
 
-## Without a shell
+### Six-stage multi-agent workflow
 
-The CLI is the recommended path. Where a host cannot run a subprocess at all,
-the same stages are reachable over MCP or loopback HTTP:
+For full chapters, follow [references/multi-agent-workflow.md](skills/revayat-comic/references/multi-agent-workflow.md):
 
-```bash
-revayat-comic serve mcp                   # JSON-RPC 2.0 over stdio
-revayat-comic serve http --port 8765      # token printed to stderr
-```
+1. Initial translation (`ترجمه اولیه`): look up official series character names and terminology online first, then translate into natural spoken Persian.
+2. Typesetting and layout (`صفحه آرایی`): assign line breaks, punctuation, font scales, and full-page edit zones.
+3. Review (`بازبینی`): check fidelity against source crops, terminology consistency, and Persian mechanics.
+4. Apply translation (`اعمال ترجمه`): merge worksheets, run `clean` and `typeset`, and composite verified full-page edits onto original dimensions.
+5. File recheck and fix (`چک مجدد فایل و اصلاح مشکلات`): inspect every rendered page visually and run `qa check --strict`, fixing all issues in one batch.
+6. Final review and delivery (`بازبینی نهایی و تحویل`): export lossless CBZ and PDF and verify outputs with `qa package`.
 
-Seventeen tools — `revayat_doctor` plus one per stage — each taking the arguments
-the CLI takes. It is a transport, not a second implementation: every tool is
-that stage's own `main`, so there is nothing reachable here that the CLI cannot
-do. HTTP binds `127.0.0.1` only and requires the token in `X-Revayat-Token`,
-because these calls write files and a page in a browser can POST to localhost.
+### Runtime logs
 
-Step 5 is still yours: the reading model driving the server is the transcriber,
-and no tool here can stand in for it. Details in
-[`references/serving.md`](skills/revayat-comic/references/serving.md).
-
-## How it works
-
-```
-import → detect → mask → crops → worksheet ⇄ [ the agent reads and translates ]
-                                     ↓
-                            merge → glossary → falint
-                                     ↓
-                              clean → typeset → qa → export
-```
-
-Every stage talks to `comic.json` and never to another stage, so a detector can
-be swapped or a renderer rewritten without any of the others noticing. The
-original page is never written to; each stage writes a new file, and the
-original's SHA-256 is re-checked at the end.
-
-| Module | Role |
-| --- | --- |
-| `pageir.py` | the page document, atomic UTF-8 IO, geometry, reading order, script detection |
-| `stages.py` | what each stage ran against, in what order, and what that makes stale |
-| `readers.py` | CBZ / CBR / PDF / folder / image → immutable page images |
-| `detect.py` | panels, balloons in both polarities, free lettering |
-| `masks.py` | glyph shapes clipped to the balloon interior |
-| `crops.py` | the overview and crop sheets the reader looks at |
-| `sheet.py` | the sheet a reader fills in: header, glossary table, blocks |
-| `worksheet.py` | the `@@` protocol, and every named way a reply can be wrong |
-| `worksheet_paths.py` | stable worksheet locations across independent working directories |
-| `glossary.py` | names and terms, and the drift check |
-| `falint.py` | Persian typography, mechanically |
-| `clean.py` | tiered repair and the mask-bounded composite |
-| `typefont.py` | the Persian face, and the shaping engine |
-| `typeset.py` | balloon-shaped fitting, wrapping, rendering |
-| `qa.py` | the gate, including the pixel-preservation proof |
-| `package.py` | verifying what actually shipped against what the export wrote |
-| `export.py` | CBZ, PDF, folder |
-| `regions.py` | what a region's decisions MEAN, and what a page with none of them is |
-| `certify.py` | whether the bytes about to ship come from the run that claims them |
-| `journal.py` | the record an export leaves so an interrupted run can be finished |
-| `pdfpage.py` | what a PDF sheet SHOWS, as opposed to what it contains |
-| `writers.py` | assembling each package format and putting it where it belongs |
-| `lettering.py` | matching a drawn sound effect's slant, arc and recession |
-| `providers.py` | the optional second-opinion boundary, and its fakes |
-| `adapters.py` | real providers — currently `manga-ocr`, local and keyless |
-| `context.py` | the bounded chapter context a translator gets |
-| `ocr.py` | the optional OCR stage — off by default |
-| `translate.py` | the optional machine translator — off by default |
-
-**Two stages are optional and off by default**, because the model running the
-skill already reads and already sees:
-
-```
-ocr         a second opinion on the source text, when a specialist beats the
-            host (vertical Japanese) or the host has no vision at all
-qa visual   a model's opinions about things a deterministic check cannot judge,
-            advisory only — it can never pass or fail a run
-context     the bounded chapter package a translator is given: locked glossary,
-            the previous pages' dialogue, who has spoken. Cheap and offline —
-            paste its JSON into the translating sub-agent's prompt
-translate   machine translation for a run with nobody reading the page. It
-            fills empty regions only and never touches a locked one
-```
-
-Neither is in the diagram above and neither runs unless you name a provider.
-`providers.py` explains when one is worth the second inference bill and when it
-is not; every role ships a deterministic fake, so the suite tests the boundary
-offline with no credential anywhere.
-
-The preservation guarantee is one line, and it is why an external cleaner is
-safe to plug in:
-
-```
-out = original × (1 − alpha) + repaired × alpha        where alpha ≤ mask
-```
-
-Because `alpha` is zero everywhere the mask is zero, every pixel outside the
-authorised area is the original byte by construction rather than by good
-behaviour. Hand `--external` a page a generative model redrew from scratch and
-only its masked pixels are ever used.
-
-## What it is honest about
-
-- **Two real volumes have been through it; that is not a corpus.** Chapters of
-  *Sekirei* and *Gleipnir* were translated, cleaned, typeset and exported, and
-  each one found defects the generated fixtures could not. Two books is enough to
-  show the pipeline holds and nowhere near enough to have met every drawing
-  style: the second book's borderless balloons and white-on-black lettering were
-  both invisible until it arrived. Expect to move the knobs in
-  `references/detection.md` on a new scan — they are all command-line flags for
-  exactly that reason.
-- **Free lettering is the weak detector, and merged balloons are the weak
-  region.** Two speech balloons drawn touching come back as one; five automatic
-  ways of splitting them were measured and none is good enough to ship. You fix
-  it from the crop with `drop: yes` and two `@@ +name` blocks, which takes a few
-  seconds and is documented.
-- **Sound effects drawn into the artwork stay drawn** under the default policy.
-  Redrawing hand-lettering — matching slant, stroke weight, outline and
-  perspective — is a lettering job, and a half-hearted version looks worse than
-  leaving the Japanese in place.
-- **Free-lettering detection is the weak half.** It finds the obvious sound
-  effects and is wrong about the rest, which is why everything it returns is
-  marked low-confidence and shown to you as a crop.
-- **Telea smooths, it does not redraw.** Lettering over detailed artwork gets a
-  reconstruction, not an invention. `clean` reports `inpaint_heavy_pages` so you
-  know which pages to look at.
-- **The reshaper fallback draws presentation forms.** On Windows and macOS the
-  text on the page is correct to read but is a picture of Persian rather than
-  searchable Persian.
+Each CLI invocation writes a UTF-8 log file next to the binary or project under `logs/revayat-comic_YYYY-MM-DD_HH-mm-ss_UTC.log` with `[YYYY-MM-DD HH:mm:ss UTC] [LEVEL] [COMPONENT] Message` lines. Authorization headers, Bearer tokens, API keys, passwords, and credentialed URLs are redacted before writing. Pass `--verbose` (or `REVAYAT_LOG_LEVEL=DEBUG`) for detailed diagnostics, and attach the latest log file when reporting issues.
 
 ## Documentation
 
-At translation startup, the skill asks whether to use optional parallel
-translation and editing. After explicit opt-in, native subagents draft disjoint
-assignments and cross-review; one coordinator reconciles voices/glossary and
-commits the results. Sequential remains the default, and dependent scenes stay
-ordered. [Parallel workflow](skills/revayat-comic/references/parallel-workflow.md).
-
-The skill now carries source-specific reading and voice guidance for Japanese,
-Korean, Chinese, French, Spanish and English, with a direct-to-Persian fallback
-for other languages. The optional translator receives the same guidance in its
-chapter context. [Research notes](docs/research/README.md) distinguish inspected
-Persian support from untested translation-quality claims; no upstream code,
-prompts, models or comic pages were copied.
-
-Every agent using the skill must write a UTF-8 activity log **directly beside
-the translated output file**, covering translation, corrections, quality
-decisions, QA and delivery. For folder output, the log goes inside that folder.
-See [translation logging](skills/revayat-comic/references/translation-log.md).
-The scripts' diagnostic logs do not replace this record.
-
-Native raster dimensions and known PDF visible paper dimensions are preserved
-separately. Poor scans are assessed for useful enhancement on separate reading
-copies; a whole-page enhanced derivative cannot claim unchanged artwork against
-the original. See [preservation and quality](skills/revayat-comic/references/artwork-preservation.md).
-
-The optional `review-docx` stage exports an editable Word companion with page and
-region IDs, source/Persian/full text and review states. It uses only the existing
-Python runtime. [Native document workflows](skills/revayat-comic/references/native-documents.md)
-ship inside every installed skill copy and cover both that companion and comic
-PDF processing. They need no separately installed Docx/PDF Processing Pro plugin.
-
-```bash
-python skills/revayat-comic/scripts/revayat-comic.py review-docx \
-  --doc work/comic.json --out out/chapter-review.docx
-```
-
-Word edits are review material; apply corrections through the identified
-worksheets before rebuilding the primary comic. Existing destinations are refused.
-
-- [`SKILL.md`](skills/revayat-comic/SKILL.md) — the eleven steps, and the QA
-  code table
-- [`references/translation-policy.md`](skills/revayat-comic/references/translation-policy.md)
-  — what to give the translating sub-agent
-- [`references/source-languages.md`](skills/revayat-comic/references/source-languages.md)
-  — language-specific reading, Persian voices and register
-- [`references/persian-typesetting.md`](skills/revayat-comic/references/persian-typesetting.md)
-  — RTL, shaping, fonts, fitting a balloon
-- [`references/detection.md`](skills/revayat-comic/references/detection.md) —
-  thresholds, difficult pages, correcting a region
-- [`references/artwork-preservation.md`](skills/revayat-comic/references/artwork-preservation.md)
-  — masks, cleaning tiers, what QA proves
-- [`references/sound-effects.md`](skills/revayat-comic/references/sound-effects.md)
-  — the four policies and how to choose
-- [`references/sfx-glossary.md`](skills/revayat-comic/references/sfx-glossary.md)
-  — Japanese and English manga SFX table with Persian equivalents and traps
-- [`references/watermarks.md`](skills/revayat-comic/references/watermarks.md)
-  — erasing a mark, and whether it is yours to erase
-- [`references/ocr.md`](skills/revayat-comic/references/ocr.md) — reading with
-  your own eyes, and when a model helps
-- [`references/serving.md`](skills/revayat-comic/references/serving.md) — MCP
-  and loopback HTTP, for a host that cannot run the CLI
-- [`references/troubleshooting.md`](skills/revayat-comic/references/troubleshooting.md)
-  — the failures you are most likely to hit
-- [`AGENTS.md`](AGENTS.md) — for agents working *on* this repository
+- [SKILL.md](skills/revayat-comic/SKILL.md): full agent workflow and QA codes
+- [references/multi-agent-workflow.md](skills/revayat-comic/references/multi-agent-workflow.md): six-stage agent roles and prompt templates
+- [references/fullpage-image-edit.md](skills/revayat-comic/references/fullpage-image-edit.md): bubbles-emptied full-page editing workflow and prompt rules
+- [references/translation-policy.md](skills/revayat-comic/references/translation-policy.md): translation rules, spoken register, and glossary discipline
+- [references/persian-typesetting.md](skills/revayat-comic/references/persian-typesetting.md): RTL shaping, line spacing, and balloon fitting
+- [references/detection.md](skills/revayat-comic/references/detection.md): region detection thresholds and manual corrections
+- [references/artwork-preservation.md](skills/revayat-comic/references/artwork-preservation.md): masks, cleaning tiers, and pixel QA
+- [references/sound-effects.md](skills/revayat-comic/references/sound-effects.md) and [references/sfx-glossary.md](skills/revayat-comic/references/sfx-glossary.md): SFX handling and Persian glossary
+- [references/serving.md](skills/revayat-comic/references/serving.md): MCP stdio and loopback HTTP server
+- [references/recovery.md](skills/revayat-comic/references/recovery.md): atomic export journal and recovery
+- [AGENTS.md](AGENTS.md): contributor and agent repository guide
 
 ## Development
 
-Interrupted exports and worksheet merges have explicit recovery routes that
-preserve reader edits, original inputs and previous editions. See
-[recovery and integrity](skills/revayat-comic/references/recovery.md) for the
-commands, package-verification limits and sanitized UTF-8 run logs.
+Run the full check suite locally with Rust `1.100.0`:
 
-```bash
-pip install -r skills/revayat-comic/requirements.txt -r tests/requirements.txt
-python -m pytest tests -q
-python tests/e2e_pipeline.py
-python -m ruff check skills/revayat-comic/scripts tests
-python evaluation/score.py --answers my-answers.json
+```powershell
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --locked
 ```
 
-Python 3.12 or newer. The linter runs a small rule set (undefined names,
-unused imports, shadowed names, dead variables) rather than style rules; `ruff.toml`
-explains what is off and why. Dependencies are audited weekly against the advisory
-database by `.github/workflows/dependency-audit.yml`.
-
-The regression suite also needs an explicit DejaVu test face. See
-[test prerequisites and coverage](tests/README.md); CI installs and checks it.
-
-Fixtures are generated, not committed. There are no comic pages in this
-repository: they bloat it and the content is usually someone else's. A CI check
-enforces that.
-
-Pages are drawn with plain shapes rather than real Japanese, deliberately — the
-detector measures geometry and does not care which script the ink came from, and
-a CJK font is not installed on a stock CI runner.
-
-`tests/e2e_pipeline.py` runs every stage through the real CLI against a
-generated chapter, so a break in the dispatcher, an argument name or a report
-field shows up even when each module's own tests pass. CI runs it on Linux,
-macOS and Windows.
-
-Linux's main suite exercises CBR with a real archive backend. The separate
-integration workflow checks that backend again and processes a whole chapter at
-A4/300 dpi. Runtime users install the skill requirements; developers also install
-`tests/requirements.txt` for pytest, timeout, Ruff and font-subset tooling.
-
-In GitHub Actions, run **CI**, **Optional toolchain integration**, and **Source
-evidence** manually against the revision under review. Security scans and
-pull-request dependency review keep their own triggers.
+No real copyrighted comic pages are stored in this repository. All test suites generate synthetic fixtures at runtime. GitHub Actions builds and verifies all four 64-bit Linux and Windows targets, checks plugin manifest versions, and runs CodeQL, Gitleaks, Semgrep, and dependency review.
 
 ## Credits
 
-The problem shape — detect, OCR, translate, clean, typeset — is the one worked
-out by the open manga-translation projects that came before this:
-[manga-image-translator](https://github.com/zyddnys/manga-image-translator),
-[BallonsTranslator](https://github.com/dmMaze/BallonsTranslator) and
-[comic-translate](https://github.com/ogkalu2/comic-translate). This one differs
-in where the reading happens and in treating artwork preservation as something
-to prove, but the ground was theirs.
+The pipeline structure draws on prior open manga translation tools: [manga-image-translator](https://github.com/zyddnys/manga-image-translator), [BallonsTranslator](https://github.com/dmMaze/BallonsTranslator), and [comic-translate](https://github.com/ogkalu2/comic-translate).
 
-Persian text layout rests on [HarfBuzz](https://harfbuzz.github.io/) and
-[FriBidi](https://github.com/fribidi/fribidi) through
-[Pillow](https://github.com/python-pillow/Pillow), with
-[arabic-reshaper](https://github.com/mpcabd/python-arabic-reshaper) and
-[python-bidi](https://github.com/MeirKriheli/python-bidi) where Pillow has no
-RAQM. Detection, masking and inpainting use
-[OpenCV](https://github.com/opencv/opencv); PDF input and output use
-[PyMuPDF](https://github.com/pymupdf/PyMuPDF).
+Pure Rust rendering and packaging rely on [cosmic-text](https://github.com/pop-os/cosmic-text), [lopdf](https://github.com/J-F-Liu/lopdf), [pdf-writer](https://github.com/typst/pdf-writer), [hayro](https://github.com/LaurenzV/hayro), [rars](https://github.com/g-vash/rars), [zip](https://github.com/zip-rs/zip), [image](https://github.com/image-rs/image), and [Vazirmatn](https://github.com/rastikerdar/vazirmatn).
+
+## Author
+
+Author: Kiaro Sama
+GitHub: https://github.com/KiaroSama
+
+## License
+
+Copyright (c) Kiaro Sama. Released under the [GNU General Public License v3.0 or later](LICENSE).
 
 ## Donate
 
@@ -513,32 +214,3 @@ If this project helps you, donations are appreciated.
 | Litecoin (LTC) | LTC | `ltc1qntqnnrunadurnw4cshv3qgspywrueyyeyngwuy` |
 | Solana (SOL) | Solana | `7B2wkczUjmkDhETwQuknBL8sUsbuV7nErxc317TmQuwR` |
 | Polygon (POL) | Polygon | `0x0Bd0BA443a8B9cf15922bf7f0Bb0a4b495fD06Ef` |
-
-## Author
-
-Author: Kiaro Sama
-GitHub: https://github.com/KiaroSama
-
-## License
-
-[GNU General Public License v3.0 or later](LICENSE).
-
-This program is free software: you can redistribute it and/or modify it under
-the terms of the GNU General Public License as published by the Free Software
-Foundation, either version 3 of the License, or (at your option) any later
-version. It is distributed in the hope that it will be useful, but WITHOUT ANY
-WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
-PARTICULAR PURPOSE. See the licence for details.
-
-Fonts, models and the artwork this tool processes carry their own licences, and
-none of them are distributed with this repository.
-
-Nor is any dependency: they are declared in `requirements.txt` and installed
-from PyPI. One of them is worth knowing about. **PyMuPDF is dual-licensed —
-AGPL-3.0 or a commercial licence from Artifex** — which is a stronger copyleft
-than the rest of the stack (Pillow, NumPy and OpenCV are permissive). GPLv3
-§13 permits the combination, so distributing this repository is fine; what the
-AGPL adds is the network clause, which reaches anyone who runs a modified
-PyMuPDF as a service. It is only needed for PDF input and PDF export — CBZ,
-CBR, folders and image files never touch it, and the pipeline degrades to a
-message rather than an error when it is absent.

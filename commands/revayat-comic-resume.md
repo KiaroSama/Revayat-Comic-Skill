@@ -11,8 +11,8 @@ Work out where it stopped rather than starting again. `comic.json` records which
 stages have run under `stages`, and these two commands say what is left:
 
 ```bash
-$PY $SKILL_DIR/scripts/revayat-comic.py worksheet status --doc <document>
-$PY $SKILL_DIR/scripts/revayat-comic.py qa check --doc <document>
+revayat-comic worksheet status --doc <document>
+revayat-comic qa check --doc <document>
 ```
 
 Then continue from the first step in `SKILL.md` that has not been done. Re-running

@@ -1,23 +1,8 @@
 //! Archive order, page geometry and raster kernels.
 #![forbid(unsafe_code)]
 
-#[cfg(feature = "python")]
-pub(crate) const NAMES_ERROR: &str = "names must be a list of strings";
-#[cfg(feature = "python")]
-pub(crate) const ROW_ERROR: &str = "dims must be a list of two-element lists";
-#[cfg(feature = "python")]
-pub(crate) const BOUNDS_ERROR: &str =
-    "dimension bounds must have a finite aspect ratio >= 1 and positive integer edges and area";
-#[cfg(feature = "python")]
-pub(crate) const RGB_DIMENSIONS_ERROR: &str = "width and height must be positive integers";
-#[cfg(any(feature = "python", test))]
+#[cfg(test)]
 const RGB_BUFFER_ERROR: &str = "RGB buffer must contain exactly width * height * 3 bytes";
-#[cfg(feature = "python")]
-pub(crate) const PDF_DIMENSIONS_ERROR: &str = "page dimensions must be positive integers";
-#[cfg(feature = "python")]
-pub(crate) const TILE_ERROR: &str = "tile_size must be a positive integer";
-#[cfg(feature = "python")]
-pub(crate) const TOL_ERROR: &str = "tol must be an integer between 0 and 255";
 
 #[derive(Ord, PartialOrd, Eq, PartialEq)]
 enum Run {
@@ -110,7 +95,7 @@ pub fn compute_pdf_page_layout(
     Ok(layout)
 }
 
-#[cfg(any(feature = "python", test))]
+#[cfg(test)]
 pub(crate) fn check_rgb(
     rgb: Option<&[u8]>,
     width: usize,

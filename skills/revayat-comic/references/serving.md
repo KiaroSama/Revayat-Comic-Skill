@@ -155,8 +155,8 @@ The command is a plain stdio server, so any MCP client takes it the same way:
 {
   "mcpServers": {
     "revayat-comic": {
-      "command": "python",
-      "args": ["<skill>/scripts/revayat-comic.py", "serve", "mcp"]
+      "command": "revayat-comic",
+      "args": ["serve", "--mcp"]
     }
   }
 }

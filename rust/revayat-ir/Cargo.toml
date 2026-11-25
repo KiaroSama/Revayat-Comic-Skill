@@ -1,0 +1,19 @@
+[package]
+name = "revayat-ir"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.100.0"
+publish = false
+
+[dependencies]
+textcore_rs = { package = "textcore-rs", path = "../textcore-rs", default-features = false }
+packcore_rs = { package = "packcore-rs", path = "../packcore-rs", default-features = false }
+image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg", "png", "tiff", "webp"] }
+regex = "1.13"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["arbitrary_precision", "preserve_order", "unbounded_depth"] }
+sha2 = "0.10"
+tempfile = "3"
+thiserror = "2.0"
+time = { version = "0.3", features = ["formatting", "macros"] }
+unicode-general-category = "1.0"

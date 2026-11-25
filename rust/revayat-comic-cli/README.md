@@ -1,60 +1,88 @@
-# Revayat Comic CLI
+# Revayat Comic CLI 2.0.0
 
-This standalone executable runs the existing Rust kernels without Python. It does not run the full comic translation workflow.
+`revayat-comic` imports comic pages, prepares translation worksheets, sets Persian lettering in the cleaned artwork, and exports CBZ, PDF, or page images. The executable uses Rust for the local pipeline and includes the Vazir fonts and Persian terminology data. Hosted OCR and translation are optional.
 
 ## Build and stage
 
-Build from the repository root with Rust 1.100.0 and its host linker. On Windows, use PowerShell 7 and the MSVC build tools:
+Use Rust 1.100.0 and the host linker. The workspace targets 64-bit Windows and Linux on x64 and arm64. Build from the repository root.
+
+Windows, in PowerShell 7 with the MSVC build tools:
 
 ```powershell
-cargo build --release --locked --manifest-path rust/revayat-comic-cli/Cargo.toml
+cargo build --release --locked -p revayat-comic-cli
 New-Item -ItemType Directory -Force bin | Out-Null
-Copy-Item rust/revayat-comic-cli/target/release/revayat-comic.exe bin/revayat-comic.exe
+Copy-Item target/release/revayat-comic.exe bin/revayat-comic.exe
 ./bin/revayat-comic.exe doctor --json
 ```
 
-On Linux:
+Linux:
 
 ```sh
-cargo build --release --locked --manifest-path rust/revayat-comic-cli/Cargo.toml
+cargo build --release --locked -p revayat-comic-cli
 mkdir -p bin
-cp rust/revayat-comic-cli/target/release/revayat-comic bin/revayat-comic
+cp target/release/revayat-comic bin/revayat-comic
 ./bin/revayat-comic doctor --json
 ```
 
-## Commands
+## Translate a chapter
+
+Run `revayat-comic <command> --help` for flags. The examples assume `revayat-comic` is on your PATH; otherwise use the executable path above.
+
+```sh
+revayat-comic import chapter.cbz --out work --source-language ja --direction rtl
+revayat-comic detect --doc work/comic.json
+revayat-comic mask --doc work/comic.json
+revayat-comic crops --doc work/comic.json
+revayat-comic worksheet build --doc work/comic.json
+```
+
+Keep each worksheet's fingerprint and region IDs. Fill in the source text and the Persian `fa:` fields, then save a sibling `<page>.done.txt` for each page. Use `worksheet status` to inspect the handoff before merging.
+
+```sh
+revayat-comic worksheet merge --doc work/comic.json
+revayat-comic falint fix --doc work/comic.json
+revayat-comic clean --doc work/comic.json --bubbles-only
+revayat-comic typeset --doc work/comic.json
+revayat-comic qa check --strict --doc work/comic.json
+revayat-comic export --doc work/comic.json --out translated.cbz --review-docx review.docx
+revayat-comic qa package --doc work/comic.json --package translated.cbz
+```
+
+Use `.pdf` for a PDF or a directory path for page images. Export checks the original and rendered artifacts against their committed digests. Use `--draft` only for an unfinished edition. `review-docx --doc work/comic.json --out review.docx` creates the bilingual review file separately.
+
+- `glossary scan` adds recurring terms and `glossary check` reports drift. Both take `--doc`. `falint check` reports text issues without writing.
+- `watermark --doc work/comic.json --box x,y,w,h` marks a fixed erase rectangle. Run `mask` again before `clean`; omit `--bubbles-only` to process the watermark.
+- `fullpage-prompt --doc work/comic.json --page p0001` emits the full-page edit manifest after cleaning. It does not contact an image service. Use `<page>.png` filenames for `typeset --external-dir`; imported edits are confined to the lettering mask and remain unverified until the lettering is reviewed. The CLI will not certify them as locally fitted text.
+- `context --doc work/comic.json --page p0001` prints page context. `ocr` and `translate` use an OpenAI-compatible endpoint configured through `REVAYAT_API_BASE`, `REVAYAT_API_KEY`, and the relevant `REVAYAT_OCR_MODEL` or `REVAYAT_TRANSLATION_MODEL` variable. Set `--model` to override the model. Hosted transcription and translation send source material to that endpoint. Local manga-OCR is not included.
+- `batch plan --doc work/comic.json --shards 2`, `batch status --batch <dir>`, and `batch merge --doc work/comic.json --batch <dir>` manage local translation shards.
+- `voice lint --check --style lines.txt`, `voice lookup <text>`, `install --repo <checkout> --base <target> --agent <name>`, and `eval build --out <dir>` / `eval score <answers.json>` run the corresponding support tools.
+
+## Clients
+
+`revayat-comic serve --stdio` uses newline-delimited MCP JSON-RPC. Each tool's `arguments.args` array contains the same flags and values as the CLI subcommand. `revayat-comic serve --http 127.0.0.1:8080` runs loopback REST. Set `REVAYAT_HTTP_TOKEN` before starting it and send that value in `X-Revayat-Token`. Use `GET /tools` or `POST /tools/<stage>` with `{"args":[...]}`.
+
+## Kernel commands
 
 | Command | Standard input | Standard output |
 |---|---|---|
-| `--help`, `--version` | None | Usage or executable version. |
-| `doctor [--json]` | None | Version, overall status, and one result per kernel. JSON fields are `version`, `ok`, and `kernels`. |
-| `normalize-persian` | UTF-8 text | Normalized UTF-8 text in logical order. Protected spans and newline behavior follow the existing text kernel. |
-| `wrap-lines` | JSON object with `word_widths`, `space_width`, and `band_widths` | Zero-based `[start, end)` word-index pairs, or `[]` if the words do not fit. |
-| `sort-pages` | JSON array of nonempty names without NUL characters | All original names in natural order, including duplicates. The command does not touch the named files. |
-| `check-geometry` | JSON object with `dimensions`, `max_aspect_ratio`, `min_edge`, and `max_pixels` | JSON with boolean `ok` and zero-based `invalid_pages`. |
+| `doctor [--json]` | None | Version, overall status and one result per kernel. JSON fields are `version`, `ok`, and `kernels`. |
+| `normalize-persian` | UTF-8 text | Normalized text in logical order. |
+| `wrap-lines` | `{"word_widths":["5","5"],"space_width":"1","band_widths":["11"]}` | Zero-based `[start, end)` word-index pairs, or `[]` when the words do not fit. |
+| `sort-pages` | `["page10.png","page2.png","page2.png"]` | Names in natural order, including duplicates. Does not touch files. |
+| `check-geometry` | `{"dimensions":[[1200,1800]],"max_aspect_ratio":2,"min_edge":100,"max_pixels":4000000}` | JSON with `ok` and zero-based `invalid_pages`. |
 
-For example, in PowerShell:
+The kernel commands cap stdin at 1 MiB. `wrap-lines` accepts 4,096 word widths and up to 128 band widths. Supply widths as strings of up to 128 ASCII digits. `sort-pages` and `check-geometry` each accept at most 4,096 entries.
 
-```powershell
-'{"word_widths":["5","5"],"space_width":"1","band_widths":["11"]}' | ./bin/revayat-comic.exe wrap-lines
-'["page10.png","page2.png","page2.png"]' | ./bin/revayat-comic.exe sort-pages
-'{"dimensions":[[1200,1800]],"max_aspect_ratio":2,"min_edge":100,"max_pixels":4000000}' | ./bin/revayat-comic.exe check-geometry
-```
+## Status and logs
 
-Each invocation accepts one input up to 1 MiB. `wrap-lines` accepts up to 4,096 word widths and 1 to 128 band widths. Supply widths as strings of 1 to 128 ASCII digits. Words must be positive; spaces and bands can be zero. `sort-pages` and `check-geometry` each accept up to 4,096 entries. Geometry takes `[width, height]` pairs, positive integers up to `2^53` (including `min_edge` and `max_pixels`), and a finite `max_aspect_ratio` of at least `1`.
+Exit `0` means success; exit `1` means a check reported findings or a kernel failed. Exit `2` means invalid arguments or malformed kernel input. Exit `4` means a pipeline stage could not finish. Commands emit machine-readable reports to stdout when available and diagnostics to stderr.
 
-Exit `0` means success. Exit `1` means a runtime failure, a failed `doctor` check, or invalid page geometry. Geometry still prints its report when pages fail validation. Exit `2` means invalid arguments or malformed, non-UTF-8, or oversized input. Diagnostics go to stderr.
-
-## Logs
-
-A staged `bin/revayat-comic` or `bin/revayat-comic.exe` writes logs beside `bin/`. For other layouts the executable writes `logs/` inside its own directory. Changing your working directory does not change the log location.
-
-Each run writes a UTF-8 file named `logs/revayat-comic_YYYY-MM-DD_HH-mm-ss_UTC.log`. Runs that collide on the same UTC timestamp get suffixes such as `_01` before `.log`. `INFO` records startup and successful completion; `ERROR` records nonzero outcomes. Logs include the command, version, run ID, exit code, and duration. They exclude arguments, raw input, filenames, and credentials. On Unix, the program creates logs with owner-only permissions. On Windows, keep the installation under a directory with access restricted to the intended users.
-
-If file logging fails, the CLI reports it on stderr and leaves command output and exit status unchanged. The CLI never rotates or deletes logs. Remove old logs when you no longer need them, and review a log before attaching it to a support report.
+The executable creates UTF-8 `logs/revayat-comic_YYYY-MM-DD_HH-mm-ss_UTC.log` files beside its directory, or one level above if installed in `bin/`. Logs record command names, versions, results, and duration, without arguments, source text or credentials. If file logging fails, the CLI reports it on stderr and preserves the command's exit status. It does not rotate logs; remove old logs when you no longer need them.
 
 ## Test
 
 ```sh
-cargo test --manifest-path rust/revayat-comic-cli/Cargo.toml --locked
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --locked
 ```

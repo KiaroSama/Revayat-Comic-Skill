@@ -3,7 +3,7 @@ name: revayat-comic
 description: Translate manga, manhwa, manhua and Western comics into Persian and produce a finished CBZ, PDF or folder of pages. Detects panels, speech balloons and sound effects, reads them with your own eyes from rendered crops, removes the original lettering without altering the artwork, and typesets real right-to-left Persian into each balloon. Use for translating a manga chapter, a webtoon, a comic, a CBZ/CBR archive or a comic PDF into Persian (فارسی).
 license: GPL-3.0-or-later
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, Agent, AskUserQuestion
-metadata: {"homepage":"https://github.com/KiaroSama/Revayat-Comic-Skill","requires":{"bins":["python3"],"pip":["pillow","numpy","opencv-python-headless","pymupdf","arabic-reshaper","python-bidi"],"optional":["rarfile","manga-ocr"]}}
+metadata: {"homepage":"https://github.com/KiaroSama/Revayat-Comic-Skill","version":"2.0.0","requires":{"bins":["revayat-comic"]}}
 ---
 
 # Revayat Comic — comics into Persian
@@ -19,14 +19,19 @@ Set four variables once, then use them everywhere:
 - `WORK` — a working folder for this chapter, e.g. `work/`.
 - `OUTPUT` — the final CBZ/PDF path or translated-page folder. Create the
   activity log beside it before step 1; follow `references/translation-log.md`.
-- `PY` — the Python interpreter. **Resolve it once**; `python3` does not exist
-  on most Windows installations, so a command line that hard-codes it works on
-  two platforms out of three:
-  - macOS / Linux: `PY=python3`
-  - Windows: `PY=python` — or `PY="py -3"` if the launcher is what is installed
-  - if neither runs, `doctor` in step 1 will not start, and that is the signal
+- `BIN` — the standalone pure-Rust `revayat-comic` binary (`bin/revayat-comic` on Linux, `bin/revayat-comic.exe` on Windows, or `revayat-comic` on `PATH`). Built with Rust `1.100.0` with zero Python runtime required.
 
-Every command is `$PY $SKILL_DIR/scripts/revayat-comic.py <stage> …`.
+Every command is `revayat-comic <stage> …`.
+
+### Mandatory Six-Stage Multi-Agent Workflow & Full-Page Image Editing
+
+Every comic translation runs through the **six-stage multi-agent workflow** in `references/multi-agent-workflow.md`:
+1. **Initial Translation (`ترجمه اولیه`)**: Web-search official series character names, honorifics, and canon terminology first; draft natural spoken Persian applying `references/voice/persian/SKILL.md` and `references/voice/humanizer/SKILL.md` (v4.0.0).
+2. **Layout & Typesetting Planning (`صفحه آرایی`)**: Set balanced line breaks, generous line spacing (`>= 1.38x`), RTL punctuation, anti-overlap badge/title checks, and classify each region as `typeset` (clean uniform bubble) vs `fullpage_edit` (on-art/speedlines/maps/covers/SFX).
+3. **Bilingual & Tone Review (`بازبینی`)**: Audit fidelity, character register, natural spoken Persian, and run `revayat-comic voice lint --check --style`.
+4. **Apply Translation (`اعمال ترجمه`)**: Empty ONLY uniform speech bubbles first (`revayat-comic clean --bubbles-only`), submit the **FULL bubbles-emptied page** (NEVER isolated small crops!) to `Numera-Gen-mcp` (`references/fullpage-image-edit.md`) for on-art/SFX/cover/title lettering using `revayat-comic fullpage-prompt`, composite only the edited zones onto the immutable original page, then run `revayat-comic typeset` (pure-Rust `cosmic-text` + bundled Vazir TTF) for speech bubbles.
+5. **Visual Recheck & Fix (`چک مجدد فایل و اصلاح مشکلات`)**: Visually inspect every rendered page with `Read` alongside `revayat-comic qa check --strict` and repair any leftover dots, overlaps, spacing, or glyph issues.
+6. **Final Review & Delivery (`بازبینی نهایی و تحویل`)**: Run `revayat-comic qa package`, export lossless CBZ + lossless PDF, and write the translation & QA log.
 
 Before translating, **ask whether the user wants optional parallel translation
 and editing with multiple subagents**. Sequential is the default; enable helpers
@@ -80,11 +85,11 @@ Python 3.12 or newer is required. Anything older fails dependency resolution
 or import checks.
 
 ```bash
-$PY $SKILL_DIR/scripts/revayat-comic.py doctor
+revayat-comic doctor
 ```
 
 - `"ready": true` → continue.
-- `"ready": false` → run `pip install -r $SKILL_DIR/requirements.txt`, then run
+- `"ready": false` → rebuild or download the pure-Rust `revayat-comic` binary (`cargo build --release --locked -p revayat-comic-cli`), then run
   `doctor` again.
 
 Two fields in `persian` decide whether the output is correct rather than merely
@@ -101,7 +106,7 @@ present. Read them now, not after building a chapter:
 ## Step 2 — Import the chapter
 
 ```bash
-$PY $SKILL_DIR/scripts/revayat-comic.py import "<chapter.cbz>" --out $WORK \
+revayat-comic import "<chapter.cbz>" --out $WORK \
   --source-language ja --direction rtl
 ```
 
@@ -130,9 +135,9 @@ legacy imports need re-importing to recover physical dimensions they never store
 Three commands, always run together:
 
 ```bash
-$PY $SKILL_DIR/scripts/revayat-comic.py detect --doc $WORK/comic.json
-$PY $SKILL_DIR/scripts/revayat-comic.py mask   --doc $WORK/comic.json
-$PY $SKILL_DIR/scripts/revayat-comic.py crops  --doc $WORK/comic.json
+revayat-comic detect --doc $WORK/comic.json
+revayat-comic mask   --doc $WORK/comic.json
+revayat-comic crops  --doc $WORK/comic.json
 ```
 
 | What you see | What to do |
@@ -147,7 +152,7 @@ expected and it is why step 5 exists: you will see the page and can correct it.
 ## Step 4 — Worksheets
 
 ```bash
-$PY $SKILL_DIR/scripts/revayat-comic.py worksheet build --doc $WORK/comic.json
+revayat-comic worksheet build --doc $WORK/comic.json
 ```
 
 One worksheet per page in `$WORK/worksheets/pNNNN.txt`.
@@ -227,9 +232,9 @@ exclusive ownership of each shard, with any scene context it needs. Keep pages
 ordered inside each shard. Dependent ranges use the sequential workflow above.
 
 ```bash
-$PY $SKILL_DIR/scripts/revayat-comic.py batch plan-shards "$WORK" --shards 3 --out "$BATCH"
-$PY $SKILL_DIR/scripts/revayat-comic.py batch merge-shards "$BATCH" --into "$WORK"
-$PY $SKILL_DIR/scripts/revayat-comic.py batch plan-books "$INPUT_DIR" --out "$BOOK_BATCH" --workers 3
+revayat-comic batch plan-shards "$WORK" --shards 3 --out "$BATCH"
+revayat-comic batch merge-shards "$BATCH" --into "$WORK"
+revayat-comic batch plan-books "$INPUT_DIR" --out "$BOOK_BATCH" --workers 3
 ```
 
 Without `--out`, `plan-shards` creates `$WORK/batch`. Read `batch-manifest.json`:
@@ -264,7 +269,7 @@ page 4 becomes `تو` on page 5, and a settled term drifts. This is bounded,
 deterministic and cheap:
 
 ```bash
-$PY $SKILL_DIR/scripts/revayat-comic.py context --doc $WORK/comic.json --page pNNNN
+revayat-comic context --doc $WORK/comic.json --page pNNNN
 ```
 
 It returns `constraints` (the locked glossary and the rules — not open to
@@ -408,13 +413,13 @@ assignment/snapshot contract from `references/parallel-workflow.md`:**
 Check what is left at any time:
 
 ```bash
-$PY $SKILL_DIR/scripts/revayat-comic.py worksheet status --doc $WORK/comic.json
+revayat-comic worksheet status --doc $WORK/comic.json
 ```
 
 ## Step 6 — Merge
 
 ```bash
-$PY $SKILL_DIR/scripts/revayat-comic.py worksheet merge --doc $WORK/comic.json
+revayat-comic worksheet merge --doc $WORK/comic.json
 ```
 
 | Field | Meaning | Action |
@@ -437,7 +442,7 @@ each page** rather than once at the end — that is what puts a page's Persian i
 ## Step 7 — Names and typography
 
 ```bash
-$PY $SKILL_DIR/scripts/revayat-comic.py glossary scan --doc $WORK/comic.json
+revayat-comic glossary scan --doc $WORK/comic.json
 ```
 
 Open `$WORK/comic.json` and, for each entry under `glossary.entries` that has an
@@ -451,12 +456,12 @@ constrains every page after it, through both the worksheet table and the
 already been translated. Carry the locked entries into the next chapter's
 document too.
 
-Run `$PY $SKILL_DIR/references/voice/persian/scripts/persian_lint.py --check --style`
+Run `revayat-comic voice lint --check --style`
 on the Persian prose before writing it into a worksheet. Review its suggestions in
 context. Then fix the merged chapter with the comic-aware linter:
 
 ```bash
-$PY $SKILL_DIR/scripts/revayat-comic.py falint fix --doc $WORK/comic.json
+revayat-comic falint fix --doc $WORK/comic.json
 ```
 
 Add `--digits keep` if the comic must keep Latin numerals. If a Persian sentence
@@ -467,7 +472,7 @@ Persian-leading sentences unwrapped.
 ## Step 8 — Clean the artwork
 
 ```bash
-$PY $SKILL_DIR/scripts/revayat-comic.py clean --doc $WORK/comic.json
+revayat-comic clean --doc $WORK/comic.json
 ```
 
 | Field | Meaning |
@@ -488,8 +493,8 @@ than the letter shapes — clipped back to strokes a few pixels wide, even a goo
 reconstruction reads as repaired rather than redrawn:
 
 ```bash
-$PY $SKILL_DIR/scripts/revayat-comic.py mask  --doc $WORK/comic.json --free-lettering solid
-$PY $SKILL_DIR/scripts/revayat-comic.py clean --doc $WORK/comic.json --external reconstructed/
+revayat-comic mask  --doc $WORK/comic.json --free-lettering solid
+revayat-comic clean --doc $WORK/comic.json --external reconstructed/
 ```
 
 Balloons ignore the flag. A solid mask has exactly two valid consumers, and
@@ -497,7 +502,7 @@ Balloons ignore the flag. A solid mask has exactly two valid consumers, and
 
 ```bash
 # an image-edit provider, called for you, only where it is actually needed
-$PY $SKILL_DIR/scripts/revayat-comic.py clean --doc $WORK/comic.json --provider <name>
+revayat-comic clean --doc $WORK/comic.json --provider <name>
 ```
 
 `clean` refuses solid masks with neither `--provider` nor `--external`,
@@ -512,8 +517,8 @@ A mark sitting in the **same place on every page** — a corner stamp on all two
 hundred — is one command rather than two hundred worksheet lines:
 
 ```bash
-$PY $SKILL_DIR/scripts/revayat-comic.py watermark --doc $WORK/comic.json --box "12 1840 300 44"
-$PY $SKILL_DIR/scripts/revayat-comic.py mask --doc $WORK/comic.json
+revayat-comic watermark --doc $WORK/comic.json --box "12 1840 300 44"
+revayat-comic mask --doc $WORK/comic.json
 ```
 
 Run it before `clean`, and re-run `mask` after it, because the new boxes have no
@@ -524,7 +529,7 @@ about which marks are yours to remove.
 ## Step 9 — Set the Persian
 
 ```bash
-$PY $SKILL_DIR/scripts/revayat-comic.py typeset --doc $WORK/comic.json \
+revayat-comic typeset --doc $WORK/comic.json \
   --font "Vazirmatn-Medium.ttf"
 ```
 
@@ -542,7 +547,7 @@ $PY $SKILL_DIR/scripts/revayat-comic.py typeset --doc $WORK/comic.json \
 ## Step 10 — Gate
 
 ```bash
-$PY $SKILL_DIR/scripts/revayat-comic.py qa check --doc $WORK/comic.json
+revayat-comic qa check --doc $WORK/comic.json
 ```
 
 **Do not export while `"ok"` is false.** Fix by code:
@@ -612,9 +617,9 @@ report does not count. Repair defects, rerender and recheck affected pages, and
 package only after the full page-by-page audit is complete.
 
 ```bash
-$PY $SKILL_DIR/scripts/revayat-comic.py export --doc $WORK/comic.json \
+revayat-comic export --doc $WORK/comic.json \
   --out $OUTPUT
-$PY $SKILL_DIR/scripts/revayat-comic.py qa package --doc $WORK/comic.json \
+revayat-comic qa package --doc $WORK/comic.json \
   --file $OUTPUT
 ```
 

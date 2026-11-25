@@ -129,7 +129,7 @@ fn help_and_version_report_supported_commands() {
     let fixture = Fixture::staged();
     let output = fixture.run(&["--version"], b"");
     success(&output);
-    assert_eq!(output.stdout, b"revayat-comic 1.2.0\n");
+    assert_eq!(output.stdout, b"revayat-comic 2.0.0\n");
     let output = fixture.run(&["--help"], b"");
     success(&output);
     let help = std::str::from_utf8(&output.stdout).unwrap();
@@ -145,12 +145,198 @@ fn help_and_version_report_supported_commands() {
 }
 
 #[test]
+fn stdio_advertises_the_same_pipeline_commands_as_help() {
+    let fixture = Fixture::staged();
+    let help = fixture.run(&["--help"], b"");
+    success(&help);
+    let help = String::from_utf8(help.stdout).unwrap();
+    let reply = fixture.run(
+        &["serve", "--stdio"],
+        b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}\n",
+    );
+    success(&reply);
+    let reply = json_stdout(&reply);
+    assert_eq!(reply["id"], 1);
+    let tools = reply["result"]["tools"].as_array().unwrap();
+    for stage in [
+        "import",
+        "detect",
+        "mask",
+        "crops",
+        "worksheet",
+        "glossary",
+        "falint",
+        "clean",
+        "typeset",
+        "fullpage-prompt",
+        "watermark",
+        "qa",
+        "export",
+        "batch",
+        "voice",
+        "install",
+        "eval",
+        "ocr",
+        "context",
+        "translate",
+        "review-docx",
+    ] {
+        assert!(
+            help.lines()
+                .any(|line| line.split_whitespace().next() == Some(stage)),
+            "{stage}"
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool["name"] == format!("revayat_{stage}")),
+            "{stage}"
+        );
+    }
+}
+
+#[test]
+fn synthetic_cbz_round_trip_preserves_artwork_and_exports_all_formats() {
+    use image::{DynamicImage, ImageFormat, Rgb, RgbImage};
+    use std::io::{Cursor, Write};
+    use zip::{ZipWriter, write::SimpleFileOptions};
+
+    let fixture = Fixture::staged();
+    let mut page = RgbImage::from_pixel(300, 300, Rgb([42; 3]));
+    for y in 12..118 {
+        for x in 20..140 {
+            let dx = (f64::from(x) - 80.0) / 58.0;
+            let dy = (f64::from(y) - 65.0) / 50.0;
+            let distance = dx * dx + dy * dy;
+            if distance < 0.88 {
+                page.put_pixel(x, y, Rgb([245; 3]));
+            } else if distance <= 1.0 {
+                page.put_pixel(x, y, Rgb([12; 3]));
+            }
+        }
+    }
+    for y in 59..70 {
+        for x in (68..75).chain(84..90) {
+            page.put_pixel(x, y, Rgb([20; 3]));
+        }
+    }
+    page.put_pixel(105, 81, Rgb([195; 3]));
+    let mut png = Cursor::new(Vec::new());
+    DynamicImage::ImageRgb8(page)
+        .write_to(&mut png, ImageFormat::Png)
+        .unwrap();
+    let mut zip = ZipWriter::new(File::create(fixture.cwd.join("source.cbz")).unwrap());
+    zip.start_file("1.png", SimpleFileOptions::default())
+        .unwrap();
+    zip.write_all(png.get_ref()).unwrap();
+    zip.finish().unwrap();
+
+    let run = |args: &[&str]| {
+        let output = fixture.run(args, b"");
+        assert!(
+            output.status.success(),
+            "{args:?}: {} {}",
+            String::from_utf8_lossy(&output.stderr),
+            String::from_utf8_lossy(&output.stdout)
+        );
+        json_stdout(&output)
+    };
+    const DOC: &str = "comic work/comic.json";
+    let imported = run(&[
+        "import",
+        "source.cbz",
+        "--out",
+        "comic work",
+        "--direction",
+        "rtl",
+    ]);
+    let id = imported["pages"][0]["id"].as_str().unwrap();
+    let original = fixture
+        .cwd
+        .join("comic work")
+        .join(imported["pages"][0]["image"].as_str().unwrap());
+    assert_eq!(fs::read(&original).unwrap(), *png.get_ref());
+    assert!(run(&["detect", "--doc", DOC])["regions"].as_u64().unwrap() > 0);
+    assert!(run(&["mask", "--doc", DOC])["masks"].as_u64().unwrap() > 0);
+    assert!(run(&["crops", "--doc", DOC])["crops"].as_u64().unwrap() > 0);
+    let built = run(&["worksheet", "build", "--doc", DOC]);
+    let draft = PathBuf::from(built["built"][0].as_str().unwrap());
+    let text = fs::read_to_string(&draft).unwrap();
+    let filled = text
+        .replace("src:\n", "src: Hello!\n")
+        .replace("fa:\n", "fa: سلام، خوبی؟!\n");
+    assert_ne!(text, filled);
+    fs::write(draft.with_file_name(format!("{id}.done.txt")), filled).unwrap();
+    run(&["worksheet", "merge", "--doc", DOC]);
+    run(&["falint", "fix", "--doc", DOC]);
+    run(&["clean", "--doc", DOC, "--bubbles-only"]);
+    let manifest = run(&["fullpage-prompt", "--doc", DOC, "--page", id]);
+    assert_eq!(manifest["schema_version"], 1);
+    assert_eq!(manifest["page_id"], id);
+    assert_eq!(manifest["page_size"], json!([300, 300]));
+    assert!(!manifest["regions"].as_array().unwrap().is_empty());
+    assert!(manifest["prompt"].as_str().unwrap().contains("سلام"));
+    assert!(run(&["typeset", "--doc", DOC])["typeset"].as_u64().unwrap() > 0);
+    let qa = run(&["qa", "check", "--strict", "--doc", DOC]);
+    assert_eq!(qa["artwork_pixels_changed"], 0);
+    run(&[
+        "export",
+        "--doc",
+        DOC,
+        "--out",
+        "translated.cbz",
+        "--review-docx",
+        "review.docx",
+    ]);
+    run(&["export", "--doc", DOC, "--out", "translated.pdf"]);
+    for path in ["translated.cbz", "translated.pdf"] {
+        assert_eq!(
+            run(&["qa", "package", "--doc", DOC, "--package", path])["ok"],
+            true
+        );
+    }
+    let review = File::open(fixture.cwd.join("review.docx")).unwrap();
+    assert!(
+        zip::ZipArchive::new(review)
+            .unwrap()
+            .by_name("word/document.xml")
+            .is_ok()
+    );
+    assert_eq!(fs::read(original).unwrap(), *png.get_ref());
+}
+
+#[test]
+fn persian_voice_lint_and_lookup_run_without_a_path_tool() {
+    let fixture = Fixture::staged();
+    let input = fixture.cwd.join("lines.txt");
+    fs::write(&input, "من مي روم").unwrap();
+    let check = fixture.run(&["voice", "lint", "--check", "--style", "lines.txt"], b"");
+    assert_eq!(check.status.code(), Some(1));
+    assert!(
+        !json_stdout(&check)["changes"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    success(&fixture.run(&["voice", "lint", "--fix", "lines.txt"], b""));
+    success(&fixture.run(&["voice", "lint", "--check", "--style", "lines.txt"], b""));
+    let lookup = fixture.run(&["voice", "lookup", "business partners"], b"");
+    success(&lookup);
+    assert!(
+        !json_stdout(&lookup)["glossary"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
 fn doctor_reports_all_nine_kernels_without_path_tools() {
     let fixture = Fixture::staged();
     let output = fixture.run(&["doctor", "--json"], b"");
     success(&output);
     let report = json_stdout(&output);
-    assert_eq!(report["version"], "1.2.0");
+    assert_eq!(report["version"], "2.0.0");
     assert_eq!(report["ok"], true);
     assert_eq!(report["kernels"].as_object().unwrap().len(), KERNELS.len());
     for name in KERNELS {
@@ -159,7 +345,7 @@ fn doctor_reports_all_nine_kernels_without_path_tools() {
     let human = fixture.run(&["doctor"], b"");
     success(&human);
     let text = std::str::from_utf8(&human.stdout).unwrap();
-    assert!(text.contains("1.2.0"));
+    assert!(text.contains("2.0.0"));
     assert!(KERNELS.iter().all(|name| text.contains(name)));
 }
 
@@ -371,7 +557,7 @@ fn run_logs_have_utc_names_and_do_not_leak_input_or_paths() {
         }
         for key in [
             "command=",
-            "version=1.2.0",
+            "version=2.0.0",
             "run_id=",
             "exit=",
             "duration_ms=",

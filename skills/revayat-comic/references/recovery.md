@@ -5,7 +5,7 @@
 Run this after an export stops before its package and document agree:
 
 ```bash
-$PY $SKILL_DIR/scripts/revayat-comic.py export --doc $WORK/comic.json --recover
+revayat-comic export --doc $WORK/comic.json --recover
 ```
 
 Recovery validates the original input digests, the document generation, the
@@ -21,7 +21,7 @@ run `qa package` on the actual destination afterward.
 If the process stopped before writing a publication record, name its destination:
 
 ```bash
-$PY $SKILL_DIR/scripts/revayat-comic.py export --doc $WORK/comic.json \
+revayat-comic export --doc $WORK/comic.json \
   --out out/chapter-fa.cbz --recover
 ```
 
@@ -67,9 +67,9 @@ Match its existing Persian to the current region IDs and geometry, correct only
 the affected mappings, then explicitly confirm those reviewed pages:
 
 ```bash
-$PY $SKILL_DIR/scripts/revayat-comic.py worksheet reconcile \
+revayat-comic worksheet reconcile \
   --doc $WORK/comic.json --pages p0003
-$PY $SKILL_DIR/scripts/revayat-comic.py worksheet merge \
+revayat-comic worksheet merge \
   --doc $WORK/comic.json --pages p0003
 ```
 

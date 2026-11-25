@@ -57,34 +57,18 @@ Add it when:
 - the scan quality is poor enough that a second opinion is worth having
 - you want a reproducible `src:` field that does not depend on which model ran
 
-```bash
-pip install manga-ocr
-```
-
-```python
-from manga_ocr import MangaOcr
-from PIL import Image
-
-mocr = MangaOcr()
-text = mocr(Image.open("work/crops/p0001/r001.png"))
-```
-
-`doctor` reports whether it is installed. Use it to *check* a transcription, not
-to replace reading the page. Where the two disagree, look at the crop and decide
-— a high-confidence OCR result is not automatically right about a stylised
-balloon, and a reader who skimmed is not automatically right either.
-
 ## The `ocr` stage
 
-There **is** now an executable path, and it is off by default:
+There is an optional hosted HTTPS OCR stage, off by default:
 
 ```bash
-revayat-comic.py ocr --doc work/comic.json --provider <name>
+revayat-comic ocr --doc work/comic.json --provider <name>
 ```
 
-It exists for the narrow cases at the top of this file — a host with no vision,
-a script the host reads poorly, or a page worth a second pair of eyes. It is not
-part of the twelve-stage pipeline and nothing runs it for you.
+Use it to cross-check a transcription, never to replace visually reading the
+crops (`overview.png` and `sheet*.png`). Where OCR and your eyes disagree,
+look at the crop and decide. It is not part of the default pipeline and nothing
+runs it automatically.
 
 What it will not do is the point of it:
 
@@ -112,14 +96,7 @@ refreshed from the current renderer first; changing crop size, padding or pixels
 invalidates an old request. Locked or already-filled text is compared, not
 silently overwritten. An unchanged completed request makes no new call.
 
-**A working `manga-ocr` adapter ships with the project.** It is in
-`scripts/adapters.py`, it is not imported by the pipeline, and it loads the model
-on first read rather than on construction — so registering it costs nothing:
-
-```bash
-pip install manga-ocr
-revayat-comic ocr --doc work/comic.json --provider manga-ocr
-```
+Configure an optional hosted HTTPS vision-OCR provider via `--provider` (see `revayat-comic ocr --help`). Local Python adapters are no longer used in v2.0.
 
 It declines anything that is not Japanese rather than answering anyway, and
 reports `MANGA_OCR_CONFIDENCE` (0.80) — a judgement about the model, since it

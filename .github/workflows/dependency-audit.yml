@@ -1,16 +1,7 @@
 name: Dependency audit
 
-# Deliberately not on push or pull_request. `dependency-review.yml` already
-# covers PRs, and it answers "did this change introduce a vulnerable
-# dependency". This workflow answers the other question — "is what we install
-# vulnerable *today*" — which changes when an advisory is published, not when
-# somebody pushes. A weekly schedule is the right cadence for that, and keeping
-# an advisory-database lookup off the per-push path keeps CI fast and keeps a
-# network flake out of the loop people wait on.
 on:
   schedule:
-    # Monday, off the hour: GitHub's scheduler is busiest on the hour and
-    # delays runs that ask for it.
     - cron: "17 4 * * 1"
   workflow_dispatch:
 
@@ -19,25 +10,17 @@ permissions:
 
 jobs:
   audit:
-    name: known advisories against the requirements
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    name: cargo-audit against Cargo.lock
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-
-      - uses: actions/setup-python@v7
         with:
-          python-version: "3.14"
-
-      - name: Install pip-audit
+          persist-credentials: false
+      - name: Install Rust 1.100.0 and cargo-audit
         run: |
-          python -m pip install --upgrade pip
-          python -m pip install pip-audit
-
-      # There is no lockfile — requirements.txt declares floors, and this
-      # project is installed fresh with `pip install -r`. So the honest question
-      # is whether a fresh install today resolves to anything vulnerable, which
-      # is exactly what auditing both runtime and developer manifests asks.
-      # Test/lint tools remain covered after moving out of the skill manifest.
-      - name: No installed dependency has a known advisory
-        run: python -m pip_audit -r skills/revayat-comic/requirements.txt -r tests/requirements.txt
+          rustup toolchain install 1.100.0 --profile minimal
+          rustup default 1.100.0
+          cargo install --locked cargo-audit
+      - name: Audit Cargo.lock for known advisories
+        run: cargo audit
