@@ -2,10 +2,10 @@
 
 ## Interrupted publication
 
-Run this after an export stops before its package and document agree:
+After the previous export process exits, repeat the original command with the same destination. The CLI checks for a pending journal before it starts a new export:
 
 ```bash
-$PY $SKILL_DIR/scripts/revayat-comic.py export --doc $WORK/comic.json --recover
+revayat-comic export --doc "$WORK/comic.json" --out "$OUTPUT"
 ```
 
 Recovery validates the original input digests, the document generation, the
@@ -18,18 +18,11 @@ unexpected entries are preserved even when rollback is refused.
 The presence of a directory is not proof that a recovered edition is complete:
 run `qa package` on the actual destination afterward.
 
-If the process stopped before writing a publication record, name its destination:
+If the retry reports a conflicting claim or changed files, stop and keep the journal, backups, and staged files. Do not delete a lock by filename. Once export succeeds, verify the package:
 
 ```bash
-$PY $SKILL_DIR/scripts/revayat-comic.py export --doc $WORK/comic.json \
-  --out out/chapter-fa.cbz --recover
+revayat-comic qa package --doc "$WORK/comic.json" --package "$OUTPUT"
 ```
-
-This can release a recognized claim only after proving that its local owner
-process has exited. Its recorded staging file is moved aside for inspection,
-with the published edition unchanged. Live, foreign or unrecognized claims are
-refused. Preserve backups and conflict records until the recovered package has
-been verified; deleting a lock by filename alone is not a recovery procedure.
 
 All document mutators use the same workspace claim. A stale document loaded by
 a library caller is refused on save rather than overwriting a newer edit.
@@ -62,22 +55,19 @@ updates do not falsely report moved regions. Actual box/kind/orientation/source-
 changes remain blocking, including with `--allow-unmerged`. Older or malformed
 receipts keep the conservative stage guard; edited replies still need merging.
 
-A genuinely stale reply needs review of the named page's current crop sheet.
-Match its existing Persian to the current region IDs and geometry, correct only
-the affected mappings, then explicitly confirm those reviewed pages:
+For a stale reply, first save the existing `.done.txt` outside the worksheet directory. Build a fresh worksheet and open the current page's overview and crop sheets:
 
 ```bash
-$PY $SKILL_DIR/scripts/revayat-comic.py worksheet reconcile \
-  --doc $WORK/comic.json --pages p0003
-$PY $SKILL_DIR/scripts/revayat-comic.py worksheet merge \
-  --doc $WORK/comic.json --pages p0003
+revayat-comic worksheet build --doc "$WORK/comic.json" --worksheets "$WORK/worksheets" --pages p0003
 ```
 
-An absent fingerprint, or an old fingerprint with its scheme removed, provides no geometry evidence.
-Stable IDs alone do not authorize migration. Reconciliation preserves the reply's
-Persian; it does not retranslate the page or waive duplicate/missing-region checks.
-Explicit kind/orientation typos are refused before region changes, including on
-added boxes and during reconciliation. Correct the named header rather than
+Use the fresh worksheet's header and map each retained Persian line to its verified region. IDs alone cannot establish that a region still points to the same artwork. Save the reviewed reply as `p0003.done.txt`, then merge only that page:
+
+```bash
+revayat-comic worksheet merge --doc "$WORK/comic.json" --worksheets "$WORK/worksheets" --pages p0003
+```
+
+The merge still checks for duplicate and missing regions. It rejects invalid kind or orientation values before changing a region. Correct the named header rather than
 forcing it through. Field CR/LF/CRLF endings normalize to logical LF; action-like
 continuations remain literal text. Malformed legacy glossary approval requires
 an explicit boolean correction before reading or mutating that entry; the text
@@ -147,7 +137,7 @@ original source-directory members, while preserving separate output folders and
 operator-owned extras.
 
 Worksheet locations are resolved by the shared document policy. An explicit
-`--out` or `--worksheets` relative path is resolved when that command runs
+`--worksheets` relative path is resolved when that command runs
 and is remembered as an absolute folder, so status/merge/context from another
 working directory find the same replies. A relative folder already stored in
 document metadata is interpreted beside `comic.json`. If an older record
@@ -162,17 +152,4 @@ omitting `--pages` selects all; explicitly passing an empty value selects none.
 Removing a page's last region restores its original as the terminal output on
 the next clean/typeset pass; unrelated files remain untouched.
 
-CLI stages write a new UTF-8 log per execution under the document's `logs/`
-folder. Commands without `--doc` use `scripts/logs/` beside the launcher.
-Names include the script, UTC date/time and a collision suffix when needed.
-Entries use `[timestamp UTC] [LEVEL] [COMPONENT] Message`; nested dispatch uses
-one file. Logs contain stage outcomes, durations and sanitized exception locations,
-never arguments, dialogue, credentials or exception values. There is no secret-bearing
-verbose mode. Set `REVAYAT_LOG_LEVEL` to `DEBUG`, `INFO`, `WARNING` or
-`ERROR` for the CLI diagnostic file; the default is `INFO` and an invalid
-value falls back to `INFO` with a generic warning. This never replaces the
-using agent's translation activity log beside the output.
-If log initialization fails, stderr reports that limitation and
-the stage still runs. Handlers close on completion. Logs are not packaged or
-copied by the installers; retain failure logs for diagnosis and remove old logs
-when no longer needed. Attach only the relevant run log when reporting an issue.
+The CLI writes UTF-8 diagnostics in `logs/` next to `bin/`, or alongside a standalone executable in another directory. The filename includes the UTC timestamp and, if needed, a collision suffix. The CLI records command metadata and exit status. If file logging fails, it warns on stderr and continues. Review a run log before sharing it. Keep the translation activity log separately beside the output.

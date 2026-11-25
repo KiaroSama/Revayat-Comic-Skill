@@ -36,46 +36,21 @@ evaluation/         the translation benchmark and its scorer — cases, a
 
 ## The pipeline
 
-| Module | Role |
-| --- | --- |
-| `pageir.py` | the page document, atomic UTF-8 IO, geometry, reading order, script detection |
-| `pageimages.py` | eager file-backed image decoding and counted loose-input byte admission |
-| `stages.py` | what each stage ran against, in what order, and what that makes stale |
-| `readers.py` | CBZ / CBR / PDF / folder / image → immutable page images |
-| `detect.py` | panels, balloons, free lettering |
-| `masks.py` | glyph shapes clipped to the balloon's real interior |
-| `crops.py` | the overview and crop sheets the reader looks at |
-| `sheet.py` | the sheet a reader fills in: header, glossary table, blocks |
-| `worksheet.py` | the `@@` protocol, and every named way a reply can be wrong |
-| `glossary.py` | names and terms, and the drift check |
-| `falint.py` | Persian typography, mechanically |
-| `clean.py` | tiered repair and the mask-bounded composite |
-| `watermark.py` | one box marked for erasure on every page, for a mark that does not move |
-| `typefont.py` | the Persian face, and the shaping engine |
-| `typeset.py` | balloon-shaped fitting, wrapping, rendering |
-| `qa.py` | the gate, including the pixel-preservation proof |
-| `package.py` | verifying what actually shipped against what the export wrote |
-| `export.py` | CBZ, PDF, folder |
-| `regions.py` | what a region's decisions MEAN, and what a page with none of them is |
-| `certify.py` | whether the bytes about to ship come from the run that claims them |
-| `journal.py` | the record an export leaves so an interrupted run can be finished |
-| `pdfpage.py` | what a PDF sheet SHOWS, as opposed to what it contains |
-| `writers.py` | assembling each package format and putting it where it belongs |
-| `lettering.py` | matching a drawn effect's slant, arc and recession |
-| `providers.py` | the optional second-opinion boundary, and its fakes |
-| `adapters.py` | real providers: `manga-ocr` local and keyless, plus translation and image edit against any OpenAI-compatible endpoint |
-| `context.py` | the bounded chapter context handed to a translator |
-| `ocr.py` | the optional OCR stage, off by default |
-| `translate.py` | the optional machine translator, off by default |
-| `server.py` | the same stages over MCP and loopback HTTP, for a host with no shell |
+All runtime code is 100% pure Rust under `rust/` (14 workspace crates,
+`edition = "2024"`, `#![forbid(unsafe_code)]`, Rust `1.100.0`):
 
-The last three are **optional and unused by default**. Read the module docstring
-in `providers.py` before adding a provider: the default is none, because the
-model running this skill already reads and already sees, and the boundary exists
-mainly to hold the invariants — a provider's output never becomes the page, a
-locked region is never overwritten, and failure is a status rather than an
-exception.
-| `revayat-comic.py` | CLI dispatcher and `doctor` |
+| Crate | Role |
+| --- | --- |
+| `hotcore-rs`, `pixcore-rs`, `maskcore-rs`, `textcore-rs`, `detectcore-rs`, `qacore-rs`, `cleancore-rs`, `layoutcore-rs`, `packcore-rs` | nine low-level pixel, mask, layout, text, detection, QA, cleaning, and packaging kernels |
+| `revayat-ir` | document IR, atomic UTF-8 I/O, stages, worksheets (`@@` protocol), glossary, batching, certification, journal, UTC run logs |
+| `revayat-io` | pure-Rust CBZ (`zip`), CBR (`rars`), PDF (`lopdf` + `pdf-writer` + `hayro` with stencil/XObject pixel-budget guards), folder, and Persian RTL DOCX (`quick-xml`) |
+| `revayat-vision` | detection, masking, zero-dot bubble cleaning, `cosmic-text` Vazir RTL typesetting (`>=1.38x` line height), full-page image-edit prompt builder, watermark removal, strict QA |
+| `revayat-tools` | MCP stdio and concurrent loopback HTTP server (`axum`), hosted HTTPS OCR/translation clients with Bearer guards, pure-Rust Persian linter and lexicon lookup, transactional installer, synthetic eval |
+| `revayat-comic-cli` | unified CLI binary (`bin/revayat-comic` / `bin/revayat-comic.exe`) |
+
+Optional hosted providers (`ocr`, `translate`) are **off by default**: the
+agent running this skill reads crops visually, and a provider's output never
+overwrites a locked region or unmasked pixels.
 
 ## Rules that are load-bearing
 
@@ -119,25 +94,15 @@ exception.
 ## Working on it
 
 ```bash
-pip install -r skills/revayat-comic/requirements.txt -r tests/requirements.txt
-python -m pytest tests -q
-python tests/e2e_pipeline.py
-python -m ruff check skills/revayat-comic/scripts tests
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --locked
 ```
 
-The linter runs a deliberately small rule set — undefined names, unused imports,
-a shadowed name, a variable assigned and never read. Not style. `ruff.toml`
-records what is switched off and why, including three findings that are correct
-code ruff cannot see through.
-
-`tests/e2e_pipeline.py` runs every stage through the real CLI against a
-generated chapter, so a break in the dispatcher, an argument name or a report
-field shows up even when each module's own tests still pass.
-
-Linux's main suite installs a real RAR backend and exercises CBR. Run
-`.github/workflows/integration.yml` manually to check that backend and a whole
-four-page chapter at A4/300 dpi. Developer test/lint/font-subset dependencies live in
-`tests/requirements.txt`, separate from the standalone skill's runtime manifest.
+Build the standalone binary to `bin/revayat-comic.exe` (Windows) or
+`bin/revayat-comic` (Linux) with `cargo build --release --locked -p revayat-comic-cli`.
+CI builds and tests four 64-bit targets: Linux x64, Linux arm64, Windows x64,
+and Windows arm64 (no macOS, no 32-bit, no Python).
 
 Fixtures are drawn with plain shapes rather than real Japanese, deliberately:
 the detector measures geometry and does not care which script the ink came from,
@@ -170,21 +135,9 @@ pinned sources and the output-language rule for the three bundled guides.
 
 Every tracked text file must be UTF-8; CI enforces that too.
 
-## Two things that are true and surprising
+## Pure-Rust Persian shaping
 
-**RAQM is not a Linux-only feature, whatever this project used to say.**
-Pillow's wheels carry libraqm on every platform; libraqm loads **FriBiDi** at run
-time, and Linux images normally have one while Windows and macOS normally do not.
-Put a FriBiDi DLL on `PATH` — `fribidi.dll`, `fribidi-0.dll` or
-`libfribidi-0.dll` — and `features.check("raqm")` turns true on Windows.
-Measured: one already on this machine beside another tool flipped it on, and the
-RAQM test that had never run here passed. Beside `python.exe` is **not** enough;
-it has to be a directory in the DLL search order.
-
-Without one the `arabic-reshaper` + `python-bidi` fallback runs, the pages are
-correct to read, and that is a note rather than a broken install.
-
-**`arabic-reshaper` deletes harakat by default**, and U+0654 is not decoration
-in Persian: it carries the ezafe, so `خانهٔ ما` silently becomes `خانه ما`. The
-reshaper is configured with `delete_harakat: False` for that reason, and a test
-guards it.
+`revayat-vision` shapes and orders Persian directly via `cosmic-text` (HarfBuzz
+and FriBidi) with bundled Vazir TTF fonts (`Regular`, `Medium`, `Bold`). No
+external `libraqm`, FriBidi DLL, or Python fallback is required on Linux or
+Windows, and both U+0654 (ezafe hamza) and U+200C (ZWNJ) are preserved cleanly.

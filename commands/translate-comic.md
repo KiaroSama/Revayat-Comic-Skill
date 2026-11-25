@@ -6,7 +6,7 @@ allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, Agent, AskUserQuestion
 
 Use the `revayat-comic` skill to translate this chapter into Persian: **$ARGUMENTS**
 
-Follow `SKILL.md` exactly, all eleven steps in order.
+Follow `SKILL.md`, the 6-stage multi-agent workflow (`references/multi-agent-workflow.md`), and the full-page image-edit workflow (`references/fullpage-image-edit.md`) in order.
 
 Two things decide whether the result is good, and both are yours rather than a
 script's:

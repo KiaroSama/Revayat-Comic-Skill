@@ -124,6 +124,13 @@ Thumbs.db
 !/AGENTS.md
 !/CLAUDE.md
 
+# Publish only the shared marketplace manifest under .agents/.
+!/.agents/
+/.agents/*
+!/.agents/plugins/
+/.agents/plugins/*
+!/.agents/plugins/marketplace.json
+
 # Test reports, produced by every run and kept only as CI artifacts.
 junit*.xml
 resolved-versions.txt

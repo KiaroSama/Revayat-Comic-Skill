@@ -2,6 +2,11 @@
 
 mod commands;
 mod logging;
+mod processing;
+mod providers;
+mod stage;
+
+use revayat_tools::server::{StageDispatcher, StageError};
 
 use std::{
     io::{self, Read, Write},
@@ -16,7 +21,14 @@ const INPUT_LIMIT: u64 = 1 << 20;
 
 fn main() -> ExitCode {
     let started = Instant::now();
-    let command = Command::parse(std::env::args_os().skip(1));
+    let mut args = std::env::args_os().skip(1).peekable();
+    if let Some(name) = args.peek().and_then(|arg| arg.to_str()).map(str::to_owned)
+        && (stage::registered(&name) || name == "serve")
+    {
+        args.next();
+        return run_stage(&name, args, started);
+    }
+    let command = Command::parse(args);
     let name = command.as_ref().map_or("invalid", |cmd| cmd.name());
     let mut log = logging::RunLog::start(name);
     let result = command.and_then(execute);
@@ -27,6 +39,37 @@ fn main() -> ExitCode {
         Err(failure) => {
             diagnostic(failure.message());
             (failure.code(), failure.message())
+        }
+    };
+    log.finish(code, reason, started.elapsed());
+    ExitCode::from(code)
+}
+
+fn run_stage(
+    name: &str,
+    args: impl Iterator<Item = std::ffi::OsString>,
+    started: Instant,
+) -> ExitCode {
+    let mut log = logging::RunLog::start(name);
+    let result = args
+        .map(|arg| {
+            arg.into_string()
+                .map_err(|_| stage::usage("arguments must be UTF-8"))
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .and_then(|args| {
+            if name == "serve" {
+                stage::serve(&args)
+            } else {
+                stage::Dispatcher.dispatch(name, &args, &mut io::stdout().lock())
+            }
+        });
+    let (code, reason) = match result {
+        Ok(0) => (0, "complete"),
+        Ok(code) => (u8::try_from(code).unwrap_or(1), "stage_reported_failure"),
+        Err(StageError { kind, message }) => {
+            diagnostic(&message);
+            (if kind == "invalid-arguments" { 2 } else { 4 }, kind)
         }
     };
     log.finish(code, reason, started.elapsed());

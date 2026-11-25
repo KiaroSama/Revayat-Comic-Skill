@@ -1,12 +1,12 @@
 # typography-and-rtl.md: Persian text mechanics
 
-The deterministic parts are enforced by `scripts/persian_lint.py`. This file explains the rules
-behind it and, more important, the cases the script leaves to your judgment. If you cannot run
-scripts (no code execution), apply sections 1 to 4 by hand; they are short.
+The deterministic parts are enforced by `revayat-comic voice lint`. This file explains the rules
+behind it and, more important, the cases the linter leaves to your judgment. If you cannot run
+the binary (no code execution), apply sections 1 to 4 by hand; they are short.
 
-    python scripts/persian_lint.py --check file.txt          # report
-    python scripts/persian_lint.py --fix   file.txt          # normalized text to stdout
-    python scripts/persian_lint.py --check --style file.txt  # also flag bureaucratic / AI phrases
+    revayat-comic voice lint --check file.txt          # report
+    revayat-comic voice lint --fix   file.txt          # normalized text to stdout
+    revayat-comic voice lint --check --style file.txt  # also flag bureaucratic / AI phrases
 
 ## 1. Letters: Persian, not Arabic
 Persian and Arabic share a script but differ in a few letters. Mixed text is the most common

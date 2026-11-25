@@ -59,19 +59,18 @@ jobs:
 
       - name: Test and build without PyO3
         run: |
-          manifest=rust/revayat-comic-cli/Cargo.toml
-          tree=$(cargo tree --manifest-path "$manifest" --locked)
+          tree=$(cargo tree --locked -p revayat-comic-cli)
           if grep -Eq '\bpyo3 v' <<< "$tree"; then
             echo 'The standalone CLI depends on PyO3' >&2
             exit 1
           fi
-          cargo test --manifest-path "$manifest" --locked
-          cargo build --release --manifest-path "$manifest" --locked
+          cargo test --locked -p revayat-comic-cli
+          cargo build --release --locked -p revayat-comic-cli
 
       - name: Verify imports and smoke-test the staged binary
         run: |
           mkdir -p bin
-          cp "rust/revayat-comic-cli/target/release/$BIN_NAME" "bin/$BIN_NAME"
+          cp "target/release/$BIN_NAME" "bin/$BIN_NAME"
           python - <<'PY'
           import json
           import os

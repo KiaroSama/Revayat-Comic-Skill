@@ -17,7 +17,7 @@ Two jobs:
 - **Mechanics.** The small things that make Persian look right regardless of word choice: RTL,
   ZWNJ, correct ی/ک, digits, punctuation, spacing.
 
-Mechanics are deterministic, so they live in a script (`scripts/persian_lint.py`). Craft is
+Mechanics are deterministic, so they live in the pure-Rust CLI (`revayat-comic voice lint`). Craft is
 judgment, so it lives in this file and the references. Any Persian you emit should pass the linter
 and respect the craft rules.
 
@@ -27,9 +27,9 @@ and respect the craft rules.
 |---|---|---|
 | English → Persian translation | **A** | full workflow below |
 | Persian → English translation | **B** | reverse workflow |
-| "fix / clean up / normalize this Persian", RTL, نیم‌فاصله, encoding | **C** | `persian_lint.py` only, no translation |
+| "fix / clean up / normalize this Persian", RTL, نیم‌فاصله, encoding | **C** | `revayat-comic voice lint` only, no translation |
 | write, edit, or review Persian; "make it sound human / not like AI" | **D** | craft rules + `references/ai-tells.md`, then the linter |
-| "what's the natural Persian for X", an idiom or term | **E** | `lookup.py` and `references/lexicon.md` |
+| "what's the natural Persian for X", an idiom or term | **E** | `revayat-comic voice lookup` and `references/lexicon.md` |
 
 Routes C and D work standalone. You don't need a translation task to fix or improve Persian.
 
@@ -40,7 +40,7 @@ anything longer or important.
 
 **1. Prep.** Read the source. Name its register (literary, contemporary dialogue, nonfiction,
 official, children's) and audience; see `references/register-guide.md`. Build a terminology brief
-with `python scripts/lookup.py <source_file>` (`--json` for structured output); it surfaces only the
+with `revayat-comic voice lookup <source_file>` (`--json` for structured output); it surfaces only the
 idioms and collocations that occur in this text. If the text has measurements, settle the unit
 policy with the user before drafting (see Numbers and units).
 
@@ -61,12 +61,12 @@ you have them, inline otherwise.
 **4. Synthesis.** Merge the feedback in this priority (highest wins): meaning fidelity →
 terminology → grammar → no AI tells → oral fluency → register → modern accessibility → taste.
 
-**5. Delivery.** Run `python scripts/persian_lint.py --fix` on the Persian. Run the verification
+**5. Delivery.** Run `revayat-comic voice lint --fix` on the Persian. Run the verification
 check. Deliver only the final translation plus two or three sentences on the choices that matter.
 No drafts, lens reports, or back-translations unless asked.
 
 **Route B (Persian → English)** reverses this: draft the English, review for English quality and
-fidelity, skip the linter (the output is English). Still run `lookup.py --reverse` for consistent
+fidelity, skip the linter (the output is English). Still run `revayat-comic voice lookup --reverse` for consistent
 terminology and still verify names and numbers.
 
 ## The machine-Persian checklist
@@ -96,9 +96,9 @@ The highest-frequency ways a draft betrays itself. Apply while drafting; the ful
 
 Finish every piece of Persian by running the linter:
 
-    python scripts/persian_lint.py --check  file.txt          # report issues
-    python scripts/persian_lint.py --fix    file.txt          # normalized text to stdout
-    python scripts/persian_lint.py --check --style file.txt   # also flag officialese / AI phrases
+    revayat-comic voice lint --check  file.txt          # report issues
+    revayat-comic voice lint --fix    file.txt          # normalized text to stdout
+    revayat-comic voice lint --check --style file.txt   # also flag officialese / AI phrases
 
 It fixes Arabic → Persian letters (ي→ی, ك→ک, ة→ه, ى→ی), kashida, digits, punctuation
 (, → «،», ; → «؛», ? → «؟», quotes → «…»), ZWNJ for می/نمی + ها + ترین + heh enclitics, and
@@ -161,5 +161,5 @@ Read on demand, not all up front.
 | `references/lexicon.md` | idioms, collocations, never-soften list, opt-in house-style coinages |
 
 Paths are relative to the skill root (the folder holding this file); run scripts from there.
-Scripts: `scripts/persian_lint.py`, `scripts/lookup.py`. Data: `scripts/data/{idioms,glossary}.tsv`,
+CLI: `revayat-comic voice lint`, `revayat-comic voice lookup`. Data: `scripts/data/{idioms,glossary}.tsv` (embedded into the binary),
 never loaded into context. The upstream development tests are not bundled.

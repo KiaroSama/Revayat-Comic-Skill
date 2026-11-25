@@ -11,16 +11,16 @@ use crate::{VERSION, diagnostic};
 pub struct RunLog {
     file: Option<File>,
     id: String,
-    command: &'static str,
+    command: String,
 }
 
 impl RunLog {
-    pub fn start(command: &'static str) -> Self {
+    pub fn start(command: &str) -> Self {
         let now = OffsetDateTime::now_utc();
         let mut log = Self {
             file: None,
             id: String::new(),
-            command,
+            command: command.to_owned(),
         };
         match open_log(now) {
             Ok((file, id)) => {

@@ -91,7 +91,7 @@ impl Command {
 
     pub fn run(self, input: String) -> Result<(String, u8), Failure> {
         let output = match self {
-            Self::Help => HELP.to_owned(),
+            Self::Help => HELP.to_owned() + &crate::stage::help(),
             Self::Version => format!("revayat-comic {VERSION}\n"),
             Self::Doctor { json } => return doctor(json),
             Self::NormalizePersian => textcore_rs::port::normalize_persian_text(input)

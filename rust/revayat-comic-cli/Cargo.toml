@@ -1,6 +1,6 @@
 [package]
 name = "revayat-comic-cli"
-version = "1.2.0"
+version = "2.0.0"
 edition = "2024"
 rust-version = "1.100.0"
 publish = false
@@ -11,25 +11,52 @@ name = "revayat-comic"
 path = "src/main.rs"
 
 [dependencies]
-cleancore_rs = { package = "cleancore-rs", path = "../cleancore-rs", default-features = false }
-detectcore_rs = { package = "detectcore-rs", path = "../detectcore-rs", default-features = false }
-hotcore_rs = { package = "hotcore-rs", path = "../hotcore-rs", default-features = false }
-layoutcore_rs = { package = "layoutcore-rs", path = "../layoutcore-rs", default-features = false }
-maskcore_rs = { package = "maskcore-rs", path = "../maskcore-rs", default-features = false }
-packcore_rs = { package = "packcore-rs", path = "../packcore-rs", default-features = false }
-pixcore_rs = { package = "pixcore-rs", path = "../pixcore-rs", default-features = false }
-qacore_rs = { package = "qacore-rs", path = "../qacore-rs", default-features = false }
-textcore_rs = { package = "textcore-rs", path = "../textcore-rs", default-features = false }
+cleancore_rs = { package = "cleancore-rs", path = "../cleancore-rs" }
+detectcore_rs = { package = "detectcore-rs", path = "../detectcore-rs" }
+hotcore_rs = { package = "hotcore-rs", path = "../hotcore-rs" }
+layoutcore_rs = { package = "layoutcore-rs", path = "../layoutcore-rs" }
+maskcore_rs = { package = "maskcore-rs", path = "../maskcore-rs" }
+packcore_rs = { package = "packcore-rs", path = "../packcore-rs" }
+pixcore_rs = { package = "pixcore-rs", path = "../pixcore-rs" }
+qacore_rs = { package = "qacore-rs", path = "../qacore-rs" }
+textcore_rs = { package = "textcore-rs", path = "../textcore-rs" }
 num-bigint = "0.5.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["float_roundtrip"] }
-time = { version = "0.3.55", default-features = false, features = ["std"] }
+time = { version = "0.3.55", features = ["std"] }
 
 [dev-dependencies]
-time = { version = "0.3.55", default-features = false, features = ["macros", "parsing"] }
+time = { version = "0.3.55", features = ["macros", "parsing"] }
 
-[profile.release]
-lto = true
+[dependencies.revayat-ir]
+path = "../revayat-ir"
+
+[dependencies.revayat-io]
+path = "../revayat-io"
+
+[dependencies.revayat-vision]
+path = "../revayat-vision"
+
+[dependencies.revayat-tools]
+path = "../revayat-tools"
+
+[dependencies.image]
+version = "0.25"
+default-features = false
+features = ["png"]
+
+[dependencies.clap]
+version = "4.6"
+features = ["derive"]
+
+[dependencies.tokio]
+version = "1.54"
+features = ["rt-multi-thread"]
+
+[dev-dependencies.zip]
+version = "9.8"
+default-features = false
+features = ["deflate"]
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }

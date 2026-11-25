@@ -1,9 +1,9 @@
 <#
 .SYNOPSIS
-Install the skill with staged promotion, backups and explicit recovery.
+Install the Revayat Comic skill with staged promotion, backups and explicit recovery.
 .DESCRIPTION
-Requires Python 3.12+. Set REVAYAT_PYTHON to select its executable.
-The standard-library helper owns validation, transactions and diagnostic logs.
+Invokes the pure-Rust revayat-comic CLI binary (no Python required).
+Set REVAYAT_BIN to override binary discovery.
 #>
 [CmdletBinding()]
 param(
@@ -17,43 +17,25 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-$requestedPython = $env:REVAYAT_PYTHON
+
+$repoRoot = Split-Path -Parent $PSScriptRoot
 $candidates = @()
-if ($requestedPython) {
-    $candidates = @($requestedPython)
-} else {
-    foreach ($name in @('python', 'python3')) {
-        # ApplicationInfo.Path is one executable. Never invoke an array of
-        # matches as a command, and do not let an unusable first match hide
-        # another installed interpreter that meets the supported floor.
-        foreach ($found in @(Get-Command $name -CommandType Application -All -ErrorAction SilentlyContinue)) {
-            if ($found.Path -and $found.Path -notin $candidates) {
-                $candidates += [string] $found.Path
-            }
-        }
-    }
-}
-$python = $null
-foreach ($candidate in $candidates) {
-    try {
-        $probe = & $candidate -c 'import sys; print(sys.version_info.major, sys.version_info.minor); sys.exit(0 if sys.version_info >= (3, 12) else 1)' 2>$null
-        if ($LASTEXITCODE -eq 0 -and ($probe -match '^\d+ \d+$')) {
-            $python = $candidate
-            break
-        }
-    } catch {
-        # No raw exception/arguments: an explicit override may be sensitive.
-        if ($env:REVAYAT_LOG_LEVEL -eq 'DEBUG') {
-            [Console]::Error.WriteLine('{0} [DEBUG] [installer] Interpreter probe failed ({1}).' -f [DateTime]::UtcNow.ToString('o'), $_.Exception.GetType().Name)
-        }
-    }
-}
-if (-not $python) {
-    [Console]::Error.WriteLine('{0} [ERROR] [installer] Python 3.12+ is required; set REVAYAT_PYTHON.' -f [DateTime]::UtcNow.ToString('o'))
+if ($env:REVAYAT_BIN) { $candidates += $env:REVAYAT_BIN }
+$candidates += (Join-Path $repoRoot 'bin\revayat-comic.exe')
+$candidates += (Join-Path $repoRoot 'target\release\revayat-comic.exe')
+$onPath = Get-Command revayat-comic -CommandType Application -ErrorAction SilentlyContinue
+if ($onPath) { $candidates += $onPath.Path }
+
+$binary = $candidates | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Leaf) } | Select-Object -First 1
+if (-not $binary) {
+    [Console]::Error.WriteLine('{0} [ERROR] [installer] revayat-comic.exe not found; build with "cargo build --release --locked -p revayat-comic-cli" or set REVAYAT_BIN.' -f [DateTime]::UtcNow.ToString('o'))
     exit 1
 }
-$arguments = @('-B', (Join-Path $PSScriptRoot 'safe_install.py'), '--agent', $Agent, '--scope', $Scope, '--path', $Path)
+
+$base = if ($Scope -eq 'user' -and -not $PSBoundParameters.ContainsKey('Path')) { $HOME } else { $Path }
+$arguments = @('install', '--repo', $repoRoot, '--agent', $Agent, '--base', $base)
+if ($Scope -eq 'user') { $arguments += '--user-scope' }
 if ($Force) { $arguments += '--force' }
 if ($Recover) { $arguments += '--recover' }
-& $python @arguments
+& $binary @arguments
 exit $LASTEXITCODE

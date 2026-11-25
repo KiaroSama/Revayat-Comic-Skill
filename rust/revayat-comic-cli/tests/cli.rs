@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
 
+#[path = "cli/balloon_quality.rs"]
+mod balloon_quality;
+
 use std::{
     fs::{self, File},
     path::PathBuf,
@@ -129,7 +132,7 @@ fn help_and_version_report_supported_commands() {
     let fixture = Fixture::staged();
     let output = fixture.run(&["--version"], b"");
     success(&output);
-    assert_eq!(output.stdout, b"revayat-comic 1.2.0\n");
+    assert_eq!(output.stdout, b"revayat-comic 2.0.0\n");
     let output = fixture.run(&["--help"], b"");
     success(&output);
     let help = std::str::from_utf8(&output.stdout).unwrap();
@@ -145,12 +148,88 @@ fn help_and_version_report_supported_commands() {
 }
 
 #[test]
+fn stdio_advertises_the_same_pipeline_commands_as_help() {
+    let fixture = Fixture::staged();
+    let help = fixture.run(&["--help"], b"");
+    success(&help);
+    let help = String::from_utf8(help.stdout).unwrap();
+    let reply = fixture.run(
+        &["serve", "--stdio"],
+        b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}\n",
+    );
+    success(&reply);
+    let reply = json_stdout(&reply);
+    assert_eq!(reply["id"], 1);
+    let tools = reply["result"]["tools"].as_array().unwrap();
+    for stage in [
+        "import",
+        "detect",
+        "mask",
+        "crops",
+        "worksheet",
+        "glossary",
+        "falint",
+        "clean",
+        "typeset",
+        "fullpage-prompt",
+        "watermark",
+        "qa",
+        "export",
+        "batch",
+        "voice",
+        "install",
+        "eval",
+        "ocr",
+        "context",
+        "translate",
+        "review-docx",
+    ] {
+        assert!(
+            help.lines()
+                .any(|line| line.split_whitespace().next() == Some(stage)),
+            "{stage}"
+        );
+        assert!(
+            tools
+                .iter()
+                .any(|tool| tool["name"] == format!("revayat_{stage}")),
+            "{stage}"
+        );
+    }
+}
+
+#[test]
+fn persian_voice_lint_and_lookup_run_without_a_path_tool() {
+    let fixture = Fixture::staged();
+    let input = fixture.cwd.join("lines.txt");
+    fs::write(&input, "من مي روم").unwrap();
+    let check = fixture.run(&["voice", "lint", "--check", "--style", "lines.txt"], b"");
+    assert_eq!(check.status.code(), Some(1));
+    assert!(
+        !json_stdout(&check)["changes"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    success(&fixture.run(&["voice", "lint", "--fix", "lines.txt"], b""));
+    success(&fixture.run(&["voice", "lint", "--check", "--style", "lines.txt"], b""));
+    let lookup = fixture.run(&["voice", "lookup", "business partners"], b"");
+    success(&lookup);
+    assert!(
+        !json_stdout(&lookup)["glossary"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
 fn doctor_reports_all_nine_kernels_without_path_tools() {
     let fixture = Fixture::staged();
     let output = fixture.run(&["doctor", "--json"], b"");
     success(&output);
     let report = json_stdout(&output);
-    assert_eq!(report["version"], "1.2.0");
+    assert_eq!(report["version"], "2.0.0");
     assert_eq!(report["ok"], true);
     assert_eq!(report["kernels"].as_object().unwrap().len(), KERNELS.len());
     for name in KERNELS {
@@ -159,7 +238,7 @@ fn doctor_reports_all_nine_kernels_without_path_tools() {
     let human = fixture.run(&["doctor"], b"");
     success(&human);
     let text = std::str::from_utf8(&human.stdout).unwrap();
-    assert!(text.contains("1.2.0"));
+    assert!(text.contains("2.0.0"));
     assert!(KERNELS.iter().all(|name| text.contains(name)));
 }
 
@@ -371,7 +450,7 @@ fn run_logs_have_utc_names_and_do_not_leak_input_or_paths() {
         }
         for key in [
             "command=",
-            "version=1.2.0",
+            "version=2.0.0",
             "run_id=",
             "exit=",
             "duration_ms=",

@@ -8,7 +8,7 @@ Run the `revayat-comic` quality gate over **$ARGUMENTS** (default
 `work/comic.json`) and tell me what it found.
 
 ```bash
-$PY $SKILL_DIR/scripts/revayat-comic.py qa check --doc <document>
+revayat-comic qa check --doc <document>
 ```
 
 Report, in this order:
@@ -30,7 +30,7 @@ Report, in this order:
 If a package has already been exported, verify it too:
 
 ```bash
-$PY $SKILL_DIR/scripts/revayat-comic.py qa package --doc <document> --file <package>
+revayat-comic qa package --doc <document> --file <package>
 ```
 
 Do not fix anything unless I ask. This is a report.
