@@ -263,7 +263,7 @@ enum Stage {
         #[arg(long)]
         external_dir: Option<PathBuf>,
     },
-    /// Build a full-page image-edit manifest.
+    /// Build a page-level manifest for cropped on-art lettering edits.
     FullpagePrompt {
         #[command(flatten)]
         doc: Doc,

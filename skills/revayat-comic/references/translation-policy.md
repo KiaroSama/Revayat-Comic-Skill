@@ -92,10 +92,13 @@ depends on the panel.
 ## Register is most of the job
 
 Use the bundled `voice/persian/SKILL.md` and its `register-guide.md`,
-`pitfalls.md`, and `ai-tells.md` before drafting. Write comic dialogue in natural
-spoken Persian. A teenager yelling at his brother should sound like a teenager
-yelling at his brother. Read the line aloud. Keep a formal register when the
-character would actually use it with that listener.
+`pitfalls.md`, and `ai-tells.md` before drafting. Every speech balloon must sound
+like natural spoken Persian. Match the character, their listener, and the
+scene's tension. Read the line aloud. Keep ordinary dialogue free of bookish
+phrases like `همان‌طور که پیش‌تر گفتم`, `می‌تواند`, `نشان می‌دهند`, `بنگرید`,
+`طبعاً`, and `ناگفته پیداست`. For example, `گفتم که` can fit an impatient
+reminder, while `قبلاً بهت گفتم` keeps the timing when it matters. Reserve
+archaic or elevated wording for characters who actually speak that way.
 
 | The art shows | What it is usually evidence of |
 | --- | --- |
@@ -210,24 +213,23 @@ A locked entry keeps its history: changing an approved Persian form bumps its
 against the old spelling can still be found.
 
 For a Japanese name, transliterate rather than translate: ハルカ is `هاروکا`.
-For a title or a technique with a meaning, prefer the meaning when it is a
-common noun (`先輩` → `سِنپای` when it is used as a name, `ارشد` when it is a
-role) — decide once and stay with it.
+Translate descriptive common nouns when the meaning matters. For example,
+`先輩` can mean `ارشد` when it describes a role and isn't used as an honorific.
 
-Honorifics: `-san`, `-kun`, `-chan`, `-senpai`. Keep them when the relationship
-between two characters is part of the story and Persian has no equivalent;
-drop them when they are only politeness. Do not switch between the two policies
-inside one chapter.
+In manga, keep Japanese honorifics in Persian script: `-سان`, `-کون`, `-ساما`,
+`-چان`, `-تان`, `-سنپای`, and `-سنسی`. Keep the hyphen: `میناتو-سان`,
+`ساهاشی-کون`, `کاراسوبا-ساما`, `ماتسو-سان`, `کو-چان`, `سئو-تان`. Do not drop
+honorifics or substitute `آقای`, `خانم`, `ارباب`, or `بانو` unless the user
+explicitly asks to localize them for that book.
 
 ## What the title has already settled
 
-Honorifics, name policy, sound effects, slang and profanity are decisions a
-**title** makes once, not decisions a page makes. They live in
-`meta.title_policy` in `comic.json`:
+Record name policy, sound effects, slang, profanity, and any explicit user
+decision about honorifics once per title in `meta.title_policy` in `comic.json`:
 
 ```json
 "title_policy": {
-  "honorifics": "keep -senpai, drop -san",
+  "honorifics": "keep all Japanese honorifics in Persian script",
   "names": "transliterate Japanese given names; translate technique names",
   "sfx": "translate, Persian onomatopoeia",
   "slang": "contemporary Tehran register, no regional dialect",
@@ -237,8 +239,8 @@ Honorifics, name policy, sound effects, slang and profanity are decisions a
 ```
 
 Every non-empty entry is handed to the translator under `constraints`, beside
-the locked glossary, and printed at the top of every worksheet. Nothing invents
-one: absent means nobody has decided, and then the page decides, as above.
+the locked glossary, and printed at the top of every worksheet. When an entry
+is absent, use the defaults above.
 
 ## Persian specifics
 

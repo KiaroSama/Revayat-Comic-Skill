@@ -100,7 +100,7 @@ fn synthetic_cbz_round_trip_preserves_artwork_and_exports_all_formats() {
     );
     run(&["clean", "--doc", DOC, "--bubbles-only"]);
     let default = run(&["fullpage-prompt", "--doc", DOC, "--page", id]);
-    assert_eq!(default["model_id"], "openai/gpt-image-2.6-sunburst");
+    assert_eq!(default["model_id"], "antigravity/gemini-3.1-flash-image");
     assert!(
         default["regions"]
             .as_array()
@@ -368,6 +368,138 @@ fn small_title_badge_keeps_its_colored_background_and_renders_two_digits() {
             .all(|(a, b)| b[0] != 250 || a == b)
     );
     run(&["qa", "check", "--strict", "--doc", DOC]);
+}
+
+#[test]
+fn multipage_mask_repeats_exact_geometry_pixels_and_document_order() {
+    use image::{GrayImage, Rgb, RgbImage};
+    use revayat_vision::{Rect, masks};
+
+    let fixture = Fixture::staged();
+    let input = fixture.cwd.join("source");
+    fs::create_dir(&input).unwrap();
+    let (width, height) = (184, 140);
+    let sources: Vec<_> = [62u32, 87, 115]
+        .into_iter()
+        .enumerate()
+        .map(|(i, cx)| {
+            let page = RgbImage::from_fn(width, height, |x, y| {
+                let balloon = x.abs_diff(cx).pow(2) + y.abs_diff(70).pow(2) < 47 * 47;
+                let ink = x.abs_diff(cx) < 6 && y.abs_diff(70) < 5;
+                Rgb([if balloon && !ink { 245 } else { 30 }; 3])
+            });
+            page.save(input.join(format!("{i}.png"))).unwrap();
+            page
+        })
+        .collect();
+    let run = |args: &[&str]| {
+        let output = fixture.run(args, b"");
+        success(&output);
+        json_stdout(&output)
+    };
+    const DOC: &str = "work/comic.json";
+    let imported = run(&["import", "source", "--out", "work"]);
+    let path = fixture.cwd.join(DOC);
+    let read_doc = || serde_json::from_slice::<Value>(&fs::read(&path).unwrap()).unwrap();
+    let mut doc = read_doc();
+    let mut expected = Vec::new();
+    for (index, (image, cx)) in sources.iter().zip([62, 87, 115]).enumerate() {
+        let page = &mut doc["pages"][index];
+        let id = page["id"].as_str().unwrap();
+        let bbox = Rect([cx - 14, 58, 28, 24]);
+        page["regions"] = json!([{ "id":format!("{id}r001"), "bbox":bbox, "kind":"speech", "source_text":"Yes" }]);
+        let balloon = masks::resolve_balloon(image, bbox, None, None, false)
+            .unwrap()
+            .unwrap();
+        let geometry = masks::balloon_geometry(image, balloon).unwrap();
+        let local = masks::region_mask(
+            image,
+            bbox,
+            Some(balloon),
+            false,
+            masks::MaskOptions::default(),
+        )
+        .unwrap();
+        let mut union = GrayImage::new(width, height);
+        local.apply_to(&mut union).unwrap();
+        expected.push((geometry, local, union));
+    }
+    fs::write(&path, serde_json::to_vec(&doc).unwrap()).unwrap();
+    let mut previous = None;
+    for _ in 0..2 {
+        assert_eq!(run(&["mask", "--doc", DOC])["masks"], 3);
+        let bytes = fs::read(&path).unwrap();
+        let masked: Value = serde_json::from_slice(&bytes).unwrap();
+        for (index, (geometry, local, union)) in expected.iter().enumerate() {
+            let page = &masked["pages"][index];
+            assert_eq!(page["id"], imported["pages"][index]["id"]);
+            let region = &page["regions"][0];
+            assert_eq!(&region["balloon"], geometry);
+            assert_eq!(region["mask_bounds"], json!(local.bounds));
+            let read_mask = |name: &Value| {
+                image::open(fixture.cwd.join("work").join(name.as_str().unwrap()))
+                    .unwrap()
+                    .into_luma8()
+            };
+            assert_eq!(read_mask(&region["mask"]), local.pixels);
+            assert_eq!(&read_mask(&page["mask"]), union);
+        }
+        if let Some(previous) = &previous {
+            assert_eq!(&bytes, previous);
+        }
+        previous = Some(bytes);
+    }
+}
+
+#[test]
+fn open_speech_and_caption_fit_without_repainting_dark_artwork() {
+    use image::{Rgb, RgbImage};
+
+    let fixture = Fixture::staged();
+    let input = fixture.cwd.join("source");
+    fs::create_dir(&input).unwrap();
+    let source = RgbImage::from_fn(240, 319, |x, y| {
+        let frame = (53..=55).contains(&x);
+        let hair = x >= 168 && (x + y / 3) % 13 <= 3;
+        let glyph =
+            (113..=124).contains(&x) && ((64..=73).contains(&y) || (254..=263).contains(&y));
+        Rgb([if frame || hair || glyph { 20 } else { 245 }; 3])
+    });
+    source.save(input.join("page.png")).unwrap();
+    let run = |args: &[&str]| {
+        let output = fixture.run(args, b"");
+        success(&output);
+        json_stdout(&output)
+    };
+    const DOC: &str = "work/comic.json";
+    run(&["import", "source", "--out", "work"]);
+    let path = fixture.cwd.join(DOC);
+    let read_doc = || serde_json::from_slice::<Value>(&fs::read(&path).unwrap()).unwrap();
+    let mut doc = read_doc();
+    doc["pages"][0]["regions"] = json!([
+        {"id":"open", "bbox":[56,32,121,77], "kind":"speech", "source_text":"Yes", "target_text":"خیلی دوره!"},
+        {"id":"caption", "bbox":[56,224,121,77], "kind":"caption", "source_text":"Later", "target_text":"بعدتر"}
+    ]);
+    fs::write(&path, serde_json::to_vec(&doc).unwrap()).unwrap();
+    run(&["mask", "--doc", DOC]);
+    assert!(read_doc()["pages"][0]["regions"][0]["balloon"].is_null());
+    run(&["clean", "--doc", DOC]);
+    assert_eq!(run(&["typeset", "--doc", DOC])["typeset"], 2);
+    let doc = read_doc();
+    let page = &doc["pages"][0];
+    let rendered = image::open(
+        fixture
+            .cwd
+            .join("work")
+            .join(page["final"].as_str().unwrap()),
+    )
+    .unwrap()
+    .into_rgb8();
+    for (x, y, p) in source.enumerate_pixels() {
+        if x <= 55 || x >= 168 {
+            assert_eq!(rendered.get_pixel(x, y), p, "{x}, {y}");
+        }
+    }
 }
 
 #[test]

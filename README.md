@@ -15,11 +15,11 @@
 [![Documentation in English and Persian](https://img.shields.io/badge/docs-English%20%7C%20Persian-0284c7?style=flat-square)](README.fa.md)
 [![GitHub repository size](https://img.shields.io/github/repo-size/KiaroSama/Revayat-Comic-Skill?style=flat-square&color=ca8a04)](#development)
 [![Pure Rust runtime with zero Python dependencies](https://img.shields.io/badge/runtime-pure%20Rust%20%7C%20zero%20Python-059669?style=flat-square)](#architecture)
-[![Six-stage multi-agent workflow and full-page image editing](https://img.shields.io/badge/workflow-6%20agents%20%7C%20full--page%20edit-7c3aed?style=flat-square)](skills/revayat-comic/references/multi-agent-workflow.md)
+[![Six-stage multi-agent workflow and cropped image editing](https://img.shields.io/badge/workflow-6%20agents%20%7C%20crop%20edits-7c3aed?style=flat-square)](skills/revayat-comic/references/multi-agent-workflow.md)
 [![Bundled Humanizer 4.0 and Persian voice guides](https://img.shields.io/badge/voice-Humanizer%204.0%20%7C%20Persian-b45309?style=flat-square)](skills/revayat-comic/references/voice/index.md)
 [![Support donations](https://img.shields.io/badge/Support-donations-d04a9a?style=flat-square)](#donate)
 
-[English](README.md) · [فارسی](README.fa.md) · [Skill spec](skills/revayat-comic/SKILL.md) · [Multi-agent workflow](skills/revayat-comic/references/multi-agent-workflow.md) · [Full-page editing](skills/revayat-comic/references/fullpage-image-edit.md)
+[English](README.md) · [فارسی](README.fa.md) · [Skill spec](skills/revayat-comic/SKILL.md) · [Multi-agent workflow](skills/revayat-comic/references/multi-agent-workflow.md) · [On-art crop edits](skills/revayat-comic/references/fullpage-image-edit.md)
 
 </div>
 
@@ -31,7 +31,7 @@ Revayat Comic is a pure Rust CLI binary (`revayat-comic`) paired with an AI agen
 - Pure Rust PDF inspection, rasterization, and lossless PDF writing via `lopdf`, `pdf-writer`, and `hayro`, including stencil-mask and Form XObject pixel-budget checks before raster allocation.
 - Pure Rust CBR (`rars`), CBZ (`zip`), and Persian RTL DOCX (`quick-xml`) support.
 - Real Persian shaping and bidi layout on every platform via `cosmic-text` (HarfRust shaping, `unicode-bidi`, and Swash rasterization) with bundled Vazir TTF fonts (`Regular`, `Medium`, `Bold`), at least `1.38x` line spacing, zero-dot interior bubble sweeps, and non-overlapping text guards.
-- Full-page image-edit workflow (`fullpage-prompt`) for covers, speedlines, chapter titles, and art-integrated sound effects: empty uniform speech bubbles first, submit the full page with OCR-verified source texts, exact coordinates, and Persian replacements, then composite only the padded edited zones back onto the immutable original scan.
+- On-art crop edits (`fullpage-prompt`) for covers, speedlines, titles and sound effects. Empty the speech balloons, send a tight crop with the verified source text and exact Persian replacement, then paste the approved lettering back at the original coordinates.
 - Six-stage multi-agent workflow with reusable prompt templates for initial translation, typesetting, review, application, recheck and fixing, and final delivery, plus series canon lookup before drafting.
 
 ## Architecture
@@ -70,7 +70,7 @@ Prebuilt release binaries and CI cover four 64-bit targets:
 
 The release ZIP contains the standalone CLI. Install the skill from the repository's plugin manifests or with the [skill installer](install/README.md), and keep `revayat-comic` on `PATH`.
 
-The repository has v2.0.0 manifests for five plugin systems: Agent Plugins (`plugin.json` and `.agents/plugins/marketplace.json`), Claude Code (`.claude-plugin/`), Codex (`.codex-plugin/`), Cursor (`.cursor-plugin/`), and Antigravity (`.antigravity-plugin/`).
+The repository has v2.0.1 manifests for five plugin systems: Agent Plugins (`plugin.json` and `.agents/plugins/marketplace.json`), Claude Code (`.claude-plugin/`), Codex (`.codex-plugin/`), Cursor (`.cursor-plugin/`), and Antigravity (`.antigravity-plugin/`).
 
 In Claude Code:
 
@@ -142,7 +142,7 @@ After filling the worksheets (manually or through the six-stage agent workflow):
 
 Additional commands:
 
-- `fullpage-prompt --doc <comic.json> --page <id>`: print the full-page image-edit manifest to stdout. The default model is `openai/gpt-image-2.6-sunburst`.
+- `fullpage-prompt --doc <comic.json> --page <id>`: print the page-level manifest for on-art crop edits to stdout. The default model is `antigravity/gemini-3.1-flash-image`.
 - `review-docx --doc <comic.json> --out <review.docx>`: export an RTL Persian bilingual review document.
 - `watermark --doc <comic.json> ...`: mark an exact authorized watermark rectangle for removal.
 - `batch plan|merge|status`: split long chapters into shards and merge them safely.
@@ -157,9 +157,9 @@ Additional commands:
 For full chapters, follow [references/multi-agent-workflow.md](skills/revayat-comic/references/multi-agent-workflow.md):
 
 1. Initial translation (`ترجمه اولیه`): look up official series character names and terminology online first, then translate into natural spoken Persian.
-2. Typesetting and layout (`صفحه آرایی`): assign line breaks, punctuation, font scales, and full-page edit zones.
+2. Typesetting and layout (`صفحه آرایی`): assign line breaks, punctuation, font scales, and on-art edit zones.
 3. Review (`بازبینی`): check fidelity against source crops, terminology consistency, and Persian mechanics.
-4. Apply translation (`اعمال ترجمه`): merge worksheets, run `clean` and `typeset`, and composite verified full-page edits onto original dimensions.
+4. Apply translation (`اعمال ترجمه`): merge worksheets, run `clean` and `typeset`, and paste approved crop edits back at their original coordinates.
 5. File recheck and fix (`چک مجدد فایل و اصلاح مشکلات`): inspect every rendered page visually and run `qa check --strict`, fixing all issues in one batch.
 6. Final review and delivery (`بازبینی نهایی و تحویل`): export lossless CBZ and PDF and verify outputs with `qa package`.
 
@@ -171,7 +171,7 @@ Pipeline commands write UTF-8 logs under `logs/revayat-comic_YYYY-MM-DD_HH-mm-ss
 
 - [SKILL.md](skills/revayat-comic/SKILL.md): full agent workflow and QA codes
 - [references/multi-agent-workflow.md](skills/revayat-comic/references/multi-agent-workflow.md): six-stage agent roles and prompt templates
-- [references/fullpage-image-edit.md](skills/revayat-comic/references/fullpage-image-edit.md): bubbles-emptied full-page editing workflow and prompt rules
+- [references/fullpage-image-edit.md](skills/revayat-comic/references/fullpage-image-edit.md): on-art crop editing, paste-back, and targeted edge repairs
 - [references/translation-policy.md](skills/revayat-comic/references/translation-policy.md): translation rules, spoken register, and glossary discipline
 - [references/persian-typesetting.md](skills/revayat-comic/references/persian-typesetting.md): RTL shaping, line spacing, and balloon fitting
 - [references/detection.md](skills/revayat-comic/references/detection.md): region detection thresholds and manual corrections

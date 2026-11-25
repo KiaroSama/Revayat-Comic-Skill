@@ -94,6 +94,9 @@ pub fn clear_lettering_area(
 ) -> Result<RegionMask> {
     let b = interior.bounds.checked(page.dimensions())?;
     same_geometry((b.width(), b.height()), interior.pixels.dimensions())?;
+    if interior.pixels.iter().all(|&p| p == 255) {
+        return crate::masks::elliptical_lettering_area(page, b, dark);
+    }
     for (x, y, p) in interior.pixels.enumerate_pixels_mut() {
         let light = luminance(page.get_pixel(b.x() + x, b.y() + y));
         if (if dark { 255 - light } else { light }) < 180 {

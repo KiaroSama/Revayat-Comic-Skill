@@ -21,7 +21,10 @@ fn local_mask(root: &Path, region: &RegionRecord) -> Result<Option<masks::Region
 }
 
 fn on_art_mask(root: &Path, page: &RgbImage, region: &RegionRecord) -> Result<masks::RegionMask> {
-    local_mask(root, region)?.map_or_else(|| region_mask(page, region, None, false), Ok)
+    if let Some(mask) = local_mask(root, region)? {
+        return Ok(mask);
+    }
+    region_mask(&masks::page_luminance(page), region, None, false)
 }
 
 fn image_at(directory: &Path, page: &PageRecord) -> Result<RgbImage> {
@@ -208,13 +211,28 @@ pub fn typeset(path: &Path, external: Option<&Path>) -> Result<Value> {
                         .get_or_insert(if balloon.dark { [255; 3] } else { [0; 3] });
                     entry.interior = Some(interior);
                     record_balloon(&source, region, balloon)?;
-                } else if bubble_kind(region) {
-                    region.typeset.insert("status".into(), json!("unreliable"));
-                    region.typeset.insert(
-                        "reason".into(),
-                        json!("no enclosed balloon; review its placement or use an on-art edit"),
-                    );
-                    continue;
+                } else if bubble_kind(region) || region.kind == "caption" {
+                    let anchor = entry.bounds;
+                    let area = panels
+                        .iter()
+                        .filter(|panel| panel.contains(anchor.center()[0], anchor.center()[1]))
+                        .min_by_key(|panel| panel.area())
+                        .and_then(|panel| panel.intersection(anchor))
+                        .unwrap_or(anchor);
+                    let interior = masks::elliptical_lettering_area(&cleaned, area, dark(region))
+                        .map_err(failed)?;
+                    if !interior.pixels.iter().any(|&p| p != 0) {
+                        region.typeset.insert("status".into(), json!("unreliable"));
+                        region
+                            .typeset
+                            .insert("reason".into(), json!("no safe paper for lettering"));
+                        continue;
+                    }
+                    interior.apply_to(&mut allowed).map_err(failed)?;
+                    if dark(region) {
+                        entry.style.color.get_or_insert([255; 3]);
+                    }
+                    entry.interior = Some(interior);
                 } else {
                     let anchor = entry.bounds;
                     entry.compact =

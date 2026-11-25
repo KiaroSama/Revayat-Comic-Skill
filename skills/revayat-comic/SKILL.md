@@ -3,7 +3,7 @@ name: revayat-comic
 description: Translate manga, manhwa, manhua and Western comics into Persian and produce a finished CBZ, PDF or folder of pages. Detects panels, speech balloons and sound effects, reads them with your own eyes from rendered crops, removes the original lettering without altering the artwork, and typesets real right-to-left Persian into each balloon. Use for translating a manga chapter, a webtoon, a comic, a CBZ/CBR archive or a comic PDF into Persian (فارسی).
 license: GPL-3.0-or-later
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, Agent, AskUserQuestion
-metadata: {"homepage":"https://github.com/KiaroSama/Revayat-Comic-Skill","version":"2.0.0","requires":{"bins":["revayat-comic"]}}
+metadata: {"homepage":"https://github.com/KiaroSama/Revayat-Comic-Skill","version":"2.0.1","requires":{"bins":["revayat-comic"]}}
 ---
 
 # Revayat Comic: comics into Persian
@@ -16,13 +16,13 @@ Set `WORK` to the chapter workspace and `OUTPUT` to the final CBZ, PDF or page f
 
 The examples use the standalone v2 `revayat-comic` on `PATH`. Set `DRAFT` to a UTF-8 file when linting draft prose and `BATCH` to a separate shard directory when using batch mode.
 
-### Six-stage workflow and full-page editing
+### Six-stage workflow and on-art editing
 
 Every comic translation runs through the **six-stage multi-agent workflow** in `references/multi-agent-workflow.md`:
 1. **Initial Translation (`ترجمه اولیه`)**: Web-search official series character names, honorifics, and canon terminology first; draft natural spoken Persian applying `references/voice/persian/SKILL.md` and `references/voice/humanizer/SKILL.md` (v4.0.0).
 2. **Layout & Typesetting Planning (`صفحه آرایی`)**: Set balanced line breaks, generous line spacing (`>= 1.38x`), RTL punctuation, anti-overlap badge/title checks, and classify each region as `typeset` (clean uniform bubble) vs `fullpage_edit` (on-art/speedlines/maps/covers/SFX).
 3. **Bilingual and tone review**: Check the Persian against the source crops and run `revayat-comic voice lint "$DRAFT" --check --style` on a UTF-8 draft file.
-4. **Apply the translation**: Merge the worksheets, then clean and typeset. For lettering on artwork, follow `references/fullpage-image-edit.md`: send the full page with empty balloons to the image editor and composite the approved result with `typeset --external-dir`. Include a `<page_id>.png` only for each approved external edit; the CLI typesets pages without a matching PNG normally.
+4. **Apply the translation**: Merge the worksheets, then clean and typeset. For lettering on artwork, follow `references/fullpage-image-edit.md`: send tight context crops to `antigravity/gemini-3.1-flash-image` and align approved edits back to their original rectangles. If visual review flags an edge defect, repair only that small strip. Pass the assembled `<page_id>.png` to `typeset --external-dir` for approved pages only; the CLI typesets pages without a matching PNG normally.
 5. **Visual recheck**: Open every rendered page with `Read`, then run `revayat-comic qa check --doc "$WORK/comic.json" --strict`. Fix remaining marks, overflows and missing glyphs.
 6. **Delivery**: Export the requested formats, verify each package with `qa package --package`, and update the translation and QA log.
 
@@ -145,10 +145,18 @@ and it is the only order that keeps the guarantee below true.
 Read `references/voice/index.md` before drafting or reviewing prose. For comic
 translation, use `references/voice/persian/SKILL.md` and its bundled guides
 (`register-guide.md`, `pitfalls.md`, and `ai-tells.md` inside that folder).
-Write dialogue in natural spoken Persian. Match how each character addresses
-this listener in this scene; keep formal speech where the source calls for it.
-Read lines aloud and compare them with the source. For stilted Persian or
-ambiguous replies, follow `references/persian-review.md`.
+Write every speech balloon in natural spoken Persian. Match the character's
+voice, their listener, and the scene's tension. Ordinary dialogue should not
+sound like an essay: avoid phrases such as `همان‌طور که پیش‌تر گفتم` and
+`ناگفته پیداست`. Reserve elevated wording for characters who actually speak
+that way. Read the lines aloud and compare them with the source. For stilted
+Persian or ambiguous replies, follow `references/persian-review.md`.
+
+For manga, always keep Japanese honorifics in Persian script: `-سان`, `-کون`,
+`-ساما`, `-چان`, `-تان`, `-سنپای`, and `-سنسی`. Write forms such as
+`میناتو-سان` and `ساهاشی-کون`. Do not drop them or replace them with `آقای`,
+`خانم`, `ارباب`, or `بانو` unless the user explicitly asks to localize them
+for that book. See `references/translation-policy.md`.
 
 Before translating any chapter, look up official character names, pronunciations,
 honorifics, and relationships on the web. Check publisher or creator material and

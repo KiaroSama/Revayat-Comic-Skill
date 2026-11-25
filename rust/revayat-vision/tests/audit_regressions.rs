@@ -1,7 +1,7 @@
 use image::{Rgb, RgbImage};
 use revayat_vision::{
-    Rect, Result, bidi, lettering,
-    masks::{Balloon, balloon_interior, resolve_balloon},
+    Rect, Result, bidi, clean, lettering,
+    masks::{self, Balloon, MaskOptions, balloon_interior, resolve_balloon},
     qa::missing_clusters,
     typefont::Shaper,
     typeset::{TextRegion, typeset_page},
@@ -68,6 +68,124 @@ fn saved_balloon_cannot_bypass_the_current_panel() -> Result<()> {
         )?
         .is_none(),
         "a cached contour cannot grant permission outside the selected panel"
+    );
+    Ok(())
+}
+
+#[test]
+fn narrow_open_tail_recovers_both_lobes_without_the_panel_paper() -> Result<()> {
+    let panel = Rect([6, 6, 168, 108]);
+    let page = RgbImage::from_fn(180, 120, |x, y| {
+        let in_lobes = |radius: u32| {
+            [69u32, 106]
+                .into_iter()
+                .any(|cx| x.abs_diff(cx).pow(2) + y.abs_diff(62).pow(2) <= radius.pow(2))
+        };
+        let open_tail = x == 70 && (27..=43).contains(&y);
+        Rgb([if in_lobes(22) || !in_lobes(27) || open_tail {
+            245
+        } else {
+            25
+        }; 3])
+    });
+    let anchor = Rect([52, 49, 65, 22]);
+    let (balloon, interior) = masks::resolve_balloon_with_interior(
+        &masks::page_luminance(&page),
+        anchor,
+        None,
+        Some(panel),
+        false,
+    )?
+    .ok_or_else(|| {
+        revayat_vision::VisionError::Invalid("narrow-tail balloon not recovered".into())
+    })?;
+    let mut allowed = image::GrayImage::new(page.width(), page.height());
+    interior.apply_to(&mut allowed)?;
+    assert_eq!(allowed.get_pixel(69, 62)[0], 255);
+    assert_eq!(allowed.get_pixel(106, 62)[0], 255);
+    assert_eq!(allowed.get_pixel(70, 20)[0], 0);
+    assert_eq!(panel.intersection(balloon.bounds), Some(balloon.bounds));
+    Ok(())
+}
+
+#[test]
+fn free_lettering_mask_preserves_curved_outline_panel_frame_and_hair() -> Result<()> {
+    let page = RgbImage::from_fn(170, 130, |x, y| {
+        let oval = x.abs_diff(92).pow(2) + y.abs_diff(68).pow(2);
+        let frame = (128..=129).contains(&x);
+        let hair = y <= 55 && x.abs_diff(103 + y / 4) <= 2;
+        let glyph = (71..=81).contains(&x) && (62..=69).contains(&y);
+        Rgb([if (2401..=2500).contains(&oval) || frame || glyph {
+            20
+        } else if hair {
+            150
+        } else {
+            245
+        }; 3])
+    });
+    let mask = masks::region_mask(
+        &page,
+        Rect([49, 40, 80, 48]),
+        None,
+        false,
+        MaskOptions {
+            grow: 0.08,
+            full_balloon: false,
+            ..Default::default()
+        },
+    )?;
+    let mut authorization = image::GrayImage::new(page.width(), page.height());
+    mask.apply_to(&mut authorization)?;
+    assert_eq!(authorization.get_pixel(71, 58)[0], 255);
+    assert_eq!(authorization.get_pixel(67, 58)[0], 0);
+    let (cleaned, _) = clean::clean_region(&page, &mask, None, None)?;
+    for (x, y, original) in page.enumerate_pixels() {
+        if (71..=81).contains(&x) && (62..=69).contains(&y) {
+            assert!(cleaned.get_pixel(x, y)[0] > 180);
+        } else if original[0] < 180 {
+            assert_eq!(authorization.get_pixel(x, y)[0], 0, "{x}, {y}");
+            assert_eq!(cleaned.get_pixel(x, y), original, "{x}, {y}");
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn free_lettering_fits_persian_inside_elliptical_paper_clearance() -> Result<()> {
+    let bounds = Rect([20, 20, 130, 84]);
+    let page = RgbImage::from_fn(180, 125, |x, y| {
+        Rgb(
+            [if (x < 39 && y < 39) || (x == 49 && (45..75).contains(&y)) {
+                25
+            } else {
+                245
+            }; 3],
+        )
+    });
+    let mask = clean::clear_lettering_area(
+        &page,
+        masks::RegionMask {
+            bounds,
+            pixels: image::GrayImage::from_pixel(
+                bounds.width(),
+                bounds.height(),
+                image::Luma([255]),
+            ),
+        },
+        false,
+    )?;
+    assert_eq!(mask.pixels.get_pixel(121, 4)[0], 0);
+    assert_eq!(mask.pixels.get_pixel(30, 40)[0], 0);
+    assert_eq!(mask.pixels.get_pixel(65, 42)[0], 255);
+    let mut entry = TextRegion::new("open-speech", bounds, "خیلی دوره!");
+    entry.interior = Some(mask);
+    let output = typeset_page(&page, &[entry])?;
+    assert_eq!(output.regions.len(), 1);
+    assert!(output.mask.pixels().any(|p| p[0] != 0));
+    assert!(
+        page.pixels()
+            .zip(output.image.pixels())
+            .all(|(before, after)| before[0] >= 180 || before == after)
     );
     Ok(())
 }

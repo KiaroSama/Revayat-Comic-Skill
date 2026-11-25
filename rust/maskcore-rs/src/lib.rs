@@ -3,3 +3,4 @@
 #![forbid(unsafe_code)]
 
 pub mod port;
+pub use port::dilate_l2;

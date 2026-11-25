@@ -1,4 +1,4 @@
-use crate::{Rect, Result, VisionError, gray, mask_bounds, same_geometry};
+use crate::{Rect, Result, VisionError, luminance, mask_bounds, same_geometry};
 use image::{GrayImage, Luma, RgbImage, imageops};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
@@ -89,34 +89,47 @@ fn fill_enclosed(paper: &mut GrayImage) {
     }
 }
 
+pub fn page_luminance(page: &RgbImage) -> GrayImage {
+    crate::gray(page, false)
+}
+
+fn oriented_window(b: Rect, dark: bool, luma: impl Fn(u32, u32) -> u8) -> GrayImage {
+    GrayImage::from_fn(b.width(), b.height(), |x, y| {
+        let l = luma(b.x() + x, b.y() + y);
+        Luma([if dark { 255 - l } else { l }])
+    })
+}
+
 /// The enclosed paper, including ink holes, with a wall clearance in page pixels.
 pub fn balloon_interior(page: &RgbImage, balloon: Balloon, inset: u32) -> Result<RegionMask> {
-    seeded_interior(page, balloon, inset, None)
+    balloon.bounds.checked(page.dimensions())?;
+    balloon.text_bounds.checked(page.dimensions())?;
+    let paper = seeded_interior(balloon, None, |x, y| luminance(page.get_pixel(x, y)))?;
+    if inset == 0 {
+        Ok(paper)
+    } else {
+        inset_balloon(&paper, inset)
+    }
 }
 
 fn seeded_interior(
-    page: &RgbImage,
     balloon: Balloon,
-    inset: u32,
     clip: Option<Rect>,
+    luma: impl Fn(u32, u32) -> u8,
 ) -> Result<RegionMask> {
-    let b = balloon.bounds.checked(page.dimensions())?;
-    let text = balloon.text_bounds.checked(page.dimensions())?;
-    let window = imageops::crop_imm(page, b.x(), b.y(), b.width(), b.height()).to_image();
-    let oriented = gray(&window, balloon.dark);
-    let mut empty = GrayImage::new(b.width(), b.height());
-    if b.width().min(b.height()) < 6 {
-        return Ok(RegionMask {
-            bounds: b,
-            pixels: empty,
-        });
-    }
-    let Some(seed) = text.intersection(b) else {
-        return Ok(RegionMask {
-            bounds: b,
-            pixels: empty,
-        });
+    let b = balloon.bounds;
+    let empty = || RegionMask {
+        bounds: b,
+        pixels: GrayImage::new(b.width(), b.height()),
     };
+    let Some(seed) = balloon
+        .text_bounds
+        .intersection(b)
+        .filter(|_| b.width().min(b.height()) >= 6)
+    else {
+        return Ok(empty());
+    };
+    let oriented = oriented_window(b, balloon.dark, luma);
     let paper = |threshold| {
         GrayImage::from_fn(b.width(), b.height(), |x, y| {
             Luma([if oriented.get_pixel(x, y)[0] >= threshold {
@@ -126,10 +139,14 @@ fn seeded_interior(
             }])
         })
     };
-    let empty_mask = || GrayImage::new(b.width(), b.height());
-    let mut recovered = None;
-    for threshold in [220, 185] {
+    for (threshold, narrow_tail) in [(220, false), (185, false), (220, true), (185, true)] {
         let bright = paper(threshold);
+        // A one-pixel tail opening must not join an otherwise enclosed balloon to the panel.
+        let bright = if narrow_tail {
+            morphology(&bright, 1, true)?
+        } else {
+            bright
+        };
         let labels = imageproc::region_labelling::connected_components(
             &bright,
             imageproc::region_labelling::Connectivity::Four,
@@ -150,7 +167,7 @@ fn seeded_interior(
         if coverage * 8 < seed.area() {
             continue;
         }
-        let mut candidate = empty_mask();
+        let mut candidate = empty().pixels;
         let mut count = 0u64;
         for (out, p) in candidate.pixels_mut().zip(labels.pixels()) {
             if p[0] == label {
@@ -167,7 +184,9 @@ fn seeded_interior(
             tight.x() == 0,
             tight.right() == b.width(),
         ];
-        if edges.iter().filter(|&&edge| edge).count() > 2
+        let edge_count = edges.into_iter().filter(|&edge| edge).count();
+        if edge_count > 2
+            || (narrow_tail && edge_count != 0)
             || clip.is_some_and(|clip| {
                 edges
                     .into_iter()
@@ -182,26 +201,57 @@ fn seeded_interior(
         {
             continue;
         }
-        fill_enclosed(&mut candidate);
         let area_factor = if count * 20 >= tight.area() * 13 {
             48
         } else {
             6
         };
-        if clip.is_some()
-            && (count * 2 < tight.area() || count > text.area().saturating_mul(area_factor))
+        if (clip.is_some() || narrow_tail)
+            && (count * 2 < tight.area()
+                || count > balloon.text_bounds.area().saturating_mul(area_factor))
         {
             continue;
         }
-        recovered = Some(candidate);
-        break;
-    }
-    let Some(mut paper) = recovered else {
+        if tight.x() > 0
+            && tight.y() > 0
+            && tight.right() < b.width()
+            && tight.bottom() < b.height()
+        {
+            let mut tight_paper = imageops::crop_imm(
+                &candidate,
+                tight.x(),
+                tight.y(),
+                tight.width(),
+                tight.height(),
+            )
+            .to_image();
+            fill_enclosed(&mut tight_paper);
+            imageops::replace(
+                &mut candidate,
+                &tight_paper,
+                i64::from(tight.x()),
+                i64::from(tight.y()),
+            );
+        } else {
+            fill_enclosed(&mut candidate);
+        }
         return Ok(RegionMask {
             bounds: b,
-            pixels: empty,
+            pixels: candidate,
         });
-    };
+    }
+    Ok(empty())
+}
+
+fn inset_balloon(interior: &RegionMask, inset: u32) -> Result<RegionMask> {
+    let b = interior.bounds;
+    let mut paper = interior.pixels.clone();
+    if inset == 0 {
+        return Ok(RegionMask {
+            bounds: b,
+            pixels: paper,
+        });
+    }
     // A crop-edge pixel has no proven clearance from the contour.
     for (x, y, p) in paper.enumerate_pixels_mut() {
         if x < inset
@@ -212,17 +262,9 @@ fn seeded_interior(
             p[0] = 0;
         }
     }
-    let paper = if inset > 0 {
-        morphology(&paper, inset, true)?
-    } else {
-        paper
-    };
-    for (out, p) in empty.pixels_mut().zip(paper.pixels()) {
-        *out = *p;
-    }
     Ok(RegionMask {
         bounds: b,
-        pixels: empty,
+        pixels: morphology(&paper, inset, true)?,
     })
 }
 
@@ -234,14 +276,44 @@ pub fn resolve_balloon(
     panel: Option<Rect>,
     dark: bool,
 ) -> Result<Option<Balloon>> {
-    text.checked(page.dimensions())?;
-    let clip = panel.unwrap_or(Rect([0, 0, page.width(), page.height()]));
-    clip.checked(page.dimensions())?;
+    Ok(
+        resolve_balloon_paper(page.dimensions(), text, saved, panel, dark, |x, y| {
+            luminance(page.get_pixel(x, y))
+        })?
+        .map(|(balloon, _)| balloon),
+    )
+}
+
+/// Resolve and retain the paper component so geometry and erase masks can reuse it.
+pub fn resolve_balloon_with_interior(
+    luma: &GrayImage,
+    text: Rect,
+    saved: Option<Balloon>,
+    panel: Option<Rect>,
+    dark: bool,
+) -> Result<Option<(Balloon, RegionMask)>> {
+    resolve_balloon_paper(luma.dimensions(), text, saved, panel, dark, |x, y| {
+        luma.get_pixel(x, y)[0]
+    })
+}
+
+fn resolve_balloon_paper(
+    size: (u32, u32),
+    text: Rect,
+    saved: Option<Balloon>,
+    panel: Option<Rect>,
+    dark: bool,
+    luma: impl Fn(u32, u32) -> u8,
+) -> Result<Option<(Balloon, RegionMask)>> {
+    text.checked(size)?;
+    let clip = panel.unwrap_or(Rect([0, 0, size.0, size.1]));
+    clip.checked(size)?;
     let Some(seed) = clip.intersection(text) else {
         return Ok(None);
     };
+    let mut used = None;
     if let Some(saved) = saved
-        && let Some(bounds) = saved.bounds.checked(page.dimensions())?.intersection(clip)
+        && let Some(bounds) = saved.bounds.checked(size)?.intersection(clip)
         && bounds
             .intersection(seed)
             .is_some_and(|overlap| overlap.area() * 3 >= seed.area())
@@ -252,22 +324,27 @@ pub fn resolve_balloon(
             text_bounds: seed,
             dark,
         };
-        if mask_bounds(&seeded_interior(page, candidate, 1, Some(clip))?.pixels).is_some() {
-            return Ok(Some(candidate));
+        let paper = seeded_interior(candidate, Some(clip), &luma)?;
+        if inset_balloon(&paper, 1)?.pixels.iter().any(|&p| p != 0) {
+            return Ok(Some((candidate, paper)));
         }
+        used = Some(bounds);
     }
     let pad = seed.width().max(seed.height()).max(32);
-    for pad in [pad, pad * 2] {
+    for pad in [pad, pad.saturating_mul(2)] {
         let bounds = seed
-            .expand(pad, page.width(), page.height())
+            .expand(pad, size.0, size.1)
             .intersection(clip)
             .unwrap_or(clip);
+        if used.replace(bounds) == Some(bounds) {
+            continue;
+        }
         let probe = Balloon {
             bounds,
             text_bounds: seed,
             dark,
         };
-        let inside = seeded_interior(page, probe, 0, Some(clip))?;
+        let inside = seeded_interior(probe, Some(clip), &luma)?;
         let Some(tight) = mask_bounds(&inside.pixels) else {
             continue;
         };
@@ -287,19 +364,48 @@ pub fn resolve_balloon(
             continue;
         }
         let bounds = tight
-            .expand(2, page.width(), page.height())
+            .expand(2, size.0, size.1)
             .intersection(clip)
             .unwrap_or(tight);
-        return Ok(Some(Balloon { bounds, ..probe }));
+        let mut pixels = GrayImage::new(bounds.width(), bounds.height());
+        let common = inside.bounds.intersection(bounds).unwrap_or(tight);
+        let crop = imageops::crop_imm(
+            &inside.pixels,
+            common.x() - inside.bounds.x(),
+            common.y() - inside.bounds.y(),
+            common.width(),
+            common.height(),
+        );
+        imageops::replace(
+            &mut pixels,
+            &*crop,
+            i64::from(common.x() - bounds.x()),
+            i64::from(common.y() - bounds.y()),
+        );
+        return Ok(Some((
+            Balloon { bounds, ..probe },
+            RegionMask { bounds, pixels },
+        )));
     }
     Ok(None)
 }
 
 pub fn balloon_geometry(page: &RgbImage, balloon: Balloon) -> Result<serde_json::Value> {
+    let outline = balloon_interior(page, balloon, 1)?;
+    geometry_for_outline(balloon, outline)
+}
+
+pub fn balloon_geometry_from_interior(
+    balloon: Balloon,
+    interior: &RegionMask,
+) -> Result<serde_json::Value> {
+    geometry_for_outline(balloon, inset_balloon(interior, 1)?)
+}
+
+fn geometry_for_outline(balloon: Balloon, outline: RegionMask) -> Result<serde_json::Value> {
     use imageproc::contours::{BorderType, find_contours};
 
     let margin = text_inset(balloon.bounds);
-    let outline = balloon_interior(page, balloon, 1)?;
     let mut value = serde_json::to_value(balloon)?;
     let b = outline.bounds;
     if let Some(contour) = find_contours::<i32>(&outline.pixels)
@@ -355,6 +461,44 @@ pub fn region_mask(
     options: MaskOptions,
 ) -> Result<RegionMask> {
     bounds.checked(page.dimensions())?;
+    let paper = balloon.map(|b| balloon_interior(page, b, 0)).transpose()?;
+    region_mask_from_luma(
+        page.dimensions(),
+        bounds,
+        paper.as_ref(),
+        balloon.map_or(dark, |b| b.dark),
+        options,
+        |x, y| luminance(page.get_pixel(x, y)),
+    )
+}
+
+/// Build the erase mask without finding the balloon's paper component again.
+pub fn region_mask_with_interior(
+    luma: &GrayImage,
+    bounds: Rect,
+    interior: Option<&RegionMask>,
+    dark: bool,
+    options: MaskOptions,
+) -> Result<RegionMask> {
+    region_mask_from_luma(
+        luma.dimensions(),
+        bounds,
+        interior,
+        dark,
+        options,
+        |x, y| luma.get_pixel(x, y)[0],
+    )
+}
+
+fn region_mask_from_luma(
+    size: (u32, u32),
+    bounds: Rect,
+    interior: Option<&RegionMask>,
+    dark: bool,
+    options: MaskOptions,
+    luma: impl Fn(u32, u32) -> u8,
+) -> Result<RegionMask> {
+    bounds.checked(size)?;
     if ![options.grow, options.pad]
         .into_iter()
         .all(|x| (0.0..=1.0).contains(&x))
@@ -364,20 +508,15 @@ pub fn region_mask(
         ));
     }
     let side = bounds.width().min(bounds.height());
-    let window = bounds.expand(
-        (options.pad * side as f32).round() as u32,
-        page.width(),
-        page.height(),
-    );
-    let allowed = balloon
-        .map(|b| {
-            balloon_interior(
-                page,
-                b,
-                (OUTLINE_INSET * b.bounds.width().min(b.bounds.height()) as f32)
-                    .round()
-                    .max(1.0) as u32,
-            )
+    let window = bounds.expand((options.pad * side as f32).round() as u32, size.0, size.1);
+    let allowed = interior
+        .map(|paper| {
+            let b = paper.bounds.checked(size)?;
+            same_geometry((b.width(), b.height()), paper.pixels.dimensions())?;
+            let inset = (OUTLINE_INSET * b.width().min(b.height()) as f32)
+                .round()
+                .max(1.0) as u32;
+            inset_balloon(paper, inset)
         })
         .transpose()?;
     let b = if options.full_balloon {
@@ -391,8 +530,7 @@ pub fn region_mask(
             pixels: GrayImage::from_pixel(b.width(), b.height(), Luma([255])),
         });
     }
-    let crop = imageops::crop_imm(page, b.x(), b.y(), b.width(), b.height()).to_image();
-    let oriented = gray(&crop, balloon.map_or(dark, |b| b.dark));
+    let oriented = oriented_window(b, dark, luma);
     let permitted = |x: u32, y: u32| {
         allowed.as_ref().is_none_or(|m| {
             let (x, y) = (x + b.x(), y + b.y());
@@ -403,45 +541,44 @@ pub fn region_mask(
     let threshold = if allowed.is_some() {
         175
     } else {
-        imageproc::contrast::otsu_level(&oriented).min(210)
-    };
-    let raw = GrayImage::from_fn(b.width(), b.height(), |x, y| {
-        Luma([
-            if permitted(x, y) && oriented.get_pixel(x, y)[0] <= threshold {
-                255
-            } else {
-                0
-            },
-        ])
-    });
-    let (raw, guard) = if allowed.is_some() {
-        (raw, None)
-    } else {
-        let (ink, edges) = maskcore_rs::port::strip_perimeter_contours(
-            Some(raw.as_raw()),
-            i128::from(b.width()),
-            i128::from(b.height()),
-            0.18,
-            0.70,
-        )
-        .map_err(VisionError::kernel)?;
-        (
-            from_raw(raw.dimensions(), ink)?,
-            Some(morphology(&from_raw(raw.dimensions(), edges)?, 1, false)?),
-        )
+        imageproc::contrast::otsu_level(&oriented).min(179)
     };
     let radius = (options.grow * side as f32).round().max(1.0) as u32;
-    let expanded = morphology(&raw, radius, false)?;
-    let closed = morphology(&morphology(&expanded, radius, false)?, radius, true)?;
-    let pixels = GrayImage::from_fn(b.width(), b.height(), |x, y| {
-        Luma([
-            if permitted(x, y) && guard.as_ref().is_none_or(|m| m.get_pixel(x, y)[0] == 0) {
+    let pixels = if allowed.is_some() {
+        let raw = GrayImage::from_fn(b.width(), b.height(), |x, y| {
+            Luma([
+                if permitted(x, y) && oriented.get_pixel(x, y)[0] <= threshold {
+                    255
+                } else {
+                    0
+                },
+            ])
+        });
+        let expanded = morphology(&raw, radius, false)?;
+        let closed = morphology(&morphology(&expanded, radius, false)?, radius, true)?;
+        GrayImage::from_fn(b.width(), b.height(), |x, y| {
+            Luma([if permitted(x, y) {
                 closed.get_pixel(x, y)[0].max(raw.get_pixel(x, y)[0])
             } else {
                 0
-            },
-        ])
-    });
+            }])
+        })
+    } else {
+        let ink = free_ink(&oriented, b, bounds, threshold);
+        let mut pixels = maskcore_rs::dilate_l2(
+            Some(ink.as_raw()),
+            i128::from(b.width()),
+            i128::from(b.height()),
+            i128::from(radius),
+        )
+        .map_err(VisionError::kernel)?;
+        for ((p, &luma), &is_ink) in pixels.iter_mut().zip(oriented.iter()).zip(ink.iter()) {
+            if luma < 180 && is_ink == 0 {
+                *p = 0;
+            }
+        }
+        from_raw(oriented.dimensions(), pixels)?
+    };
     if options.full_balloon
         && let Some(local) = mask_bounds(&pixels)
     {
@@ -468,6 +605,59 @@ pub fn region_mask(
         });
     }
     Ok(RegionMask { bounds: b, pixels })
+}
+
+/// Bright paper inside a rounded footprint, with clearance from dark art.
+pub fn elliptical_lettering_area(page: &RgbImage, bounds: Rect, dark: bool) -> Result<RegionMask> {
+    let b = bounds.checked(page.dimensions())?;
+    let margin = (b.width().min(b.height()) / 48).clamp(1, 2);
+    let [rx, ry] = [b.width(), b.height()].map(|side| (f64::from(side) / 2.0 - 0.5).max(0.5));
+    let paper = oriented_window(b, dark, |x, y| luminance(page.get_pixel(x, y)));
+    let paper = GrayImage::from_fn(b.width(), b.height(), |x, y| {
+        let dx = (f64::from(x) + 0.5 - f64::from(b.width()) / 2.0) / rx;
+        let dy = (f64::from(y) + 0.5 - f64::from(b.height()) / 2.0) / ry;
+        Luma([
+            if dx * dx + dy * dy <= 1.0 && paper.get_pixel(x, y)[0] >= 180 {
+                255
+            } else {
+                0
+            },
+        ])
+    });
+    Ok(RegionMask {
+        bounds: b,
+        pixels: morphology(&paper, margin, true)?,
+    })
+}
+
+fn free_ink(oriented: &GrayImage, window: Rect, anchor: Rect, threshold: u8) -> GrayImage {
+    use imageproc::region_labelling::{Connectivity, connected_components};
+
+    let (w, h) = oriented.dimensions();
+    let dark = GrayImage::from_fn(w, h, |x, y| {
+        Luma([if oriented.get_pixel(x, y)[0] < 180 {
+            255
+        } else {
+            0
+        }])
+    });
+    let labels = connected_components(&dark, Connectivity::Eight, Luma([0]));
+    let mut components =
+        vec![(false, false); labels.iter().copied().max().unwrap_or(0) as usize + 1];
+    for (x, y, label) in labels.enumerate_pixels().filter(|(_, _, p)| p[0] != 0) {
+        let (has_ink, hits_art) = &mut components[label[0] as usize];
+        *has_ink |= oriented.get_pixel(x, y)[0] <= threshold;
+        // A dark component crossing the source text box may be an outline or artwork.
+        *hits_art |= x == 0
+            || y == 0
+            || x + 1 == w
+            || y + 1 == h
+            || !anchor.contains(window.x() + x, window.y() + y);
+    }
+    GrayImage::from_fn(w, h, |x, y| {
+        let (has_ink, hits_art) = components[labels.get_pixel(x, y)[0] as usize];
+        Luma([if has_ink && !hits_art { 255 } else { 0 }])
+    })
 }
 
 #[cfg(test)]

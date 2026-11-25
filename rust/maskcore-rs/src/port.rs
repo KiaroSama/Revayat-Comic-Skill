@@ -146,6 +146,58 @@ pub fn dilate_linf(
     checked_morph(mask, width, height, radius, 255)
 }
 
+/// Dilate with a Euclidean disc, clipped to the image.
+pub fn dilate_l2(
+    mask: Option<&[u8]>,
+    width: i128,
+    height: i128,
+    radius: i128,
+) -> Result<Vec<u8>, String> {
+    let (grid, mask) = Grid::checked(mask, width, height)?;
+    let radius = nonnegative(radius, RADIUS)?;
+    if mask.iter().any(|&p| p != 0 && p != 255) {
+        return Err(BINARY.into());
+    }
+    if radius == 0 {
+        return Ok(mask.to_vec());
+    }
+    let (w, h) = (grid.width, grid.height);
+    let r2 = (radius as u128).pow(2);
+    if r2 >= ((w - 1) as u128).pow(2) + ((h - 1) as u128).pow(2) {
+        return Ok(vec![mask.iter().copied().max().unwrap_or(0); mask.len()]);
+    }
+    let spans: Vec<_> = (0..=radius.min(h - 1))
+        .map(|dy| (r2 - (dy as u128).pow(2)).isqrt() as usize)
+        .collect();
+    let mut distance = vec![usize::MAX; mask.len()];
+    for (row, distances) in mask.chunks_exact(w).zip(distance.chunks_exact_mut(w)) {
+        for reverse in [false, true] {
+            let mut dx = usize::MAX;
+            for i in 0..w {
+                let x = if reverse { w - 1 - i } else { i };
+                dx = if row[x] == 255 {
+                    0
+                } else {
+                    dx.saturating_add(1)
+                };
+                distances[x] = distances[x].min(dx);
+            }
+        }
+    }
+    let mut out = vec![0; mask.len()];
+    for (y, row) in out.chunks_exact_mut(w).enumerate() {
+        for yy in y.saturating_sub(radius)..=y.saturating_add(radius).min(h - 1) {
+            let span = spans[y.abs_diff(yy)];
+            for (p, &dx) in row.iter_mut().zip(&distance[yy * w..][..w]) {
+                if dx <= span {
+                    *p = 255;
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "The bridge preserves the reference signature"
@@ -409,6 +461,31 @@ mod tests {
             dilate_linf(Some(&[255, 0, 0, 0, 0, 0]), 3, 2, 1),
             Ok(vec![255, 255, 0, 255, 255, 0])
         );
+    }
+
+    #[test]
+    fn circular_dilation_matches_the_integer_disc() -> Result<(), String> {
+        let mut ink = vec![0; 81];
+        ink[40] = 255;
+        for radius in [0, 1, 2, 3, 4] {
+            let expected: Vec<_> = (-4i128..=4)
+                .flat_map(|dy| (-4i128..=4).map(move |dx| (dx, dy)))
+                .map(|(dx, dy)| {
+                    if dx * dx + dy * dy <= radius * radius {
+                        255
+                    } else {
+                        0
+                    }
+                })
+                .collect();
+            assert_eq!(crate::dilate_l2(Some(&ink), 9, 9, radius)?, expected);
+        }
+        assert_eq!(
+            crate::dilate_l2(Some(&ink), 9, 9, i128::MAX)?,
+            vec![255; 81]
+        );
+        assert_eq!(crate::dilate_l2(Some(&[1]), 1, 1, 0), Err(BINARY.into()));
+        Ok(())
     }
 
     #[test]
