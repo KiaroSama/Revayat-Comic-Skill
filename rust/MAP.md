@@ -11,7 +11,7 @@
 | `pixcore-rs` | `rust/pixcore-rs` | Outside-mask diff, changed pixel masks, overlap checks |
 | `qacore-rs` | `rust/qacore-rs` | Outline bleed, region contrast, halo detection |
 | `textcore-rs` | `rust/textcore-rs` | Persian normalization, RTL bidi isolates (RLM+RLI/PDI) |
-| `revayat-ir` | `rust/revayat-ir` | Comic IR, worksheets, glossary, sharding, journal, UTC logs |
+| `revayat-ir` | `rust/revayat-ir` | Comic IR, worksheets, content-bound reviews, glossary, sharding, publication evidence, journal, UTC logs |
 | `revayat-io` | `rust/revayat-io` | Pure-Rust CBZ, CBR, PDF (R01 guards), folder, RTL DOCX |
 | `revayat-vision` | `rust/revayat-vision` | Cleaning, `cosmic-text` Vazir typesetting, full-page prompt, strict QA |
 | `revayat-tools` | `rust/revayat-tools` | MCP stdio/HTTP server, hosted HTTPS providers, Persian lint/lookup, installer, eval |

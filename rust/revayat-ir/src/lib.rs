@@ -9,6 +9,7 @@ pub mod journal;
 pub mod languages;
 pub mod regions;
 pub mod replies;
+pub mod review;
 pub mod runlog;
 pub mod stages;
 pub mod textmatch;

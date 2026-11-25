@@ -18,6 +18,13 @@ pub struct DetectionOptions {
     pub ink_max: f64,
     pub glyph_min: f64,
     pub glyph_max: f64,
+    pub gutter_max_ink: f64,
+    pub gutter_min_span: f64,
+    pub panel_min_area: f64,
+    pub sfx_min_side: f64,
+    pub sfx_min_glyphs: u32,
+    pub sfx_size_uniformity: f64,
+    pub sfx_max_spread: f64,
     pub find_sfx: bool,
     pub rtl: bool,
 }
@@ -32,9 +39,50 @@ impl Default for DetectionOptions {
             ink_max: 0.55,
             glyph_min: 0.004,
             glyph_max: 0.22,
+            gutter_max_ink: 0.008,
+            gutter_min_span: 0.012,
+            panel_min_area: 0.02,
+            sfx_min_side: 0.035,
+            sfx_min_glyphs: 3,
+            sfx_size_uniformity: 0.80,
+            sfx_max_spread: 1.5,
             find_sfx: true,
             rtl: true,
         }
+    }
+}
+
+impl DetectionOptions {
+    pub fn validate(&self) -> Result<()> {
+        if ![
+            self.balloon_min_area,
+            self.balloon_max_area,
+            self.balloon_min_side,
+            self.balloon_min_solidity,
+            self.ink_min,
+            self.ink_max,
+            self.glyph_min,
+            self.glyph_max,
+            self.gutter_max_ink,
+            self.gutter_min_span,
+            self.panel_min_area,
+            self.sfx_min_side,
+            self.sfx_size_uniformity,
+        ]
+        .into_iter()
+        .all(|value| (0.0..=1.0).contains(&value))
+            || self.balloon_min_area >= self.balloon_max_area
+            || self.ink_min >= self.ink_max
+            || self.glyph_min >= self.glyph_max
+            || self.sfx_min_glyphs == 0
+            || !self.sfx_max_spread.is_finite()
+            || self.sfx_max_spread <= 0.0
+        {
+            return Err(VisionError::invalid(
+                "invalid panel or text detection ratios",
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -57,28 +105,42 @@ pub struct Detection {
 }
 
 pub fn find_panels(image: &GrayImage, rtl: bool) -> Result<Vec<Rect>> {
+    find_panels_with_options(
+        image,
+        &DetectionOptions {
+            rtl,
+            ..DetectionOptions::default()
+        },
+    )
+}
+
+fn find_panels_with_options(image: &GrayImage, options: &DetectionOptions) -> Result<Vec<Rect>> {
     let [w, h] = [image.width(), image.height()];
     if w == 0 || h == 0 {
         return Err(VisionError::invalid("page has no pixels"));
     }
-    let gutter = (f64::from(w.min(h)) * 0.012).floor().max(2.0) as i64;
-    let panels = detectcore_rs::port::find_panel_gutters(
+    let gutter = (f64::from(w.min(h)) * options.gutter_min_span)
+        .floor()
+        .max(2.0) as i64;
+    let panels = detectcore_rs::port::find_panel_gutters_with_ink(
         Some(image.as_raw()),
         i64::from(w),
         i64::from(h),
         238,
         gutter,
         0,
+        options.gutter_max_ink,
     )
     .map_err(VisionError::kernel)?;
-    order(
-        panels
-            .into_iter()
-            .map(|[x, y, w, h]| Rect([x as u32, y as u32, w as u32, h as u32]))
-            .collect(),
-        rtl,
-        h,
-    )
+    let mut panels: Vec<_> = panels
+        .into_iter()
+        .map(|[x, y, w, h]| Rect([x as u32, y as u32, w as u32, h as u32]))
+        .filter(|panel| panel.area() as f64 >= options.panel_min_area * f64::from(w) * f64::from(h))
+        .collect();
+    if panels.len() <= 1 {
+        panels.clear();
+    }
+    order(panels, options.rtl, h)
 }
 
 fn order(boxes: Vec<Rect>, rtl: bool, height: u32) -> Result<Vec<Rect>> {
@@ -184,13 +246,17 @@ fn balloons(
         .collect()
 }
 
-fn lettering_extent(group: Vec<Vec<i64>>, min_side: f64) -> Option<Rect> {
+fn lettering_extent(
+    group: Vec<Vec<i64>>,
+    min_side: f64,
+    options: &DetectionOptions,
+) -> Option<Rect> {
     let glyphs = group
         .into_iter()
         .filter_map(|b| <[i64; 4]>::try_from(b).ok())
         .map(|b| Rect(b.map(|x| x as u32)))
         .collect::<Vec<_>>();
-    if glyphs.len() < 3 {
+    if glyphs.len() < options.sfx_min_glyphs as usize {
         return None;
     }
     let dim = |b: Rect| f64::from(b.width().max(b.height()));
@@ -217,13 +283,13 @@ fn lettering_extent(group: Vec<Vec<i64>>, min_side: f64) -> Option<Rect> {
         }
     }
     let n = body.len() as f64;
-    if n < 3.0
+    if n < f64::from(options.sfx_min_glyphs)
         || (body
             .iter()
             .filter(|&&b| (0.55 * median..=1.8 * median).contains(&dim(b)))
             .count() as f64)
             / n
-            < 0.8
+            < options.sfx_size_uniformity
     {
         return None;
     }
@@ -239,7 +305,7 @@ fn lettering_extent(group: Vec<Vec<i64>>, min_side: f64) -> Option<Rect> {
     let spread = ((xx + yy - (xx - yy).hypot(2.0 * xy)) / (2.0 * n))
         .max(0.0)
         .sqrt();
-    if spread > 1.5 * median {
+    if spread > options.sfx_max_spread * median {
         return None;
     }
     body.into_iter()
@@ -291,7 +357,7 @@ fn free_lettering(
     Ok(groups
         .into_iter()
         .filter_map(|g| {
-            let extent = lettering_extent(g, side * 0.035)?;
+            let extent = lettering_extent(g, side * options.sfx_min_side, options)?;
             let relative = extent.area() as f64 / (f64::from(w) * f64::from(h));
             (0.00015..0.10)
                 .contains(&relative)
@@ -300,30 +366,53 @@ fn free_lettering(
         .collect())
 }
 
+/// Orders panels before their text, leaving regions outside every panel last.
+pub fn order_regions(
+    regions: &[DetectedRegion],
+    panels: &[Rect],
+    rtl: bool,
+    height: u32,
+) -> Result<Vec<usize>> {
+    let tolerance = i64::from((height / 32).max(1));
+    let sort = |indices: &[usize]| -> Result<Vec<usize>> {
+        let boxes = indices
+            .iter()
+            .map(|&i| regions[i].bbox.0.map(i64::from))
+            .collect();
+        let sorted = detectcore_rs::port::sort_reading_order(Some(boxes), Some(rtl), tolerance)
+            .map_err(VisionError::kernel)?;
+        Ok(sorted.into_iter().map(|i| indices[i]).collect())
+    };
+    if panels.is_empty() {
+        return sort(&(0..regions.len()).collect::<Vec<_>>());
+    }
+    let panel_order = detectcore_rs::port::sort_reading_order(
+        Some(panels.iter().map(|p| p.0.map(i64::from)).collect()),
+        Some(rtl),
+        tolerance,
+    )
+    .map_err(VisionError::kernel)?;
+    let mut groups = vec![Vec::new(); panels.len() + 1];
+    for (index, region) in regions.iter().enumerate() {
+        let panel = panels.iter().position(|panel| {
+            region.bbox.intersection(*panel).is_some_and(|overlap| {
+                u128::from(overlap.area()) * 5 >= u128::from(region.bbox.area()) * 3
+            })
+        });
+        groups[panel.unwrap_or(panels.len())].push(index);
+    }
+    let mut result = Vec::with_capacity(regions.len());
+    for panel in panel_order.into_iter().chain(std::iter::once(panels.len())) {
+        result.extend(sort(&groups[panel])?);
+    }
+    Ok(result)
+}
+
 pub fn detect_page(page: &RgbImage, options: &DetectionOptions) -> Result<Detection> {
     let (w, h) = page.dimensions();
-    if ![
-        options.balloon_min_area,
-        options.balloon_max_area,
-        options.balloon_min_side,
-        options.balloon_min_solidity,
-        options.ink_min,
-        options.ink_max,
-        options.glyph_min,
-        options.glyph_max,
-    ]
-    .into_iter()
-    .all(|v| (0.0..=1.0).contains(&v))
-        || options.balloon_min_area >= options.balloon_max_area
-        || options.ink_min >= options.ink_max
-        || options.glyph_min >= options.glyph_max
-    {
-        return Err(VisionError::invalid(
-            "invalid panel or text detection ratios",
-        ));
-    }
+    options.validate()?;
     let light = gray(page, false);
-    let panels = find_panels(&light, options.rtl)?;
+    let panels = find_panels_with_options(&light, options)?;
     let dark = gray(page, true);
     let mut regions = balloons(page, &light, false, options)?;
     for candidate in balloons(page, &dark, true, options)? {
@@ -338,13 +427,7 @@ pub fn detect_page(page: &RgbImage, options: &DetectionOptions) -> Result<Detect
         regions.extend(free_lettering(&light, &regions, false, options)?);
         regions.extend(free_lettering(&dark, &regions, true, options)?);
     }
-    let boxes = regions.iter().map(|r| r.bbox.0.map(i64::from)).collect();
-    let order = detectcore_rs::port::sort_reading_order(
-        Some(boxes),
-        Some(options.rtl),
-        i64::from((h / 32).max(1)),
-    )
-    .map_err(VisionError::kernel)?;
+    let order = order_regions(&regions, &panels, options.rtl, h)?;
     Ok(Detection {
         regions: order.into_iter().map(|i| regions[i].clone()).collect(),
         panels,

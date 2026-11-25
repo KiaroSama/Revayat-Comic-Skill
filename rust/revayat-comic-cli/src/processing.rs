@@ -10,7 +10,7 @@ use std::{
 use image::{DynamicImage, GrayImage, ImageFormat, Luma, RgbImage};
 use revayat_io::{images, inputs::MAX_PAGE_PIXELS};
 use revayat_ir::{
-    PageRecord, RegionRecord, ir, regions, stages,
+    PageRecord, RegionRecord, ir, regions, review, stages,
     workspace::{self, LoadedDocument},
 };
 use revayat_tools::server::StageError;
@@ -63,14 +63,16 @@ pub fn asset(root: &Path, relative: &str) -> Result<PathBuf> {
 }
 
 pub fn original(root: &Path, page: &PageRecord) -> Result<RgbImage> {
+    Ok(original_native(root, page)?.into_rgb8())
+}
+
+fn original_native(root: &Path, page: &PageRecord) -> Result<DynamicImage> {
     let path = asset(root, &page.image)?;
     if ir::sha256_file(&path).map_err(failed)? != page.sha256 {
         return Err(failed("immutable source page changed"));
     }
-    let image = images::load_image(&path, MAX_PAGE_PIXELS)
-        .map_err(failed)?
-        .into_rgb8();
-    if image.dimensions() != (page.width, page.height) {
+    let image = images::load_image(&path, MAX_PAGE_PIXELS).map_err(failed)?;
+    if (image.width(), image.height()) != (page.width, page.height) {
         return Err(failed("source page dimensions changed"));
     }
     Ok(image)
@@ -132,7 +134,11 @@ fn stamp(loaded: &mut LoadedDocument, stage: &str) -> Result<()> {
     stages::stamp_stage(&mut loaded.document, stage, ir::Fields::new(), None, None).map_err(failed)
 }
 
-pub fn detect(path: &Path) -> Result<Value> {
+pub fn detect(
+    path: &Path,
+    mut options: detect::DetectionOptions,
+    selection: Option<&[String]>,
+) -> Result<Value> {
     write_doc(path, "detect", |loaded| {
         let root = ir::doc_dir(loaded.path()).to_owned();
         let rtl = loaded
@@ -141,20 +147,27 @@ pub fn detect(path: &Path) -> Result<Value> {
             .get("reading_direction")
             .and_then(Value::as_str)
             != Some("ltr");
-        let options = detect::DetectionOptions {
-            rtl,
-            ..detect::DetectionOptions::default()
-        };
+        options.rtl = rtl;
+        let selected: std::collections::BTreeSet<_> =
+            workspace::selected_pages(&loaded.document, selection)
+                .map_err(failed)?
+                .into_iter()
+                .map(|page| page.id.clone())
+                .collect();
         let mut count = 0;
+        let mut processed = Vec::new();
+        let mut skipped = Vec::new();
         for page in &mut loaded.document.pages {
+            if !selected.contains(&page.id) {
+                continue;
+            }
             if page
                 .regions
                 .iter()
                 .any(|r| !r.source_text.is_empty() || !r.target_text.is_empty() || r.locked)
             {
-                return Err(failed(
-                    "detect would replace reviewed regions; import a fresh workspace",
-                ));
+                skipped.push(json!({"page":page.id,"reason":"reviewed"}));
+                continue;
             }
             let source = original(&root, page)?;
             let found = detect::detect_page(&source, &options).map_err(failed)?;
@@ -186,10 +199,20 @@ pub fn detect(path: &Path) -> Result<Value> {
                     Ok(region)
                 })
                 .collect::<Result<Vec<_>>>()?;
+            ir::assign_reading_order(page, if rtl { "rtl" } else { "ltr" }, 0.35)
+                .map_err(failed)?;
             count += page.regions.len();
+            processed.push(page.id.clone());
         }
-        stamp(loaded, "detect")?;
-        Ok(json!({"regions":count,"pages":loaded.document.pages.len()}))
+        stages::stamp_stage(
+            &mut loaded.document,
+            "detect",
+            ir::Fields::new(),
+            Some(json!(options)),
+            Some(&processed),
+        )
+        .map_err(failed)?;
+        Ok(json!({"regions":count,"pages":processed.len(),"processed":processed,"skipped":skipped}))
     })
 }
 
@@ -205,7 +228,9 @@ fn editable(region: &RegionRecord, policy: &str) -> bool {
 fn page_panels(page: &PageRecord) -> Result<Vec<Rect>> {
     page.panels
         .iter()
-        .map(|panel| serde_json::from_value(panel.clone()).map_err(failed))
+        .map(|panel| {
+            serde_json::from_value(panel.get("bbox").unwrap_or(panel).clone()).map_err(failed)
+        })
         .collect()
 }
 
@@ -438,7 +463,11 @@ pub fn falint(path: &Path, fix: bool) -> Result<(Value, i32)> {
                     region.typeset.clear();
                 }
             }
-            let issues = falint::lint_text(&region.target_text).map_err(failed)?;
+            let acknowledged = review::acknowledged(region);
+            let spans = review::acknowledged_spans(region);
+            let issues =
+                falint::lint_acknowledged(&region.target_text, &acknowledged, spans.as_deref())
+                    .map_err(failed)?;
             if !issues.is_empty() {
                 findings.push(json!({"region":region.id,"issues":issues}));
             }

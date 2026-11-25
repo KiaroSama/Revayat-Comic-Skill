@@ -110,7 +110,7 @@ revayat-comic qa check --doc "$WORK/comic.json"
 revayat-comic export \
   --doc "$WORK/comic.json" --out "$OUTPUT"
 revayat-comic qa package \
-  --doc "$WORK/comic.json" --file "$OUTPUT"
+  --doc "$WORK/comic.json" --package "$OUTPUT"
 ```
 
 Check the real exit statuses and report contents. The PDF writer uses recorded

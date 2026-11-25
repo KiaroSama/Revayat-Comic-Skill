@@ -1,11 +1,9 @@
 # layoutcore-rs
 
-Optional layout kernels for shaped speech balloons. The Python reference in
-`skills/revayat-comic/scripts/layoutcore/kernels.py` has no third-party
-requirements. Set `REVAYAT_LAYOUTCORE=python` before importing `layoutcore` to
-force the fallback.
+Pure-Rust layout kernels for shaped speech balloons. The public functions live
+in [`layoutcore_rs::port`](src/port.rs) and are used by `revayat-vision`.
 
-Masks are packed, row-major `bytes` with positive dimensions. Any nonzero byte
+Masks are packed, row-major byte slices with positive dimensions. Any nonzero byte
 is active. Spans and word slices use exclusive right/end indices. Each line band
 intersects all covered rows before applying horizontal padding, so shifted spans
 do not admit text that will cross a wall. Paragraph wrapping minimizes summed
@@ -19,18 +17,16 @@ ties favor the topmost, then leftmost position.
 
 ## Build and verify
 
-Use Python 3.12 or later, Rust 1.100.0 or later, and a platform linker. From the
-repository root, run these commands in the intended Python environment:
+Use the repository-pinned Rust 1.100.0 toolchain and a platform linker. Run from
+the repository root:
 
 ```console
-python -m pip install ./rust/layoutcore-rs
-cargo fmt --manifest-path rust/layoutcore-rs/Cargo.toml --check
-cargo clippy --manifest-path rust/layoutcore-rs/Cargo.toml --locked -- -D warnings
-cargo test --manifest-path rust/layoutcore-rs/Cargo.toml --locked
-python -m pytest -q tests/test_layoutcore_parity.py
+cargo build --locked -p layoutcore-rs
+cargo fmt -p layoutcore-rs --check
+cargo clippy --locked -p layoutcore-rs --all-targets -- -D warnings
+cargo test --locked -p layoutcore-rs
 ```
 
-Maturin installs `layoutcore_rs._native` through PEP 517. To require the native
-backend during parity tests, set `REVAYAT_TEST_LAYOUTCORE_RUST=1`. The PyO3
-boundary borrows mask buffers and validates exact Python types. Preserve both if
-you regenerate the bridge with `rust-anything refresh`.
+Cargo builds an `rlib` linked into the standalone CLI. Crate tests cover the
+kernel contracts; `cargo test --workspace --locked` also checks their use in
+typesetting and QA. Preserve mask-buffer validation and deterministic tie rules.

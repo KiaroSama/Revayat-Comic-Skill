@@ -11,30 +11,20 @@ them. Reversing the string yourself produces text that looks correct in one
 viewer and is broken in every other, cannot be searched or copied, and breaks
 again the moment a Latin word or a number appears in it.
 
-`revayat-comic` never stores reversed text. `tests/test_typeset.py` asserts it.
+`revayat-comic` stores logical text. The Rust shaping and pipeline tests are in
+`rust/revayat-vision/src/typefont.rs` and
+`rust/revayat-vision/tests/pipeline.rs`; regression cases for embedded isolates
+and Persian join controls are in `tests/audit_regressions.rs` in that crate.
 
 ## The font is Vazir
 
-Persian in this project is set in **Vazir**. Vazirmatn is the current release of
-that family and the one to install; the older `Vazir-*` files are the same design
-under its first name. Any weight works, including the variable build.
+The skill bundles the SIL OFL-1.1 **Vazir** family in `assets/fonts/`:
+`Vazir-Regular.ttf`, `Vazir-Medium.ttf`, and `Vazir-Bold.ttf`, together with the
+font license. The renderer loads those embedded faces into its own font
+database. It does not depend on a font installed on the host, and the current
+`typeset` command has no custom-font flag.
 
-    https://github.com/rastikerdar/vazirmatn/releases
-
-No font ships with this repository — a font file is a separately licensed binary
-and does not belong in a GPL source tree.
-
-**A fallback face announces itself.** Tahoma, Noto Naskh Arabic and Geeza Pro all
-draw correct Persian, so a run on one of them produces pages that look fine and
-are not in the house face. `doctor` reports `"vazir": true|false` and `typeset`
-puts the same flag plus a note in its report, because "readable" is exactly what
-stops anyone from checking. Pass `--font` to name one explicitly.
-
-This was not hypothetical: the preference list once held three Vazirmatn
-filenames, this machine had it installed as `Vazirmatn-VariableFont_wght.ttf`,
-and every page silently set in Tahoma. The list now matches the family.
-
-## The two shaping paths
+## Shaping and bidi
 
 Arabic-script text needs two things done to it before it can be drawn:
 
@@ -45,35 +35,16 @@ Arabic-script text needs two things done to it before it can be drawn:
 
 ### Pure-Rust shaping via `cosmic-text`
 
-`revayat-comic` shapes and orders Persian directly in Rust with `cosmic-text`
-(HarfBuzz + FriBidi) and the bundled Vazir font family (`Regular`, `Medium`,
-`Bold`). There is no external `libraqm`, FriBidi DLL, or Python fallback
-dependency: logical UTF-8 Persian is shaped and wrapped consistently on both
-Linux and Windows (x64 and arm64), preserving U+0654 (ezafe hamza) and U+200C
-(ZWNJ, نیم‌فاصله). Line spacing stays at least `1.38x` the font size so tall
-ascenders and stacked lines never collide, and narrow bubbles keep punctuation
-inside the bubble boundary.
+`revayat-comic` shapes and orders Persian in Rust with `cosmic-text`, using
+HarfRust for shaping, `unicode-bidi` for bidirectional layout, and Swash for
+rasterization. No external RAQM, HarfBuzz, or FriBidi installation is required.
+Logical UTF-8 text retains U+0654 (ezafe hamza), U+200C (ZWNJ, نیم‌فاصله), and
+authored directional isolates. Isolates that span a wrapped line are closed and
+reopened at the visual boundary; the stored source text remains logical.
 
-## Fonts
-
-`--font` takes a file path or a family name. Without it, the best Persian face
-on the machine is used, searching in this order:
-
-    Vazirmatn · Sahel · Shabnam · IRANSans · Noto Naskh Arabic ·
-    Noto Sans Arabic · Tahoma · Arial · DejaVu Sans
-
-The chosen font is then *tested*: a Persian word is drawn and the ink measured.
-A font with no Persian coverage draws nothing, or a row of identical tofu boxes,
-and either is refused rather than shipped.
-
-No font is vendored with this repository. A font is a separately licensed binary
-and does not belong in a GPL source tree. Vazirmatn is the usual choice and is
-free:
-
-    https://github.com/rastikerdar/vazirmatn/releases
-
-For a comic specifically, prefer a face with a heavy weight available. Dialogue
-in a balloon is small and sits on artwork; a light weight disappears.
+Line spacing is at least `1.38x` the font size. The fitter checks the actual
+glyph raster, outline, shadow, and occupied pixels before placing each line;
+line spacing alone is not proof that a particular layout fits.
 
 ## Fitting a balloon
 
@@ -87,25 +58,29 @@ of the border. Then, for each candidate font size, it asks each line how wide it
 is allowed to be *in its own vertical band*, wraps to that, and accepts the
 largest size where every line fits.
 
-The number of lines and their positions depend on each other, so it settles in
-up to four passes and gives up rather than looping.
+The search is bounded: for each decreasing integer font size it tries up to six
+wrap widths and five vertical offsets. It accepts only a placement whose ink
+fits the current region and does not overlap already placed text.
 
-Knobs:
+The Rust `TextRegion` API exposes these settings. The CLI uses the defaults and
+the page font-size cap; it does not expose font-size or shaping-backend flags.
 
-| Flag | Default | Effect |
+| Rust field | Default | Effect |
 | --- | --- | --- |
-| `--max-size` | 64 | ceiling; lower it if the type looks shouty |
-| `--min-size` | 13 | **floor**; never crossed silently |
-| `--font` | auto | a path or a family name |
-| `--no-raqm` | off | force the fallback, for testing it |
+| `max_size` | 72 | upper bound, also constrained by the page cap |
+| `min_size` | 8 | lower bound; the fitter does not cross it |
+| `line_spacing` | 1.38 | line height relative to font size, clamped to at least 1.38 |
+| `align` | center | horizontal line placement |
 
-`BALLOON_PADDING` (0.10 of the balloon's smaller side) is how far the text keeps
-from the outline. `LINE_SPACING` is 1.30.
+Text uses an interior inset of 4.5% of the balloon's smaller side, with a
+minimum of one pixel. The fit adds clearance for its padding and any outline
+or shadow. Cleaning uses a separate 3.5% outline inset.
 
 ## Overflow
 
-When a translation will not fit at `--min-size`, the region is reported as
-`text-overflow` and left unset. That is deliberate. The alternatives are worse:
+When a translation will not fit at the configured lower bound, the typesetting
+operation returns an overflow error instead of publishing a partial page. That
+is deliberate. The alternatives are worse:
 
 - shrinking below the floor produces type nobody can read
 - letting it spill draws Persian over the artwork
@@ -126,25 +101,20 @@ Treat overflow as layout first, without lowering the agreed size floor:
 
 - A light balloon gets near-black text.
 - A dark balloon gets near-white text.
-- Lettering with **no balloon** — a sign, a caption over artwork — gets a stroke
-  in the opposite colour, because without it the text disappears into the
-  drawing at exactly the moment it matters.
-
-The skill ships official SIL OFL-1.1 **Vazir** fonts (`Vazir-Regular.ttf`,
-`Vazir-Medium.ttf`, and `Vazir-Bold.ttf`) inside `assets/fonts/` and selects
-them by default before checking system fonts, unless `--font` overrides it.
+- Lettering over artwork can request a contrasting stroke with `style: outline`.
+  Review the result against the actual drawing and the QA contrast check.
 
 Regions can carry an optional `style:` field in worksheets (comma-separated
 tokens, case-insensitive):
 
 | Style token | Visual effect |
 | --- | --- |
-| `bold` | Selects bundled `Vazir-Bold.ttf` (or bold sibling of `--font`) |
-| `italic` | Oblique shear on the HarfBuzz/RAQM-shaped layer so Persian letters stay connected |
+| `bold` | Selects the bundled bold weight |
+| `italic` | Oblique shear on the already shaped raster so Persian letters stay connected |
 | `bold-italic` | Combines bold weight and oblique shear |
 | `outline` | Contrasting outer halo around glyphs (for titles, signs, and SFX over art) |
 | `shadow` | Subtle 2px offset drop shadow behind glyphs |
-| `shout` | Bold emphasis with a higher font-size harmonization ceiling |
+| `shout` | Bold emphasis within the same page font-size cap |
 
 `typeset` harmonizes font sizes across ordinary speech balloons on the same page
 so a single short word beside a multi-line balloon does not jump to twice the
@@ -157,9 +127,10 @@ strictly inside the eroded interior.
 Two questions, in this order:
 
 1. **Is the shaping right?** Look for disconnected letters (`ک ت ا ب` instead of
-   `کتاب`). That means neither RAQM nor the fallback ran — check `doctor`.
+   `کتاب`). Check `doctor`, the logical input, and the actual rendered page;
+   unexpected disconnected letters need review.
 2. **Is the direction right?** Look at a line with a numeral in it. If the digits
    land at the wrong end, bidi did not run.
 
-If both are right and it still looks wrong, it is a font problem, not a
-direction problem.
+If both are right, inspect font size, weight, line breaks, and the measured
+interior. Keep the complete meaning and readable type when correcting layout.

@@ -187,7 +187,8 @@ pub fn render(
         let out = GrayImage::from_fn(limit.width(), limit.height(), |x, y| {
             let (x, y) = (f64::from(x) - cx, f64::from(y) - cy);
             let u = x * cos + y * sin;
-            let v = -x * sin + y * cos;
+            // The curved envelope is displaced by half its sag; center that envelope in the box.
+            let v = -x * sin + y * cos + c * w / 2.0;
             let ratio = (u / w + 0.5).clamp(0.0, 1.0);
             let scale = (1.0 + (taper - 1.0) * ratio).max(0.5);
             let x = u + w / 2.0;

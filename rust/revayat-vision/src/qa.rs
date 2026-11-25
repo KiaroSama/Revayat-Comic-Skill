@@ -6,6 +6,33 @@ use crate::{
 use image::{GrayImage, RgbImage, imageops};
 use serde::{Deserialize, Serialize};
 
+/// Stable finding identifiers emitted by the image, typography, and package QA gates.
+pub const CODES: &[&str] = &[
+    "arabic-forms",
+    "artwork-changed",
+    "balloon-ink-survives",
+    "double-punctuation",
+    "guillemets",
+    "halo-artifact",
+    "latin-quotes",
+    "low-contrast",
+    "mask-dimensions",
+    "missing-rli-pdi",
+    "package-image-mismatch",
+    "package-page-count",
+    "package-page-dimensions",
+    "page-dimensions",
+    "script-collision",
+    "source-script-left",
+    "text-crosses-outline",
+    "text-not-rendered",
+    "text-overlap",
+    "tight-line-spacing",
+    "unsafe-balloon",
+    "untranslated",
+    "zwnj-review",
+];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Diff {
     pub changed: u64,
@@ -57,6 +84,14 @@ pub struct QaPage<'a> {
     pub regions: &'a [QaRegion<'a>],
 }
 
+/// Lint decisions whose region and content fingerprints have been checked by the caller.
+#[derive(Debug, Clone, Copy)]
+pub struct QaTextReview<'a> {
+    pub region: &'a str,
+    pub acknowledged: &'a [&'a str],
+    pub spans: Option<&'a [&'a str]>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Finding {
     pub code: String,
@@ -84,6 +119,7 @@ impl QaReport {
         }
     }
     fn add(&mut self, code: &str, region: Option<&str>, detail: impl Into<String>) {
+        debug_assert!(CODES.contains(&code), "undeclared QA finding: {code}");
         self.findings.push(Finding {
             code: code.into(),
             region: region.map(str::to_owned),
@@ -95,6 +131,13 @@ impl QaReport {
 }
 
 pub fn run_strict_qa(page: QaPage<'_>) -> Result<QaReport> {
+    run_strict_qa_with_reviews(page, &[])
+}
+
+pub fn run_strict_qa_with_reviews(
+    page: QaPage<'_>,
+    reviews: &[QaTextReview<'_>],
+) -> Result<QaReport> {
     let QaPage {
         original,
         cleaned,
@@ -174,7 +217,14 @@ pub fn run_strict_qa(page: QaPage<'_>) -> Result<QaReport> {
                 "target does not have logical Persian direction controls",
             );
         }
-        for issue in falint::lint_text(region.target)? {
+        let reviewed = reviews.iter().find(|review| review.region == region.id);
+        let issues = match reviewed {
+            Some(review) => {
+                falint::lint_acknowledged(region.target, review.acknowledged, review.spans)?
+            }
+            None => falint::lint_text(region.target)?,
+        };
+        for issue in issues {
             if issue.code != "missing-rli-pdi" {
                 report.add(&issue.code, Some(region.id), issue.detail);
             }
@@ -282,14 +332,28 @@ pub fn missing_clusters(
     rendered: &RgbImage,
 ) -> Result<usize> {
     same_geometry(clean.dimensions(), rendered.dimensions())?;
-    let logical = |s: &str| s.chars().filter(|&c| bidi::visible(c)).collect::<String>();
+    let logical = |s: &str| {
+        let text = s
+            .chars()
+            .filter(|c| {
+                !matches!(c, '\u{061c}' | '\u{200e}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+            })
+            .collect::<String>();
+        // Wrapping may normalize whitespace and punctuation, but never word or join boundaries.
+        let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        crate::typefit::tokens(&text)
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
     let expected = logical(target);
-    if lines
+    let placed = lines
         .iter()
-        .map(|line| logical(&line.text))
-        .collect::<String>()
-        != expected
-    {
+        .map(|line| line.text.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if logical(&placed) != expected {
         return Ok(expected.chars().count().max(1));
     }
     let mut missing = 0;

@@ -6,6 +6,9 @@ use image::{
 };
 use serde::Serialize;
 
+mod native;
+pub use native::{compose_original, count_changed_outside_mask, validate_preservation_image};
+
 use crate::{
     IoError,
     fsutil::{digest, read_file},

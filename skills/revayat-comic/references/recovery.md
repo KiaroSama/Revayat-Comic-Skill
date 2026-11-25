@@ -107,8 +107,8 @@ Run the named inexpensive affected stages once; for an old finished page, rerun
 `typeset`, check publication QA, then export again. Unchanged detection, masks
 and cleaning remain fresh; do not re-detect or retranslate the chapter solely
 for this hash upgrade. If a `translate` or `glossary` stamp is inspected, refresh
-it through its ordinary command; existing provider request identities still
-protect completed answers from unnecessary calls. A partial-page refresh leaves
+it through its ordinary command; OCR and translation skip locked or already
+filled destination fields. They do not use a crop-content request cache. A partial-page refresh leaves
 only the unrefreshed pages stale. Repeating a successful refresh converges.
 
 ## Package integrity

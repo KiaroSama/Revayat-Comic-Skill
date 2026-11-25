@@ -235,17 +235,27 @@ pub fn resolve_balloon(
     dark: bool,
 ) -> Result<Option<Balloon>> {
     text.checked(page.dimensions())?;
-    if let Some(saved) = saved
-        && saved.bounds.intersection(text).is_some()
-        && mask_bounds(&balloon_interior(page, saved, 1)?.pixels).is_some()
-    {
-        return Ok(Some(saved));
-    }
     let clip = panel.unwrap_or(Rect([0, 0, page.width(), page.height()]));
     clip.checked(page.dimensions())?;
     let Some(seed) = clip.intersection(text) else {
         return Ok(None);
     };
+    if let Some(saved) = saved
+        && let Some(bounds) = saved.bounds.checked(page.dimensions())?.intersection(clip)
+        && bounds
+            .intersection(seed)
+            .is_some_and(|overlap| overlap.area() * 3 >= seed.area())
+    {
+        // Saved geometry is only a search window; current placement determines authorization.
+        let candidate = Balloon {
+            bounds,
+            text_bounds: seed,
+            dark,
+        };
+        if mask_bounds(&seeded_interior(page, candidate, 1, Some(clip))?.pixels).is_some() {
+            return Ok(Some(candidate));
+        }
+    }
     let pad = seed.width().max(seed.height()).max(32);
     for pad in [pad, pad * 2] {
         let bounds = seed

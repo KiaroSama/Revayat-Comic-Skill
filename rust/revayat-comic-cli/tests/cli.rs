@@ -3,6 +3,9 @@
 #[path = "cli/balloon_quality.rs"]
 mod balloon_quality;
 
+#[path = "cli/recheck.rs"]
+mod recheck;
+
 use std::{
     fs::{self, File},
     path::PathBuf,

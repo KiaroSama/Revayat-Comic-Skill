@@ -41,16 +41,16 @@ detected the same as one set in a heavy face.
 Then the text box inside is the bounding box of the glyph-sized components,
 with the outline's own ring excluded.
 
-### 2. Panels — approximate, and only used for order
+### 2. Panels — approximate geometry
 
 A recursive cut along the gutters: rows of near-zero ink that run the width of
 a block become horizontal splits, columns become vertical ones, and each piece
-recurses up to six levels deep.
+recurses up to eight levels deep.
 
-Panels are only used to order the balloons, so being approximately right is
-enough. If the page has no clean gutters — a splash page, or artwork bleeding
-across the whole sheet — no panels are reported and reading order falls back to
-plain geometry, which is the right answer for that page anyway.
+Panel rectangles constrain balloon recovery and reading order, and must still be inspected.
+If the page has no clean gutters — a splash page, or artwork bleeding across
+the whole sheet — no separate panels may be reported. Reading order then uses
+the regions' page geometry.
 
 ### 3. Free lettering — unreliable, and marked as such
 
@@ -71,26 +71,25 @@ the artwork, and this finds the obvious ones and is wrong about the rest.
 
 ## Reading order
 
-Panels first, then bands within a panel, then position within a band:
+Panels are ordered by source reading direction. A region belongs to the first
+panel containing at least 60% of its area. The detector finishes each panel's
+regions before crossing to the next panel, and places unassigned regions last.
 
-- Panels are ordered by band, right-to-left for `rtl` and left-to-right for
-  `ltr`.
-- Within a panel, regions are grouped into bands that overlap vertically. Two
-  balloons side by side are one band even when one sits four pixels higher —
-  sorting by `y` alone reads wrong on every page that has a pair.
-- Within a band, right-to-left or left-to-right.
-- A region belonging to no panel is read last: it is usually a caption in the
-  gutter or a sound effect spilling across the page.
+Within a panel, regions are grouped using vertical overlap or nearby vertical
+centers. Bands run from top to bottom; regions within a band run right-to-left
+for `rtl` or left-to-right for `ltr`. Inspect the numbered overview on staggered
+panels and unusual layouts before accepting the narrative order.
 
-`--direction` is how the **source** is read. Japanese manga is `rtl`. Korean
+`import --direction` sets how the **source** is read. Japanese manga is `rtl`. Korean
 webtoons, Chinese manhua and Western comics are `ltr`. Getting it wrong does not
 fail — it numbers the balloons backwards, and the translation then answers
 questions that have not been asked yet.
 
 ## The knobs
 
-Every threshold is a fraction of the page, and every one is on the command line,
-because the right value is a property of the book rather than of this code. A
+Geometry thresholds use page or glyph proportions, with separate count and
+uniformity controls. The following options are available on `detect`, because
+the right value is a property of the book rather than of this code. A
 900-pixel web scan and a 4000-pixel tankobon scan disagree about what "small"
 means.
 
@@ -121,7 +120,7 @@ means.
 | dozens of low-confidence regions on a textured page | screentone clustering as lettering | `--no-sfx`, then `drop: yes` on anything left |
 | a sound effect comes back as several regions | letters spaced further apart than usual | raise `--sfx-min-side` is *wrong* here; the clustering is size-relative, so check the marks were seeded at all with `--glyph-max` |
 | one page-sized panel | no clean gutters | expected on a splash page; order falls back to geometry |
-| `pages_without_text` on most pages | the thresholds do not fit this book | start with `--balloon-min-area 0.0003 --ink-min 0.008` |
+| most pages have no detected regions | the thresholds may not fit this book | inspect the overviews, then try `--balloon-min-area 0.0003 --ink-min 0.008` |
 | balloons missed **only** on a high-resolution scan | the outline is a hairline relative to the page | see *Resolution* below |
 
 ## Free lettering, and what those three knobs are for
@@ -183,15 +182,14 @@ nothing, or `sfx`, and the box is treated as lettering on open artwork. Re-run
 `mask` after a merge that added regions; merging again updates the same regions
 rather than making more, and re-drawing a `box:` moves the one that is there.
 
-New or actually moved boxes use the detector's first containing panel rule
-(0.6 containment); moving into a gutter clears old panel membership. The merge
-refreshes panel-aware RTL/LTR reading order after those geometry changes, so later
-context follows the corrected page. Text-only edits preserve manual panel/order
-choices. Inspect the new crops before relying on them; malformed replies still
-refuse the whole page's region changes.
+Added or moved boxes refresh panel membership using the first panel with at
+least 60% overlap, then refresh the page's panel-aware reading order. Moving a
+region into a gutter clears its old membership. Text-only edits preserve manual
+order choices. Review the new crops before building later-page context;
+malformed replies still refuse the whole page's region changes.
 
 Draw the box around **all** of the lettering. One drawn a few pixels too tight
-on the left left the `A` of `ALREADY` on the cleaned page — `source-text-survived`
+on the left left the `A` of `ALREADY` on the cleaned page — `balloon-ink-survives`
 caught it, and the fix was a wider box, not a looser gate.
 
 A region that has been answered is **locked**, and a later `detect` run skips
@@ -211,8 +209,8 @@ Every threshold here is a fraction of the page, so the detector is
 scale-invariant **provided the artwork scales with the raster**. A real scan
 does: a tankobon at 300 dpi has a proportionally thicker balloon outline than
 the same art at 96 dpi, because it is the same ink measured with more pixels.
-Measured on A4 at 300 dpi (2480×3508), detection is exact — every balloon, every
-panel, at the same numbers as a 1000×1500 page.
+Pixel quantization and line thickness can still change a candidate near a
+threshold, so inspect native-scale crops after changing the source resolution.
 
 The counter-case is art whose line weight did **not** scale with the raster: a
 small drawing upsampled, or vector line art rendered thin at high DPI. A
@@ -230,10 +228,10 @@ such a book, try in this order:
    regions through the worksheet. Keep the immutable imported page at native
    resolution; never downsample the primary input to bypass detection limits.
 
-`tests/test_resolution.py` pins both the working case and this limit across four
-page sizes, so neither can move silently. The weekly
-`.github/workflows/integration.yml` runs a whole four-page chapter at 300 dpi
-end to end.
+Current synthetic detector checks are in
+`rust/revayat-vision/tests/pipeline.rs` and `tests/detection_controls.rs` in the
+same crate. They cover actual detection and option effects; they do not establish
+accuracy on every resolution or replace chapter-specific visual review.
 
 ## A character is not a connected component
 

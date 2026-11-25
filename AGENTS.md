@@ -17,21 +17,21 @@ PDF or folder of pages. It ships as three things from one tree:
 - a **marketplace** — `.agents/plugins/marketplace.json`,
   `.claude-plugin/marketplace.json`, and `.cursor-plugin/marketplace.json`, so
   the repo installs directly from GitHub across hosts
-  itself
 
 ## Layout
 
 ```
 skills/revayat-comic/
   SKILL.md          the skill; `name: revayat-comic` is the activation key
-  scripts/*.py      the pipeline (see below)
+  assets/fonts/     bundled Vazir fonts and their license
   references/*.md   loaded on demand, not up front
-  requirements.txt  the runtime dependency manifest
 commands/           slash commands for plugin hosts
 install/            install.ps1, install.sh — copy the skill into agents
-tests/              pytest; fixtures are generated, never committed
-evaluation/         the translation benchmark and its scorer — cases, a
-                    generated page per case, and axis-by-axis scoring
+rust/               14 Cargo workspace crates, their source, and Rust tests
+Cargo.toml          workspace and release profile
+Cargo.lock          shared, pinned dependency resolution
+rust-toolchain.toml Rust compiler and development components
+evaluation/         cases.json and the translation benchmark guide
 ```
 
 ## The pipeline
@@ -42,7 +42,7 @@ All runtime code is 100% pure Rust under `rust/` (14 workspace crates,
 | Crate | Role |
 | --- | --- |
 | `hotcore-rs`, `pixcore-rs`, `maskcore-rs`, `textcore-rs`, `detectcore-rs`, `qacore-rs`, `cleancore-rs`, `layoutcore-rs`, `packcore-rs` | nine low-level pixel, mask, layout, text, detection, QA, cleaning, and packaging kernels |
-| `revayat-ir` | document IR, atomic UTF-8 I/O, stages, worksheets (`@@` protocol), glossary, batching, certification, journal, UTC run logs |
+| `revayat-ir` | document IR, atomic UTF-8 I/O, stages, worksheets (`@@` protocol), content-bound reviews, glossary, batching, publication certification, journal, UTC run logs |
 | `revayat-io` | pure-Rust CBZ (`zip`), CBR (`rars`), PDF (`lopdf` + `pdf-writer` + `hayro` with stencil/XObject pixel-budget guards), folder, and Persian RTL DOCX (`quick-xml`) |
 | `revayat-vision` | detection, masking, zero-dot bubble cleaning, `cosmic-text` Vazir RTL typesetting (`>=1.38x` line height), full-page image-edit prompt builder, watermark removal, strict QA |
 | `revayat-tools` | MCP stdio and concurrent loopback HTTP server (`axum`), hosted HTTPS OCR/translation clients with Bearer guards, pure-Rust Persian linter and lexicon lookup, transactional installer, synthetic eval |
@@ -56,37 +56,38 @@ overwrites a locked region or unmasked pixels.
 
 1. **The original page is immutable.** Every page records the SHA-256 of the
    file it came from. Nothing writes to that file; a stage that needs different
-   pixels writes a new one. `qa` re-hashes it and reports `source-modified`.
+   pixels writes a new one. QA and export re-hash it and refuse a changed source.
 2. **Only masked pixels may change.** Repairs are composited as
    `original * (1 - alpha) + repaired * alpha` with `alpha <= mask`, so
    preservation holds by construction. `qa check` proves it and reports
    `artwork_pixels_changed`; on a correct run it is `0`.
 3. **A mask is clipped to the balloon's interior, not its bounding box.** The
    corners of a box around an ellipse are outside the balloon. Clipping to the
-   box repaints the artwork there and erases the outline crossing it —
-   `masks.balloon_interior` exists because that shipped once.
-4. **Every region reaches exactly one terminal state.** `pageir.region_state`
-   returns `translated`, `kept_by_policy`, `dropped_false_detection`,
-   `needs_review` or `unresolved` — and there is deliberately no state meaning
-   "it quietly disappeared". Completeness was previously inferred from a scatter
-   of fields, so a region falling between them was invisible to every gate. The
-   census is reported by `qa`, not gated: `unresolved` is a strict subset of
-   what `untranslated-region` already blocks on.
+   box repaints the artwork there and erases the outline crossing it — the
+   balloon-interior mask operations exist because that shipped once.
+4. **Every region keeps an explicit outcome.**
+   `revayat_ir::regions::region_state` returns `pending`, `translated`, `kept`,
+   `dropped`, or `erased`. Pending work must be resolved before final delivery;
+   there is no state meaning "it quietly disappeared". Preserve the distinction
+   between keeping real lettering, dropping a false detection, and erasing ink.
 5. **Region ids never move.** They are allocated at detection and are what the
    worksheet, the mask filenames, the glossary and every QA finding refer to. A
    region that has been answered is `locked`, and `detect` skips its page.
 6. **Never reverse Persian, and never store presentation forms.** The document
-   holds logical text; shaping happens at draw time. `tests/test_typeset.py`
-   asserts it.
-7. **Every CLI entry point calls `ir.use_utf8_stdio()` first.** A Windows
-   console defaults to a legacy code page and raises on the first Persian
-   character.
-8. **Write files with `ir.write_text` / `ir.write_bytes`.** They are atomic and
-   use `newline=""`, so a document written on Windows still hashes the same as
-   one written on Linux.
-9. **Every QA code is declared in `qa.CODES` and documented in `SKILL.md`.** A
-   test enforces both, so a check that emits an undeclared code, or one the
-   skill has no action for, fails the build.
+   holds logical text; shaping happens at draw time. The Rust bidi, shaping,
+   and pipeline tests enforce this contract.
+7. **Every CLI entry point reads and writes UTF-8.** Rust string and JSON
+   output goes directly through `std::io`; do not introduce locale-dependent
+   encoding or a Windows legacy-code-page conversion.
+8. **Write files with `revayat_ir::ir::write_text`, `write_bytes`, or
+   `write_stream`.** They replace files atomically and write the supplied bytes
+   without platform newline conversion, so the same document hashes identically
+   on Windows and Linux.
+9. **Every QA code has a shared registry and a documented action in `SKILL.md`.**
+   Use `revayat_vision::qa::CODES`, `revayat_io::package::CODES`, and
+   `revayat_ir::certify::CODES`; CLI-specific codes are named constants in
+   `rust/revayat-comic-cli/src/processing/lettering.rs`. Keep the registry/action
+   contract tests passing when adding or changing a finding.
 10. **Detection thresholds are command-line flags, not constants.** The right
    value is a property of the book. A 900-pixel web scan and a 4000-pixel
    tankobon scan disagree about what "small" means.
@@ -95,12 +96,15 @@ overwrites a locked region or unmasked pixels.
 
 ```bash
 cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 ```
 
-Build the standalone binary to `bin/revayat-comic.exe` (Windows) or
-`bin/revayat-comic` (Linux) with `cargo build --release --locked -p revayat-comic-cli`.
+Build the standalone binary with
+`cargo build --release --locked -p revayat-comic-cli`. Cargo writes it to
+`target/release/revayat-comic.exe` (Windows) or `target/release/revayat-comic`
+(Linux), unless `CARGO_TARGET_DIR` overrides the target directory. The release
+workflow copies the target-specific binary into the packaged `bin/` directory.
 CI builds and tests four 64-bit targets: Linux x64, Linux arm64, Windows x64,
 and Windows arm64 (no macOS, no 32-bit, no Python).
 
@@ -129,7 +133,9 @@ skill rule, not merely a coding-agent logging rule. Keep
 `skills/revayat-comic/references/translation-log.md` and the skill's startup and
 delivery gates aligned. CLI diagnostic logs alone do not fulfill this rule.
 
-Keep the five plugin manifests and the three marketplace entries at the same `version`.
+Keep every version-bearing plugin manifest and marketplace entry at the same
+`version`. Preserve each host's schema; do not add a version field to a manifest
+or entry whose schema does not define one.
 The [voice guide index](skills/revayat-comic/references/voice/index.md) records the
 pinned sources and the output-language rule for the three bundled guides.
 
@@ -137,7 +143,10 @@ Every tracked text file must be UTF-8; CI enforces that too.
 
 ## Pure-Rust Persian shaping
 
-`revayat-vision` shapes and orders Persian directly via `cosmic-text` (HarfBuzz
-and FriBidi) with bundled Vazir TTF fonts (`Regular`, `Medium`, `Bold`). No
-external `libraqm`, FriBidi DLL, or Python fallback is required on Linux or
-Windows, and both U+0654 (ezafe hamza) and U+200C (ZWNJ) are preserved cleanly.
+`revayat-vision` uses `cosmic-text` with bundled Vazir TTF fonts (`Regular`,
+`Medium`, `Bold`). The pinned `cosmic-text` stack uses **HarfRust** for shaping,
+**unicode-bidi** for bidirectional analysis, and **Swash** for rasterization;
+see its [upstream README](https://docs.rs/crate/cosmic-text/0.19.0/source/README.md)
+and [dependency manifest](https://docs.rs/crate/cosmic-text/0.19.0/source/Cargo.toml).
+The runtime is pure Rust on Linux and Windows. Keep U+0654 (ezafe hamza) and
+U+200C (ZWNJ) intact through stored text, shaping, and rendering.

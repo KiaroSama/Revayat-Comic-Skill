@@ -1,10 +1,22 @@
 use crate::{
-    IrError, PageRecord, batch,
+    ComicDocument, IrError, PageRecord, batch,
     regions::{self, Artifact},
+    review, stages,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+
+pub const CODES: &[&str] = &[
+    "page-not-rendered",
+    "page-not-cleaned",
+    "delivery-mismatch",
+    "delivery-unverified",
+    "compressed-variant",
+    "stale-stages",
+    "unverified-stages",
+];
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Finding {
@@ -13,6 +25,10 @@ pub struct Finding {
     pub detail: String,
 }
 fn finding(code: &str, page: &PageRecord, detail: impl Into<String>) -> Finding {
+    debug_assert!(
+        CODES.contains(&code),
+        "undeclared publication finding: {code}"
+    );
     Finding {
         code: code.into(),
         page: page.id.clone(),
@@ -143,4 +159,87 @@ pub fn certify_cleaning(root: &Path, page: &PageRecord) -> Result<Vec<Finding>, 
             ("clean", page.cleaned.as_deref()),
         ],
     )
+}
+
+pub fn certify_publication(root: &Path, doc: &ComicDocument) -> Result<Vec<Finding>, IrError> {
+    let unverified = stages::unverified_stages(doc);
+    let mut stale = BTreeMap::new();
+    for stage in ["detect", "mask", "masks", "clean", "typeset"] {
+        if doc.stages.contains_key(stage) {
+            stale.insert(
+                stage,
+                stages::stale_pages(doc, stage)?
+                    .into_iter()
+                    .collect::<BTreeSet<_>>(),
+            );
+        }
+    }
+    let mut findings = Vec::new();
+    for page in &doc.pages {
+        if let Some(issue) = certify_artifact(root, page, doc.policy()) {
+            findings.push(issue);
+        }
+        findings.extend(certify_delivery(root, page)?);
+        findings.extend(certify_cleaning(root, page)?);
+        for region in &page.regions {
+            if review::compression_review_needed(region, doc.policy()) {
+                findings.push(finding(
+                    "compressed-variant",
+                    page,
+                    format!(
+                        "{}: compare the full and displayed rendering and record a current review",
+                        region.id
+                    ),
+                ));
+            }
+        }
+        let (shipped, _) = regions::shipped_artifact(page, |name| {
+            batch::owned(root, Path::new(name)).is_ok_and(|path| path.is_file())
+        });
+        let required = regions::required_artifact(page, doc.policy()).max(shipped);
+        let stage = match required {
+            Artifact::Original => continue,
+            Artifact::Cleaned => "clean",
+            Artifact::Rendered => "typeset",
+        };
+        let mut needed = stages::prerequisites(stage);
+        needed.insert(stage);
+        for needed_stage in needed {
+            let recorded = if needed_stage == "masks" && !doc.stages.contains_key("masks") {
+                "mask"
+            } else {
+                needed_stage
+            };
+            let must_exist =
+                needed_stage == stage || needed_stage == "clean" && page.cleaned.is_some();
+            if !doc.stages.contains_key(recorded) {
+                if must_exist {
+                    findings.push(finding(
+                        "unverified-stages", page,
+                        format!("`{needed_stage}` has no current input evidence; run it before publication"),
+                    ));
+                }
+            } else if let Some(reason) = unverified.get(recorded) {
+                findings.push(finding(
+                    "unverified-stages",
+                    page,
+                    format!("`{recorded}` {reason}"),
+                ));
+            } else if stale
+                .get(recorded)
+                .is_some_and(|pages| pages.contains(&page.id))
+            {
+                findings.push(finding(
+                    "stale-stages",
+                    page,
+                    format!(
+                        "`{recorded}` {} {}; rerun it before publication",
+                        stages::why_stale(recorded, &page.id, &doc.stages[recorded], &doc.stages),
+                        page.id
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(findings)
 }

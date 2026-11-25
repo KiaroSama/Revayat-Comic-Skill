@@ -1,4 +1,4 @@
-use crate::{IrError, RegionRecord, ir};
+use crate::{IrError, RegionRecord, ir, review};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -68,6 +68,8 @@ impl Block {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Reply {
     pub fingerprint: Option<String>,
+    #[serde(default)]
+    pub content_fingerprint: Option<String>,
     pub scheme: Option<String>,
     pub blocks: Vec<Block>,
 }
@@ -76,18 +78,15 @@ fn comment(raw: &str) -> bool {
     raw == "#" || raw.starts_with("# ") || raw.starts_with("#\t")
 }
 fn unescape(line: &str) -> &str {
-    if let Some(rest) = line.strip_prefix('\\')
-        && (rest.starts_with('\\')
-            || rest.starts_with('#')
-            || rest.starts_with("@@")
-            || FIELD.is_match(rest))
-    {
-        return rest;
-    }
-    line
+    line.strip_prefix('\\').unwrap_or(line)
 }
 fn escaped(line: &str) -> String {
-    if line.starts_with('\\') || comment(line) || HEADER.is_match(line) || FIELD.is_match(line) {
+    if line.is_empty()
+        || line.starts_with('\\')
+        || comment(line)
+        || HEADER.is_match(line)
+        || FIELD.is_match(line)
+    {
         format!("\\{line}")
     } else {
         line.into()
@@ -97,7 +96,8 @@ pub fn field_lines(name: &str, value: &str) -> String {
     if value.is_empty() {
         return format!("{name}:\n");
     }
-    let mut lines = value.split('\n');
+    let normalized = value.replace("\r\n", "\n").replace('\r', "\n");
+    let mut lines = normalized.split('\n');
     let mut text = format!("{name}: {}\n", escaped(lines.next().unwrap_or_default()));
     for line in lines {
         text.push_str(&escaped(line));
@@ -133,6 +133,7 @@ pub fn parse_worksheet(text: &str) -> Result<Reply, IrError> {
     let mut ids = BTreeSet::new();
     let mut field: Option<String> = None;
     let mut blanks = 0usize;
+    let mut started = false;
     for raw in text.replace("\r\n", "\n").split(['\r', '\n']) {
         if comment(raw) {
             if let Some(value) = raw
@@ -141,6 +142,13 @@ pub fn parse_worksheet(text: &str) -> Result<Reply, IrError> {
                 .and_then(|t| t.strip_prefix("fingerprint:"))
             {
                 reply.fingerprint = Some(value.trim().into());
+            }
+            if let Some(value) = raw
+                .strip_prefix('#')
+                .map(str::trim)
+                .and_then(|t| t.strip_prefix("content-fingerprint:"))
+            {
+                reply.content_fingerprint = Some(value.trim().into());
             }
             if let Some(value) = raw
                 .strip_prefix('#')
@@ -172,6 +180,7 @@ pub fn parse_worksheet(text: &str) -> Result<Reply, IrError> {
                 ..Block::default()
             });
             field = None;
+            blanks = 0;
             continue;
         }
         let Some(block) = reply.blocks.last_mut() else {
@@ -180,6 +189,7 @@ pub fn parse_worksheet(text: &str) -> Result<Reply, IrError> {
         if let Some(found) = FIELD.captures(raw) {
             let name = found[1].to_owned();
             let value = unescape(found[2].trim()).to_owned();
+            started = !value.is_empty() || found[2].trim().starts_with('\\');
             if name == "note" {
                 block.notes.push(value);
             } else if block.fields.insert(name.clone(), value).is_some() {
@@ -202,12 +212,13 @@ pub fn parse_worksheet(text: &str) -> Result<Reply, IrError> {
                 block.fields.get_mut(name)
             };
             if let Some(value) = target {
-                if !value.is_empty() {
+                if started {
                     value.extend(std::iter::repeat_n('\n', blanks + 1));
                 }
                 value.push_str(unescape(tail));
             }
             blanks = 0;
+            started = true;
         }
     }
     for block in &mut reply.blocks {
@@ -253,7 +264,7 @@ pub fn validate(block: &Block) -> Result<(), IrError> {
     {
         return Err(IrError::refused("conflicting_actions", &block.id));
     }
-    for name in ACTIONS.into_iter().chain(["reviewed"]) {
+    for name in ACTIONS {
         if block.value(name).is_some_and(|s| {
             !matches!(
                 s.trim().to_ascii_lowercase().as_str(),
@@ -265,6 +276,9 @@ pub fn validate(block: &Block) -> Result<(), IrError> {
                 format!("{}: {name} requires a boolean", block.id),
             ));
         }
+    }
+    if let Some(value) = block.value("reviewed") {
+        review::validate(value)?;
     }
     if block.value("polarity").is_some_and(|s| {
         !matches!(
@@ -324,17 +338,18 @@ pub fn apply(
     if let Some(kind) = block.value("kind").filter(|s| !s.is_empty()) {
         region.kind = kind.into();
     }
-    if let Some(src) = block.value("src") {
-        region.source_text = src.into();
+    region.source_text = block.value("src").unwrap_or_default().into();
+    let target = block.value("fa").unwrap_or_default();
+    if target != region.target_text {
+        region.typeset.clear();
     }
-    if let Some(fa) = block.value("fa") {
-        if fa != region.target_text {
-            region.typeset.clear();
-        }
-        region.target_text = fa.into();
-    }
-    if let Some(speaker) = block.value("speaker") {
-        region.speaker = (!speaker.is_empty()).then(|| speaker.to_owned());
+    region.target_text = target.into();
+    region.speaker = block
+        .value("speaker")
+        .filter(|speaker| !speaker.is_empty())
+        .map(str::to_owned);
+    if block.value("fa_full").is_none() {
+        region.extra.remove("target_full");
     }
     for (key, field) in [
         ("target_full", "fa_full"),
@@ -361,14 +376,12 @@ pub fn apply(
             }
         }
     }
-    if block.value("reviewed").is_some() {
-        region
-            .extra
-            .insert("reviewed".into(), json!(block.affirmative("reviewed")));
-    }
-    if !block.notes.is_empty() {
-        region.review.clone_from(&block.notes);
-    }
+    region.review = block
+        .notes
+        .iter()
+        .filter(|note| !note.trim().is_empty())
+        .cloned()
+        .collect();
     region.dropped = block.affirmative("drop");
     region.keep = block.affirmative("keep");
     region.erase = block.affirmative("erase");
@@ -378,6 +391,9 @@ pub fn apply(
         region.typeset.clear();
         region.extra.remove("target_full");
         region.fill = if region.keep { "keep" } else { "none" }.into();
+    }
+    if let Some(value) = block.value("reviewed") {
+        review::record(region, value)?;
     }
     region.locked = region.dropped
         || region.keep

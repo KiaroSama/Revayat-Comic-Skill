@@ -76,7 +76,7 @@ fn bands(spans: &[Span], line_height: usize, pad_x: usize) -> Vec<Option<Span>> 
         rights.push_back(i);
         if i + 1 >= line_height {
             out.push(lefts.front().zip(rights.front()).and_then(|(&a, &b)| {
-                let l = spans[a][0] + pad_x;
+                let l = spans[a][0].checked_add(pad_x)?;
                 let r = spans[b][1].checked_sub(pad_x)?;
                 (r > l).then_some([l, r])
             }));
@@ -143,7 +143,10 @@ fn wrap(
                 for (advance, (&word, next)) in
                     words[i..].iter().zip(&mut scores[i + 1..]).enumerate()
                 {
-                    let row_cost = word + if advance == 0 { 0 } else { space };
+                    let Some(row_cost) = word.checked_add(if advance == 0 { 0 } else { space })
+                    else {
+                        break;
+                    };
                     let Some(slack) = remaining.checked_sub(row_cost) else {
                         break;
                     };
@@ -203,6 +206,10 @@ pub fn fit_lines_to_spans(
         return Err(METRICS);
     };
     let spans = spans.ok_or(SPANS)?;
+    if spans.iter().any(|[left, right]| left > right) {
+        return Err(SPANS);
+    }
+    let step = line_height.checked_add(gap).ok_or(METRICS)?;
     if words.is_empty() {
         return Ok(Vec::new());
     }
@@ -210,7 +217,9 @@ pub fn fit_lines_to_spans(
     let Some(first) = spans.iter().position(active) else {
         return Ok(Vec::new());
     };
-    let start = first + pad_y;
+    let Some(start) = first.checked_add(pad_y) else {
+        return Ok(Vec::new());
+    };
     let Some(stop) = spans
         .iter()
         .rposition(active)
@@ -226,7 +235,7 @@ pub fn fit_lines_to_spans(
         &words,
         space,
         &bands,
-        line_height + gap,
+        step,
         line_height,
         start,
         stop - start,
@@ -262,7 +271,7 @@ pub fn harmonize_font_sizes(
         .div_ceil(2);
     for (target, area) in eligible {
         if remaining <= area as u128 {
-            let cap = target + max_step;
+            let cap = target.saturating_add(max_step);
             for (size, &area) in sizes.iter_mut().zip(&areas) {
                 if area != 0 {
                     *size = cap.min(*size);
@@ -323,7 +332,9 @@ pub fn check_ink_wall_clearance(
     let ink = mask_buffer(ink, size)?;
     let walls = mask_buffer(walls, size)?;
     let clearance = clearance.ok_or("minimum clearance must be a nonnegative integer")?;
-    let mut result = [0, clearance as i64, -1, -1];
+    let reported_clearance =
+        i64::try_from(clearance).map_err(|_| "minimum clearance exceeds the reportable range")?;
+    let mut result = [0, reported_clearance, -1, -1];
     if clearance == 0 || !ink.iter().any(|&byte| byte != 0) || !walls.iter().any(|&byte| byte != 0)
     {
         return Ok(result);
@@ -354,6 +365,9 @@ pub fn select_largest_inscribed_band(
     min_height: Pixels,
 ) -> KernelResult<[usize; 4]> {
     let spans = spans.ok_or(SPANS)?;
+    if spans.iter().any(|[left, right]| left > right) {
+        return Err(SPANS);
+    }
     let (Some(min_width @ 1..), Some(min_height @ 1..)) = (min_width, min_height) else {
         return Err("invalid minimum band size");
     };
@@ -414,6 +428,116 @@ pub fn align_lines_rtl(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oversized_horizontal_padding_cannot_wrap_into_a_writable_band() {
+        assert_eq!(
+            fit_lines_to_spans(
+                Some(vec![1]),
+                Some(0),
+                Some(1),
+                Some(0),
+                Some(vec![[1, 4]]),
+                Some(usize::MAX),
+                Some(0),
+            ),
+            Ok(vec![])
+        );
+    }
+
+    #[test]
+    fn oversized_vertical_padding_cannot_wrap_into_page_rows() {
+        assert_eq!(
+            fit_lines_to_spans(
+                Some(vec![1]),
+                Some(0),
+                Some(1),
+                Some(0),
+                Some(vec![[0, 0], [1, 4]]),
+                Some(0),
+                Some(usize::MAX),
+            ),
+            Ok(vec![])
+        );
+    }
+
+    #[test]
+    fn line_stride_overflow_is_a_metric_error() {
+        assert!(
+            fit_lines_to_spans(
+                Some(vec![1, 1]),
+                Some(1),
+                Some(1),
+                Some(usize::MAX),
+                Some(vec![[0, 4]; 2]),
+                Some(0),
+                Some(0),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn oversized_spaces_do_not_make_two_words_fit_on_one_line() {
+        assert_eq!(
+            fit_lines_to_spans(
+                Some(vec![1, 1]),
+                Some(usize::MAX),
+                Some(1),
+                Some(0),
+                Some(vec![[0, 4]; 2]),
+                Some(0),
+                Some(0),
+            ),
+            Ok(vec![[0, 1, 0, 0, 4], [1, 2, 1, 0, 4]])
+        );
+    }
+
+    #[test]
+    fn font_cap_beyond_machine_range_does_not_reduce_fonts() {
+        assert_eq!(
+            harmonize_font_sizes(
+                Some(vec![8, 12]),
+                Some(vec![1, 1]),
+                Some(usize::MAX),
+                Some(1),
+            ),
+            Ok(vec![8, 12])
+        );
+    }
+
+    #[test]
+    fn malformed_spans_are_rejected_before_layout() {
+        assert!(
+            fit_lines_to_spans(
+                Some(vec![1]),
+                Some(0),
+                Some(1),
+                Some(0),
+                Some(vec![[4, 1], [0, 4]]),
+                Some(0),
+                Some(0),
+            )
+            .is_err()
+        );
+        assert!(
+            select_largest_inscribed_band(Some(vec![[4, 1], [0, 4]]), Some(1), Some(1)).is_err()
+        );
+    }
+
+    #[test]
+    fn excessive_clearance_never_becomes_a_negative_distance() {
+        assert!(
+            check_ink_wall_clearance(
+                Some(&[0, 255]),
+                Some(&[255, 0]),
+                Some(2),
+                Some(1),
+                Some(usize::MAX),
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn scan_resets_rows_and_keeps_the_first_tie() {

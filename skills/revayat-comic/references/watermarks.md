@@ -31,9 +31,8 @@ Nothing new. A watermark is an ordinary region carrying one extra fact:
 erase: yes
 ```
 
-which means *remove this and put nothing back*. It is the fifth terminal state,
-beside `translated`, `kept_by_policy`, `dropped_false_detection` and
-`needs_review` — and it exists because none of the other four says this:
+which means *remove this and put nothing back*. It is an explicit decision,
+distinct from translating, keeping, or dropping a detection:
 
 | you mean | say | what happens |
 | --- | --- | --- |
@@ -43,16 +42,15 @@ beside `translated`, `kept_by_policy`, `dropped_false_detection` and
 | **remove this, put nothing back** | **`erase: yes`** | **cleaned, nothing set** |
 
 An erase region goes through the *same* path as everything else: masked by
-`mask`, cleaned by `clean` through the ordinary tier ladder — flat fill, then
-classical inpainting, then an image-edit provider — skipped by `typeset` because
+`mask`, cleaned by `clean` using flat fill, diffusion, or a supplied external
+repair, skipped by `typeset` because
 there is no Persian to set, and held by `qa` to the same proof as every other
 region.
 
 **The preservation guarantee is unchanged.** Not one pixel outside the box you
 gave can move, and that is arithmetic rather than a promise:
-`out = original × (1 − alpha) + repaired × alpha` with `alpha ≤ mask`. Measured
-on a page with a corner stamp: 5267 dark pixels inside the box before, 0 after,
-and `artwork_pixels_changed: 0` from the gate.
+`out = original × (1 − alpha) + repaired × alpha` with `alpha ≤ mask`. Check
+the actual approved mask and require `artwork_pixels_changed: 0` from QA.
 
 ## The three shapes, and what each one needs
 
@@ -83,16 +81,16 @@ measured them on the page itself. A 1000x1500 page is under the limit and is
 drawn 1:1, so on a book that size the two are identical — which is exactly how
 this went unnoticed.
 
-Re-running **moves** the box rather than adding a second one; they are
-identified by `--label`, so a wrong box on two hundred pages is fixed by running
-the command again with the right numbers. Use a different `--label` when there
-are genuinely two marks.
+Re-running **moves** the command's existing `<page-id>-watermark` region rather
+than adding another one. The command applies to every page and has no label or
+page-selection flag. Use worksheet regions for a second mark or marks that
+belong on selected pages only.
 
-`--pages p0001,p0002` limits it. Pages the box does not fit — a double spread, a
-colour insert at another size — are listed in `refused` rather than marked with
-a sliver at the edge. If any requested page is refused, the command exits with
-status 1; successful markings on other pages remain in the report and document.
-Inspect both the successful entries and `refused` before retrying corrected boxes.
+The command validates every page before committing the document. A box crossing
+a page edge is refused rather than clipped. If a page fails validation, no
+partial set of markings is saved. Inspect the page sizes
+and use page-specific worksheet boxes when one coordinate set cannot describe
+the whole chapter.
 
 Two guards worth knowing about, because they will occasionally refuse a box you
 meant: one under `4×4` is treated as a dropped digit, and one covering more than
@@ -145,9 +143,9 @@ So:
 
 - A **small** mark over artwork: mark it and let the ladder work. Check the
   result; the region is yours to re-mark or revert.
-- A mark over a **face or fine line art**: use an image-edit provider
-  (`clean --provider openai-compatible-image`, see
-  `artwork-preservation.md`). It is still reconstruction, but a better one.
+- A mark over a **face or fine line art**: obtain a reviewed reconstruction and
+  supply the page through `clean --external-dir`, as described in
+  `artwork-preservation.md`. Inspect the repaired details before accepting it.
 - A **tiled or full-page** overlay: the 25% guard will refuse it, and that
   refusal is doing its job. There is no honest way to take a translucent layer
   off a flattened image — the pixels are mixed, and un-mixing them needs the
@@ -155,18 +153,15 @@ So:
 
 ## What the report tells you
 
-After `clean`, the terminal-state census in `qa check` counts them:
+`watermark` reports how many pages were marked. It does not certify that the
+ink has been removed. After `mask` and `clean`, inspect the cleaned page and run
+`qa check --strict`; the report provides findings and
+`artwork_pixels_changed`, rather than a watermark-specific before/after count.
 
-```json
-"states": { "translated": 41, "erased": 2, "kept_by_policy": 3 }
-```
-
-`erased` means the cleaner actually acted. A region you marked but that the
-cleaner declined — a solid free-lettering mask with no provider configured, for
-instance — comes back as `needs_review`, not `erased`. That distinction is the
-point: reporting `erased` on intent alone would say a watermark is gone while it
-is still on the page, which is the same failure the census exists to prevent,
-pointed the other way.
+The region's `fill` records the cleaning strategy. An erase decision without a
+completed repair remains pending in the document's state logic. A solid patch
+without an approved external repair fails cleaning, so an erase request alone
+must never be reported as successful removal.
 
 ## What is not here
 

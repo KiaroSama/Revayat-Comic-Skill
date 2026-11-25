@@ -189,7 +189,7 @@ word.
 Before translating any chapter, look up official character names, pronunciations,
 honorifics, and relationships on the web. Use publisher or creator material and
 licensed editions where possible. Record the URLs, verified facts, unresolved
-points, and agreed Persian forms in the chapter's `glossary.json`. Carry the
+points, and agreed Persian forms in the chapter's `comic.json` glossary. Carry the
 agreed forms into the locked worksheet glossary before drafting.
 
 The table at the top of the worksheet is binding. Use exactly the Persian it
@@ -246,8 +246,8 @@ one: absent means nobody has decided, and then the page decides, as above.
   mechanically, so write naturally and do not fight it. Structured quantity notation
   is protected exactly: decimal/grouping separators, signs, clocks/dates, leading
   decimals and scientific notation are not localized or reinterpreted. `3,14` and
-  `1,200` keep their original digits even with `--digits persian`; plain prose digits
-  still follow the option. Physical CR/LF/CRLF line endings normalize to logical LF,
+  `1,200` keep their original digits. The current CLI uses the default digit
+  policy and has no digit-selection flag. Physical CR/LF/CRLF line endings normalize to logical LF,
   with deliberate blank lines preserved; this is not broad Unicode line splitting.
 - Persian letters, not Arabic: `ی` and `ک`, never `ي` and `ك`.
 - Half-spaces where they belong: `می‌روم`, `کتاب‌ها`. **Write them yourself.**
@@ -271,8 +271,9 @@ one: absent means nobody has decided, and then the page decides, as above.
 - Put U+2067 (RLI) before and U+2069 (PDI) after any Persian sentence starting
   with an English word, including after opening quotes or brackets. Leave
   Persian-leading and pure-English sentences unwrapped. Run the bundled
-  `persian_lint.py --check --style` on the drafted Persian, then run `falint fix`
-  on the merged comic. Both check or add the same directional isolation.
+  `revayat-comic voice lint draft.md --check --style` on the drafted Persian,
+  then run `revayat-comic falint fix --doc work/comic.json` on the merged comic.
+  Both check or add the same directional isolation.
 - Do not reverse anything, and do not paste text that already looks right-to-left
   in your editor. Write ordinary Persian in ordinary order.
 - Do not insert an explanation into the dialogue. A character does not explain

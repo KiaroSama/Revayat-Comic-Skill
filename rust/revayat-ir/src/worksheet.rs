@@ -1,7 +1,9 @@
 pub use crate::replies::{Block, Reply, parse_worksheet as parse};
 use crate::replies::{apply, field_lines, reply_digest};
 use crate::worksheet_paths::worksheet_folder;
-use crate::{ComicDocument, IrError, PageRecord, RegionRecord, ir, regions, stages, workspace};
+use crate::{
+    ComicDocument, IrError, PageRecord, RegionRecord, ir, regions, review, stages, workspace,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
@@ -11,6 +13,40 @@ use std::path::{Path, PathBuf};
 
 pub const STAMP_SCHEME: &str = "2";
 
+fn content_fingerprint(page: &PageRecord) -> String {
+    let regions: Vec<_> = page
+        .regions
+        .iter()
+        .map(|region| {
+            json!({
+                "id": region.id,
+                "source": region.source_text,
+                "source_revision": region.extra.get("source_revision"),
+                "shown": region.target_text,
+                "full": region.extra.get("target_full"),
+                "speaker": region.speaker,
+                "style": region.extra.get("style"),
+                "polarity": region.extra.get("polarity"),
+                "proposed": region.extra.get("proposed"),
+                "actions": regions::actions(region),
+                "notes": region.review,
+                "review_ack": region.extra.get("review_ack"),
+                "review_ack_text": region.extra.get("review_ack_text"),
+                "review_ack_compression": region.extra.get("review_ack_compression"),
+                "review_ack_spans": region.extra.get("review_ack_spans"),
+            })
+        })
+        .collect();
+    let mut content = json!({
+        "geometry": ir::page_fingerprint(page),
+        "size": [page.width, page.height],
+        "regions": regions,
+    });
+    // Derived masks and lettering evidence do not change the worksheet content.
+    content.sort_all_objects();
+    ir::sha256_bytes(content.to_string().as_bytes())
+}
+
 pub fn page_worksheet(doc: &ComicDocument, page: &PageRecord) -> String {
     let title = doc
         .meta
@@ -19,11 +55,13 @@ pub fn page_worksheet(doc: &ComicDocument, page: &PageRecord) -> String {
         .filter(|s| !s.is_empty())
         .unwrap_or("comic");
     let mut text = format!(
-        "# {title} | page {} ({} of {})\n# fingerprint: {}\n# scheme: {STAMP_SCHEME}\n# Add Persian after fa: and keep the region IDs.\n",
+        "# {title} | page {} ({} of {})\n# fingerprint: {}\n# content-fingerprint: {}\n# scheme: {STAMP_SCHEME}\n# Add Persian after fa: and keep the region IDs.\n",
         page.id,
         page.index.saturating_add(1),
         doc.pages.len(),
-        ir::page_fingerprint(page)
+        ir::page_fingerprint(page),
+        content_fingerprint(page),
+        title = title.replace(['\r', '\n', '\u{85}', '\u{2028}', '\u{2029}'], " ")
     );
     let header = |text: &mut String, key: &str, value: &str| {
         let _ = writeln!(
@@ -99,17 +137,18 @@ pub fn page_worksheet(doc: &ComicDocument, page: &PageRecord) -> String {
                 text.push_str(&field_lines(field, value));
             }
         }
-        for (enabled, field) in [
-            (region.keep, "keep"),
-            (region.erase, "erase"),
-            (region.dropped, "drop"),
-        ] {
+        let [dropped, kept, erased] = regions::actions(region);
+        for (enabled, field) in [(kept, "keep"), (erased, "erase"), (dropped, "drop")] {
             if enabled {
                 text.push_str(&field_lines(field, "yes"));
             }
         }
         for note in &region.review {
             text.push_str(&field_lines("note", note));
+        }
+        let carried = review::carried_acknowledgements(region);
+        if !carried.is_empty() {
+            text.push_str(&field_lines("reviewed", &carried.join(", ")));
         }
     }
     text
@@ -154,25 +193,31 @@ fn check_stamp(
             format!("{}: missing fingerprint", page.id),
         ));
     };
-    if stamp == &ir::page_fingerprint(page) || document_stamp == Some(stamp) {
+    if (stamp == &ir::page_fingerprint(page) || document_stamp == Some(stamp))
+        && reply
+            .content_fingerprint
+            .as_deref()
+            .is_none_or(|content| content == content_fingerprint(page))
+    {
         return Ok(());
     }
     Err(IrError::refused(
         "stale-worksheets",
         format!(
-            "{}: worksheet fingerprint no longer matches the page",
+            "{}: worksheet fingerprint no longer matches the page content or geometry",
             page.id
         ),
     ))
 }
 
 pub fn merge_page(page: &mut PageRecord, reply: &Reply) -> Result<(), IrError> {
-    merge(page, reply, "keep", None, false)
+    merge(page, reply, "keep", "rtl", None, false)
 }
 fn merge(
     page: &mut PageRecord,
     reply: &Reply,
     policy: &str,
+    direction: &str,
     document_stamp: Option<&str>,
     force: bool,
 ) -> Result<(), IrError> {
@@ -240,10 +285,23 @@ fn merge(
             return Err(IrError::refused("empty_translation", &region.id));
         }
     }
+    if revised.regions.len() != page.regions.len()
+        || revised
+            .regions
+            .iter()
+            .zip(&page.regions)
+            .any(|(new, old)| new.bbox != old.bbox)
+    {
+        ir::assign_reading_order(&mut revised, direction, 0.35)?;
+    }
     revised
         .extra
         .insert("worksheet_digest".into(), json!(reply_digest(reply)?));
     revised.extra.insert("worksheet_clean".into(), json!(true));
+    revised.extra.insert(
+        "worksheet_content".into(),
+        json!(content_fingerprint(&revised)),
+    );
     *page = revised;
     Ok(())
 }
@@ -261,6 +319,19 @@ pub struct WorksheetStatus {
     pub merged: Vec<String>,
     pub stale: Vec<String>,
 }
+fn already_applied(page: &PageRecord, reply: &Reply, digest: &str) -> bool {
+    page.extra.get("worksheet_digest").and_then(Value::as_str) == Some(digest)
+        && page.extra.get("worksheet_clean") == Some(&json!(true))
+        && page
+            .extra
+            .get("worksheet_content")
+            .and_then(Value::as_str)
+            .map_or_else(
+                || reply.content_fingerprint.is_none(),
+                |content| content == content_fingerprint(page),
+            )
+}
+
 pub fn status(doc_path: &Path, worksheets: Option<&Path>) -> Result<WorksheetStatus, IrError> {
     let doc = ir::load_doc(doc_path)?;
     let folder = worksheet_folder(doc_path, &doc, worksheets);
@@ -275,9 +346,7 @@ pub fn status(doc_path: &Path, worksheets: Option<&Path>) -> Result<WorksheetSta
         let reply = parse(&fs::read_to_string(path)?)?;
         if check_stamp(&reply, page, Some(&stamp)).is_err() {
             result.stale.push(page.id.clone());
-        } else if page.extra.get("worksheet_digest").and_then(Value::as_str)
-            == Some(reply_digest(&reply)?.as_str())
-        {
+        } else if already_applied(page, &reply, &reply_digest(&reply)?) {
             result.merged.push(page.id.clone());
         } else {
             result.completed.push(page.id.clone());
@@ -338,6 +407,12 @@ pub fn merge_document(
         .collect();
     let folder = worksheet_folder(doc_path, doc, worksheets);
     let policy = doc.policy().to_owned();
+    let direction = doc
+        .meta
+        .get("reading_direction")
+        .and_then(Value::as_str)
+        .unwrap_or("rtl")
+        .to_owned();
     let stamp = ir::fingerprint(doc);
     let mut receipts = Vec::new();
     for page in &mut doc.pages {
@@ -359,15 +434,17 @@ pub fn merge_document(
         }
         let digest = reply_digest(&reply)?;
         let before = ir::page_fingerprint(page);
-        if page.extra.get("worksheet_digest").and_then(Value::as_str) == Some(&digest)
-            && page.extra.get("worksheet_clean") == Some(&json!(true))
-        {
+        let content_before = content_fingerprint(page);
+        if already_applied(page, &reply, &digest) {
             if check_stamp(&reply, page, Some(&stamp)).is_err() {
                 let receipt = page
                     .extra
                     .get("worksheet_receipt")
                     .ok_or_else(|| IrError::refused("stale-worksheets", &page.id))?;
                 if receipt["after"] != before
+                    || receipt
+                        .get("content_after")
+                        .is_some_and(|content| content != &content_before)
                     || receipt["raw"] != ir::sha256_bytes(raw.as_bytes())
                     || receipt["digest"] != digest
                     || receipt["path"] != json!(std::path::absolute(&path)?)
@@ -376,20 +453,47 @@ pub fn merge_document(
                         .or_else(|| receipt.get("before"))
                         .and_then(Value::as_str)
                         != reply.fingerprint.as_deref()
+                    || receipt.get("accepted_content").and_then(Value::as_str)
+                        != reply.content_fingerprint.as_deref()
                     || fs::read_to_string(&path)? != raw
                 {
                     return Err(IrError::refused("stale-worksheets", &page.id));
                 }
-                ir::write_text(&path, &restamp(&raw, &before))?;
+                ir::write_text(&path, &restamp(&raw, &before, &content_before))?;
             }
             continue;
         }
-        merge(page, &reply, &policy, Some(&stamp), force)?;
+        if !force
+            && reply.content_fingerprint.is_none()
+            && page.extra.get("worksheet_digest").and_then(Value::as_str) == Some(&digest)
+            && page
+                .extra
+                .get("worksheet_content")
+                .and_then(Value::as_str)
+                .is_some_and(|content| content != content_before)
+        {
+            return Err(IrError::refused(
+                "stale-worksheets",
+                format!(
+                    "{}: rebuild the worksheet before renewing changed content",
+                    page.id
+                ),
+            ));
+        }
+        merge(page, &reply, &policy, &direction, Some(&stamp), force)?;
         let after = ir::page_fingerprint(page);
-        page.extra.insert("worksheet_receipt".into(),json!({"path":std::path::absolute(&path)?,"raw":ir::sha256_bytes(raw.as_bytes()),"before":before,"after":after,"accepted":reply.fingerprint,"digest":digest}));
-        receipts.push((page.id.clone(), path, raw, after));
+        let content_after = content_fingerprint(page);
+        page.extra.insert(
+            "worksheet_receipt".into(),
+            json!({
+                "path":std::path::absolute(&path)?, "raw":ir::sha256_bytes(raw.as_bytes()),
+                "before":before, "after":after, "accepted":reply.fingerprint, "digest":digest,
+                "content_after":content_after, "accepted_content":reply.content_fingerprint,
+            }),
+        );
+        receipts.push((page.id.clone(), path, raw, after, content_after));
     }
-    let changed: Vec<_> = receipts.iter().map(|(id, _, _, _)| id.clone()).collect();
+    let changed: Vec<_> = receipts.iter().map(|(id, _, _, _, _)| id.clone()).collect();
     if changed.is_empty() {
         return Ok(changed);
     }
@@ -398,7 +502,7 @@ pub fn merge_document(
             .insert("worksheets".into(), json!(std::path::absolute(&folder)?));
     }
     stages::stamp_stage(doc, "worksheet", Default::default(), None, Some(&changed))?;
-    for (_, path, raw, _) in &receipts {
+    for (_, path, raw, _, _) in &receipts {
         if fs::read_to_string(path)? != *raw {
             return Err(IrError::refused(
                 "worksheet_changed",
@@ -407,26 +511,32 @@ pub fn merge_document(
         }
     }
     loaded.save_claimed(&claim)?;
-    for (_, path, raw, after) in receipts {
+    for (_, path, raw, after, content_after) in receipts {
         if fs::read_to_string(&path)? != raw {
             return Err(IrError::refused(
                 "worksheet_changed",
                 path.display().to_string(),
             ));
         }
-        let stamped = restamp(&raw, &after);
+        let stamped = restamp(&raw, &after, &content_after);
         if stamped != raw {
             ir::write_text(path, &stamped)?;
         }
     }
     Ok(changed)
 }
-fn restamp(raw: &str, stamp: &str) -> String {
+fn restamp(raw: &str, stamp: &str, content: &str) -> String {
     let body = raw
         .split_inclusive('\n')
-        .filter(|line| !line.starts_with("# fingerprint:") && !line.starts_with("# scheme:"))
+        .filter(|line| {
+            !line.starts_with("# fingerprint:")
+                && !line.starts_with("# content-fingerprint:")
+                && !line.starts_with("# scheme:")
+        })
         .collect::<String>();
-    format!("# fingerprint: {stamp}\n# scheme: {STAMP_SCHEME}\n{body}")
+    format!(
+        "# fingerprint: {stamp}\n# content-fingerprint: {content}\n# scheme: {STAMP_SCHEME}\n{body}"
+    )
 }
 pub fn reconcile_document(
     doc_path: &Path,
@@ -451,17 +561,23 @@ pub fn reconcile_document(
         for block in &reply.blocks {
             crate::replies::validate(block)?;
         }
-        changes.push((page.id.clone(), path, raw, ir::page_fingerprint(page)));
+        changes.push((
+            page.id.clone(),
+            path,
+            raw,
+            ir::page_fingerprint(page),
+            content_fingerprint(page),
+        ));
     }
-    let ids = changes.iter().map(|(id, _, _, _)| id.clone()).collect();
-    for (_, path, raw, stamp) in changes {
+    let ids = changes.iter().map(|(id, _, _, _, _)| id.clone()).collect();
+    for (_, path, raw, stamp, content) in changes {
         if fs::read_to_string(&path)? != raw {
             return Err(IrError::refused(
                 "worksheet_changed",
                 path.display().to_string(),
             ));
         }
-        let output = restamp(&raw, &stamp);
+        let output = restamp(&raw, &stamp, &content);
         if output != raw {
             ir::write_text(path, &output)?;
         }

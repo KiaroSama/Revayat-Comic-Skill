@@ -28,6 +28,14 @@ impl RegionState {
 
 pub const SFX_KEEP_POLICIES: &[&str] = &["keep", "bilingual", "annotate"];
 
+pub(crate) fn actions(region: &RegionRecord) -> [bool; 3] {
+    [
+        region.dropped || region.state == Some(RegionState::Dropped),
+        region.keep || region.state == Some(RegionState::Kept),
+        region.erase || region.state == Some(RegionState::Erased),
+    ]
+}
+
 pub fn translatable(region: &RegionRecord, policy: &str) -> bool {
     !(region.dropped
         || region.keep
@@ -56,11 +64,7 @@ pub fn may_be_edited(region: &RegionRecord, policy: &str) -> bool {
 }
 
 pub fn region_state(region: &RegionRecord, policy: &str) -> Result<RegionState, IrError> {
-    let states = [
-        region.dropped || region.state == Some(RegionState::Dropped),
-        region.keep || region.state == Some(RegionState::Kept),
-        region.erase || region.state == Some(RegionState::Erased),
-    ];
+    let states = actions(region);
     if states.into_iter().filter(|flag| *flag).count() > 1 {
         return Err(IrError::refused("conflicting_actions", &region.id));
     }

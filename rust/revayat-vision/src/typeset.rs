@@ -159,11 +159,9 @@ pub fn typeset_page(page: &RgbImage, regions: &[TextRegion]) -> Result<TypesetPa
                 region.id
             )));
         }
-        // Rebuild only the line isolates; authored direction marks stay in the logical text.
-        let wrapping = logical.replace([crate::bidi::RLI, crate::bidi::PDI], "");
         let fit = fit_region(
             &mut shaper,
-            &wrapping,
+            &logical,
             &region.style,
             FitOptions {
                 bounds,

@@ -30,7 +30,7 @@ Revayat Comic is a pure Rust CLI binary (`revayat-comic`) paired with an AI agen
 - Pure Rust from input to export, compiled with Rust `1.100.0` (`edition = "2024"`, `#![forbid(unsafe_code)]`) and zero Python, PyMuPDF, OpenCV, or external unrar binaries at runtime.
 - Pure Rust PDF inspection, rasterization, and lossless PDF writing via `lopdf`, `pdf-writer`, and `hayro`, including stencil-mask and Form XObject pixel-budget checks before raster allocation.
 - Pure Rust CBR (`rars`), CBZ (`zip`), and Persian RTL DOCX (`quick-xml`) support.
-- Real Persian shaping and bidi layout on every platform via `cosmic-text` (HarfBuzz and FriBidi) with bundled Vazir TTF fonts (`Regular`, `Medium`, `Bold`), at least `1.38x` line spacing, zero-dot interior bubble sweeps, and non-overlapping text guards.
+- Real Persian shaping and bidi layout on every platform via `cosmic-text` (HarfRust shaping, `unicode-bidi`, and Swash rasterization) with bundled Vazir TTF fonts (`Regular`, `Medium`, `Bold`), at least `1.38x` line spacing, zero-dot interior bubble sweeps, and non-overlapping text guards.
 - Full-page image-edit workflow (`fullpage-prompt`) for covers, speedlines, chapter titles, and art-integrated sound effects: empty uniform speech bubbles first, submit the full page with OCR-verified source texts, exact coordinates, and Persian replacements, then composite only the padded edited zones back onto the immutable original scan.
 - Six-stage multi-agent workflow with reusable prompt templates for initial translation, typesetting, review, application, recheck and fixing, and final delivery, plus series canon lookup before drafting.
 
