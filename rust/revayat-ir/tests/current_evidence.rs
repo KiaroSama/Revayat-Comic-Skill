@@ -82,7 +82,7 @@ fn assert_proof_refused(root: &Path, page: &PageRecord, proof: &str) -> Result<(
         findings.iter().any(|finding| {
             finding.code == "delivery-mismatch" && finding.detail.contains(proof)
         }),
-        "{proof} was accepted without its committed proof: {findings:?}",
+        "current preservation mask was accepted without its committed proof",
     );
     Ok(())
 }
