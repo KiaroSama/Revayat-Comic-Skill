@@ -6,6 +6,9 @@ mod balloon_quality;
 #[path = "cli/recheck.rs"]
 mod recheck;
 
+#[path = "cli/state_actions.rs"]
+mod state_actions;
+
 use std::{
     fs::{self, File},
     path::PathBuf,

@@ -170,8 +170,18 @@ fn synthetic_cbz_round_trip_preserves_artwork_and_exports_all_formats() {
         .unwrap();
     tampered.put_pixel(x, y, Rgb([199; 3]));
     bubble["typeset"]["ink_box"] = json!([bx, by, bw, bh]);
-    fs::write(&doc_path, serde_json::to_vec_pretty(&stale).unwrap()).unwrap();
-    tampered.save(&rendered).unwrap();
+    // Keep file identity valid so these probes exercise the independent pixel oracles.
+    let mut write_forged_render = |pixels: &RgbImage| {
+        let path = fixture.cwd.join("forged.png");
+        pixels.save(&path).unwrap();
+        let digest = revayat_ir::ir::sha256_file(&path).unwrap();
+        let relative = format!("rendered/forged-{digest}.png");
+        fs::rename(&path, fixture.cwd.join("comic work").join(&relative)).unwrap();
+        stale["pages"][0]["final"] = json!(relative);
+        stale["pages"][0]["delivery"]["final"] = json!(digest);
+        fs::write(&doc_path, serde_json::to_vec_pretty(&stale).unwrap()).unwrap();
+    };
+    write_forged_render(&tampered);
     let report = fixture.run(&["qa", "check", "--strict", "--doc", DOC], b"");
     assert!(!report.status.success());
     let report = json_stdout(&report);
@@ -184,7 +194,7 @@ fn synthetic_cbz_round_trip_preserves_artwork_and_exports_all_formats() {
                 && f["finding"]["region"] == bubble_id),
         "{report}"
     );
-    clean.save(&rendered).unwrap();
+    write_forged_render(&clean);
     let report = fixture.run(&["qa", "check", "--strict", "--doc", DOC], b"");
     assert!(!report.status.success());
     let report = json_stdout(&report);

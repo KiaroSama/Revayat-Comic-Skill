@@ -67,18 +67,30 @@ pub fn clean(path: &Path, bubbles_only: bool, external: Option<&Path>) -> Result
                 .map(|directory| image_at(directory, page))
                 .transpose()?;
             let mut balloons = Vec::new();
+            let mut balloon_regions = Vec::new();
             let panels = page_panels(page)?;
             let neighbors = on_art_bounds(page)?;
-            for region in &mut page.regions {
+            for (index, region) in page.regions.iter_mut().enumerate() {
                 if editable(region, &policy)
                     && let Some(balloon) =
                         resolve_balloon(&image, region, &panels, &neighbors, None)?
                 {
                     record_balloon(&image, region, balloon)?;
                     balloons.push(balloon);
+                    balloon_regions.push(index);
                 }
             }
             let mut cleaned = clean::clean_page_bubbles(&image, &balloons).map_err(failed)?;
+            for (index, strategy) in balloon_regions.into_iter().zip(&cleaned.strategies) {
+                let region = &mut page.regions[index];
+                if region.erase || region.state == Some(regions::RegionState::Erased) {
+                    region.fill = serde_json::to_value(strategy)
+                        .map_err(failed)?
+                        .as_str()
+                        .unwrap_or("cleaned")
+                        .to_owned();
+                }
+            }
             if !bubbles_only {
                 for region in &mut page.regions {
                     if !editable(region, &policy)
@@ -118,6 +130,7 @@ pub fn clean(path: &Path, bubbles_only: bool, external: Option<&Path>) -> Result
                     "size": [page.width, page.height], "source": page.sha256,
                     "mask": digest(&root, page.extra.get("mask").and_then(Value::as_str))?,
                     "clean": digest(&root, page.cleaned.as_deref())?,
+                    "clean_mask": digest(&root, page.extra.get("clean_mask").and_then(Value::as_str))?,
                 }),
             );
             page.rendered = None;
@@ -321,6 +334,7 @@ pub fn typeset(path: &Path, external: Option<&Path>) -> Result<Value> {
                 "size": [page.width, page.height], "final": digest(&root, page.rendered.as_deref())?,
                 "clean": digest(&root, page.cleaned.as_deref())?,
                 "writable": digest(&root, page.extra.get("writable").and_then(Value::as_str))?,
+                "authorized_mask": digest(&root, page.extra.get("authorized_mask").and_then(Value::as_str))?,
             }));
         }
         stamp(loaded, "typeset")?;

@@ -1,5 +1,5 @@
 use crate::{
-    ComicDocument, IrError, PageRecord, batch,
+    ComicDocument, IrError, PageRecord, batch, ir,
     regions::{self, Artifact},
     review, stages,
 };
@@ -63,6 +63,7 @@ fn verify(
     record: &Value,
     stage: &str,
     files: &[(&str, Option<&str>)],
+    proof: &str,
 ) -> Result<Vec<Finding>, IrError> {
     let mut issues = Vec::new();
     if record["size"] != json!([page.width, page.height]) {
@@ -72,12 +73,30 @@ fn verify(
             format!("{stage} committed different page dimensions"),
         ));
     }
+    let mut files = files.to_vec();
+    // Older workspaces have neither the current proof path nor its evidence key.
+    if page.extra.contains_key(proof) || record.get(proof).is_some() {
+        if let Some(path) = page
+            .extra
+            .get(proof)
+            .and_then(Value::as_str)
+            .filter(|path| !path.is_empty())
+        {
+            files.push((proof, Some(path)));
+        } else {
+            issues.push(finding(
+                "delivery-mismatch",
+                page,
+                format!("{proof} has no valid committed path; re-run {stage}"),
+            ));
+        }
+    }
     for (key, named) in files {
         let Some(wanted) = record.get(key) else {
             issues.push(finding(
                 "delivery-mismatch",
                 page,
-                format!("{stage} has no {key} evidence"),
+                format!("{stage} has no {key} evidence; re-run {stage}"),
             ));
             continue;
         };
@@ -89,12 +108,36 @@ fn verify(
             issues.push(finding(
                 "delivery-mismatch",
                 page,
-                format!("{key} is not the file {stage} committed"),
+                format!("{key} is not the file {stage} committed; re-run {stage}"),
             ));
         }
     }
     Ok(issues)
 }
+
+/// Check a derived asset after the caller has confined its path to the workspace.
+/// Legacy filenames without a full SHA-256 suffix retain their existing behavior.
+pub fn verify_content_addressed(path: &Path) -> Result<(), IrError> {
+    let Some((_, expected)) = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .and_then(|stem| stem.rsplit_once('-'))
+        .filter(|(_, digest)| digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit()))
+    else {
+        return Ok(());
+    };
+    if !ir::sha256_file(path)?.eq_ignore_ascii_case(expected) {
+        return Err(IrError::refused(
+            "asset_digest_mismatch",
+            format!(
+                "{} changed after it was created; re-run the stage that produced this asset",
+                path.display()
+            ),
+        ));
+    }
+    Ok(())
+}
+
 pub fn certify_delivery(root: &Path, page: &PageRecord) -> Result<Vec<Finding>, IrError> {
     let Some(record) = page
         .extra
@@ -127,6 +170,7 @@ pub fn certify_delivery(root: &Path, page: &PageRecord) -> Result<Vec<Finding>, 
                 page.extra.get("writable").and_then(Value::as_str),
             ),
         ],
+        "authorized_mask",
     )
 }
 pub fn certify_cleaning(root: &Path, page: &PageRecord) -> Result<Vec<Finding>, IrError> {
@@ -158,6 +202,7 @@ pub fn certify_cleaning(root: &Path, page: &PageRecord) -> Result<Vec<Finding>, 
             ("mask", page.extra.get("mask").and_then(Value::as_str)),
             ("clean", page.cleaned.as_deref()),
         ],
+        "clean_mask",
     )
 }
 

@@ -94,6 +94,21 @@ means a region matched artwork rather than lettering. Correct the box or use
 `drop: yes` for a false detection. Balloon masks are clipped to the recovered
 interior; the current CLI has no configurable growth or page-coverage flag.
 
+If a derived asset reports `asset_digest_mismatch` or QA reports
+`delivery-mismatch` for `clean_mask` or `authorized_mask`, its current bytes do
+not prove the committed stage. Preserve the original pages and accepted text,
+then run `mask`, `clean` and `typeset` again, followed by strict QA and export.
+Current workspaces created before proof-mask digests were recorded also need
+this rebuild once. Supply any previously approved external repair again when
+the affected stage requires it. Do not rename an altered asset to bypass its
+digest, edit the stored evidence, delete proof fields or use `--draft` to claim
+a final delivery. An unhashed legacy asset remains readable; that compatibility
+does not authorize replacing current proof with a legacy record.
+
+Changing panel rectangles also invalidates masks, cleaning and typesetting.
+Review the new boundaries and rebuild those stages; changing only a panel note
+does not require regenerating its pixels.
+
 `clean` refusing with *"a solid erase mask needs an approved external repair"*
 means solid masks cover each piece of
 free lettering as a whole patch, which is for a generative cleaner. Pass

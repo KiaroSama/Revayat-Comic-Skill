@@ -60,6 +60,15 @@ pub fn asset(root: &Path, relative: &str) -> Result<PathBuf> {
     if !path.starts_with(&root) || !path.is_file() {
         return Err(failed("asset path must stay inside the workspace"));
     }
+    if matches!(
+        relative
+            .components()
+            .next()
+            .and_then(|part| part.as_os_str().to_str()),
+        Some("masks" | "clean" | "rendered" | "crops" | "sheets")
+    ) {
+        revayat_ir::certify::verify_content_addressed(&root.join(relative)).map_err(failed)?;
+    }
     Ok(path)
 }
 
@@ -241,7 +250,9 @@ fn bubble_kind(region: &RegionRecord) -> bool {
 
 fn editable(region: &RegionRecord, policy: &str) -> bool {
     regions::may_be_edited(region, policy)
-        && (region.erase || regions::translatable(region, policy))
+        && (region.erase
+            || region.state == Some(regions::RegionState::Erased)
+            || regions::translatable(region, policy))
 }
 
 fn page_panels(page: &PageRecord) -> Result<Vec<Rect>> {
@@ -256,7 +267,7 @@ fn page_panels(page: &PageRecord) -> Result<Vec<Rect>> {
 fn on_art_bounds(page: &PageRecord) -> Result<Vec<Rect>> {
     page.regions
         .iter()
-        .filter(|r| !bubble_kind(r) && !r.dropped)
+        .filter(|r| !bubble_kind(r) && !r.dropped && r.state != Some(regions::RegionState::Dropped))
         .map(bounds)
         .collect()
 }
@@ -343,7 +354,9 @@ fn region_mask(
     selected: Option<&masks::RegionMask>,
     solid: bool,
 ) -> Result<masks::RegionMask> {
-    if region.kind == "watermark" && region.erase {
+    if region.kind == "watermark"
+        && (region.erase || region.state == Some(regions::RegionState::Erased))
+    {
         if !region.locked {
             return Err(failed("watermark removal requires a locked erase decision"));
         }

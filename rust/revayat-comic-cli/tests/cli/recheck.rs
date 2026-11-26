@@ -451,13 +451,15 @@ fn empty_mask_processing_and_export_preserve_native_samples_and_alpha() {
 
         // An independently forged RGB8 output must fail the native-channel QA oracle.
         let mut doc = doc;
-        let path = fixture
-            .cwd
-            .join("work")
-            .join(doc["pages"][0]["final"].as_str().unwrap());
-        let native_output = fs::read(&path).unwrap();
-        source.to_rgb8().save(&path).unwrap();
-        doc["pages"][0]["delivery"]["final"] = json!(revayat_ir::ir::sha256_file(&path).unwrap());
+        let native_final = doc["pages"][0]["final"].clone();
+        let native_digest = doc["pages"][0]["delivery"]["final"].clone();
+        let forged = fixture.cwd.join("forged.png");
+        source.to_rgb8().save(&forged).unwrap();
+        let digest = revayat_ir::ir::sha256_file(&forged).unwrap();
+        let forged_final = format!("rendered/forged-{digest}.png");
+        fs::copy(&forged, fixture.cwd.join("work").join(&forged_final)).unwrap();
+        doc["pages"][0]["final"] = json!(forged_final);
+        doc["pages"][0]["delivery"]["final"] = json!(digest);
         put_document(&fixture, &doc);
         let qa = fixture.run(
             &["qa", "check", "--strict", "--doc", "work/comic.json"],
@@ -465,14 +467,11 @@ fn empty_mask_processing_and_export_preserve_native_samples_and_alpha() {
         );
         assert_eq!(qa.status.code(), Some(1));
         assert!(json_stdout(&qa)["artwork_pixels_changed"].as_u64().unwrap() > 0);
-        fs::write(&path, native_output).unwrap();
-        doc["pages"][0]["delivery"]["final"] = json!(revayat_ir::ir::sha256_file(&path).unwrap());
-        let clean_path = fixture
-            .cwd
-            .join("work")
-            .join(doc["pages"][0]["clean"].as_str().unwrap());
-        source.to_rgb8().save(&clean_path).unwrap();
-        let digest = revayat_ir::ir::sha256_file(&clean_path).unwrap();
+        doc["pages"][0]["final"] = native_final;
+        doc["pages"][0]["delivery"]["final"] = native_digest;
+        let forged_clean = format!("clean/forged-{digest}.png");
+        fs::copy(&forged, fixture.cwd.join("work").join(&forged_clean)).unwrap();
+        doc["pages"][0]["clean"] = json!(forged_clean);
         doc["pages"][0]["cleaning"]["clean"] = json!(digest);
         doc["pages"][0]["delivery"]["clean"] = json!(digest);
         put_document(&fixture, &doc);
@@ -717,4 +716,275 @@ fn non_draft_export_requires_strict_image_and_linguistic_qa() {
         ],
         b"",
     ));
+}
+
+fn assert_changed_proof_mask_is_rejected(field: &str) {
+    let fixture = Fixture::staged();
+    rendered_balloon(&fixture);
+    let export = [
+        "export",
+        "--doc",
+        "work/comic.json",
+        "--out",
+        "approved.cbz",
+    ];
+    success(&fixture.run(&export, b""));
+    let before_output = fs::read(fixture.cwd.join("approved.cbz")).unwrap();
+    let before_doc = fs::read(fixture.cwd.join("work/comic.json")).unwrap();
+    let doc = document(&fixture);
+    let path = fixture
+        .cwd
+        .join("work")
+        .join(doc["pages"][0][field].as_str().unwrap());
+    let mut mask = image::open(&path).unwrap().into_luma8();
+    mask.put_pixel(280, 280, image::Luma([255]));
+    mask.save(&path).unwrap();
+    let refused = fixture.run(
+        &["qa", "check", "--strict", "--doc", "work/comic.json"],
+        b"",
+    );
+    assert!(
+        !refused.status.success(),
+        "QA accepted changed {field}: {refused:?}"
+    );
+    assert!(!fixture.run(&export, b"").status.success());
+    assert_eq!(
+        fs::read(fixture.cwd.join("approved.cbz")).unwrap(),
+        before_output
+    );
+    assert_eq!(
+        fs::read(fixture.cwd.join("work/comic.json")).unwrap(),
+        before_doc
+    );
+    for stage in ["mask", "clean", "typeset"] {
+        success(&fixture.run(&[stage, "--doc", "work/comic.json"], b""));
+    }
+    success(&fixture.run(
+        &["qa", "check", "--strict", "--doc", "work/comic.json"],
+        b"",
+    ));
+    success(&fixture.run(&export, b""));
+}
+
+#[test]
+fn publication_rejects_changed_clean_mask_and_recovers_after_rebuilding() {
+    assert_changed_proof_mask_is_rejected("clean_mask");
+}
+
+#[test]
+fn publication_rejects_changed_authorized_mask_and_recovers_after_rebuilding() {
+    assert_changed_proof_mask_is_rejected("authorized_mask");
+}
+
+#[test]
+fn cleaning_rejects_a_changed_region_mask_before_consuming_it() {
+    let fixture = Fixture::staged();
+    let mut doc = import_blank_pages(&fixture, 1);
+    let id = doc["pages"][0]["id"].as_str().unwrap();
+    let mut region = revayat_ir::ir::new_region(
+        format!("{id}r001"),
+        [20., 20., 60., 30.],
+        "title",
+        "horizontal",
+        "manual",
+        1.,
+    )
+    .unwrap();
+    region.source_text = "Hello".into();
+    region.target_text = "سلام".into();
+    doc["pages"][0]["regions"] = json!([region]);
+    put_document(&fixture, &doc);
+    success(&fixture.run(&["mask", "--doc", "work/comic.json"], b""));
+    let before = fs::read(fixture.cwd.join("work/comic.json")).unwrap();
+    let doc = document(&fixture);
+    let path = fixture
+        .cwd
+        .join("work")
+        .join(doc["pages"][0]["regions"][0]["mask"].as_str().unwrap());
+    let mut mask = image::open(&path).unwrap().into_luma8();
+    mask.put_pixel(0, 0, image::Luma([255]));
+    mask.save(&path).unwrap();
+    let refused = fixture.run(&["clean", "--doc", "work/comic.json"], b"");
+    assert!(
+        !refused.status.success(),
+        "clean consumed a changed mask: {refused:?}"
+    );
+    assert_eq!(
+        fs::read(fixture.cwd.join("work/comic.json")).unwrap(),
+        before
+    );
+    success(&fixture.run(&["mask", "--doc", "work/comic.json"], b""));
+    success(&fixture.run(&["clean", "--doc", "work/comic.json"], b""));
+}
+
+#[test]
+fn publication_rejects_changed_panel_geometry_and_recovers() {
+    let fixture = Fixture::staged();
+    rendered_balloon(&fixture);
+    let export = [
+        "export",
+        "--doc",
+        "work/comic.json",
+        "--out",
+        "approved.cbz",
+    ];
+    success(&fixture.run(&export, b""));
+    let before_output = fs::read(fixture.cwd.join("approved.cbz")).unwrap();
+    let mut doc = document(&fixture);
+    doc["pages"][0]["panels"] = json!([{"id":"p0001p001","bbox":[0,0,150,300]}]);
+    put_document(&fixture, &doc);
+    let before_doc = fs::read(fixture.cwd.join("work/comic.json")).unwrap();
+    let refused = fixture.run(
+        &["qa", "check", "--strict", "--doc", "work/comic.json"],
+        b"",
+    );
+    assert!(
+        !refused.status.success(),
+        "QA accepted changed panels: {refused:?}"
+    );
+    assert!(String::from_utf8_lossy(&refused.stdout).contains("stale-stages"));
+    assert!(!fixture.run(&export, b"").status.success());
+    assert_eq!(
+        fs::read(fixture.cwd.join("approved.cbz")).unwrap(),
+        before_output
+    );
+    assert_eq!(
+        fs::read(fixture.cwd.join("work/comic.json")).unwrap(),
+        before_doc
+    );
+    for stage in ["mask", "clean", "typeset"] {
+        success(&fixture.run(&[stage, "--doc", "work/comic.json"], b""));
+    }
+    success(&fixture.run(
+        &["qa", "check", "--strict", "--doc", "work/comic.json"],
+        b"",
+    ));
+    success(&fixture.run(&export, b""));
+}
+
+fn assert_free_ink_pipeline(contrasts: &[(u8, u8)], state_only: bool) {
+    use image::{Luma, Rgb, RgbImage};
+    for &(paper, ink) in contrasts {
+        let fixture = Fixture::staged();
+        fs::create_dir(fixture.cwd.join("source")).unwrap();
+        let mut original = RgbImage::from_pixel(100, 80, Rgb([paper; 3]));
+        for y in 35..42 {
+            for x in 40..46 {
+                original.put_pixel(x, y, Rgb([ink; 3]));
+            }
+        }
+        original.save(fixture.cwd.join("source/page.png")).unwrap();
+        success(&fixture.run(&["import", "source", "--out", "work"], b""));
+        let mut doc = document(&fixture);
+        let mut region = revayat_ir::ir::new_region(
+            "p0001r001",
+            [35., 30., 20., 20.],
+            "title",
+            "horizontal",
+            "manual",
+            1.,
+        )
+        .unwrap();
+        if state_only {
+            region.state = Some(revayat_ir::RegionState::Erased);
+        } else {
+            region.erase = true;
+        }
+        region.locked = true;
+        region.extra.insert(
+            "polarity".into(),
+            json!(if ink > paper { "dark" } else { "light" }),
+        );
+        doc["pages"][0]["regions"] = json!([region]);
+        put_document(&fixture, &doc);
+        for stage in ["mask", "clean"] {
+            success(&fixture.run(&[stage, "--doc", "work/comic.json"], b""));
+        }
+        let doc = document(&fixture);
+        let root = fixture.cwd.join("work");
+        let clean = image::open(root.join(doc["pages"][0]["clean"].as_str().unwrap()))
+            .unwrap()
+            .into_rgb8();
+        let mask = image::open(root.join(doc["pages"][0]["clean_mask"].as_str().unwrap()))
+            .unwrap()
+            .into_luma8();
+        assert_eq!(mask.get_pixel(42, 38), &Luma([255]));
+        assert_eq!(clean.get_pixel(42, 38), &Rgb([paper; 3]));
+        for (x, y, pixel) in original.enumerate_pixels() {
+            if mask.get_pixel(x, y)[0] == 0 {
+                assert_eq!(clean.get_pixel(x, y), pixel);
+            }
+        }
+        success(&fixture.run(
+            &["qa", "check", "--strict", "--doc", "work/comic.json"],
+            b"",
+        ));
+        success(&fixture.run(
+            &["export", "--doc", "work/comic.json", "--out", "erased.cbz"],
+            b"",
+        ));
+    }
+}
+
+#[test]
+fn free_ink_contrasts_survive_the_public_mask_clean_export_pipeline() {
+    assert_free_ink_pipeline(&[(245, 200), (160, 20), (10, 55), (95, 235)], false);
+}
+
+#[test]
+fn state_only_erasure_runs_the_public_mask_clean_export_pipeline() {
+    assert_free_ink_pipeline(&[(245, 20)], true);
+}
+
+#[test]
+fn source_filenames_with_digest_like_suffixes_are_not_derived_proofs() {
+    let fixture = Fixture::staged();
+    let mut doc = import_blank_pages(&fixture, 1);
+    let root = fixture.cwd.join("work");
+    let name = format!("images/source-{}.png", "0".repeat(64));
+    fs::create_dir_all(root.join("images")).unwrap();
+    fs::copy(
+        root.join(doc["pages"][0]["image"].as_str().unwrap()),
+        root.join(&name),
+    )
+    .unwrap();
+    doc["pages"][0]["image"] = json!(name);
+    put_document(&fixture, &doc);
+    for stage in ["mask", "clean", "typeset"] {
+        success(&fixture.run(&[stage, "--doc", "work/comic.json"], b""));
+    }
+    success(&fixture.run(
+        &["qa", "check", "--strict", "--doc", "work/comic.json"],
+        b"",
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn typesetting_validates_the_named_mask_before_following_an_internal_symlink() {
+    use std::os::unix::fs::symlink;
+    let fixture = Fixture::staged();
+    rendered_balloon(&fixture);
+    let doc = document(&fixture);
+    let root = fixture.cwd.join("work");
+    let path = root.join(doc["pages"][0]["clean_mask"].as_str().unwrap());
+    let mut mask = image::open(&path).unwrap().into_luma8();
+    mask.put_pixel(280, 280, image::Luma([255]));
+    let replacement = root.join("replacement.png");
+    mask.save(&replacement).unwrap();
+    let replacement_hash = revayat_ir::ir::sha256_file(&replacement).unwrap();
+    let renamed = path
+        .parent()
+        .unwrap()
+        .join(format!("replacement-{replacement_hash}.png"));
+    fs::rename(replacement, &renamed).unwrap();
+    fs::remove_file(&path).unwrap();
+    symlink(&renamed, &path).unwrap();
+    let before = fs::read(root.join("comic.json")).unwrap();
+    let refused = fixture.run(&["typeset", "--doc", "work/comic.json"], b"");
+    assert!(
+        !refused.status.success(),
+        "typeset accepted a substituted proof: {refused:?}"
+    );
+    assert_eq!(fs::read(root.join("comic.json")).unwrap(), before);
 }

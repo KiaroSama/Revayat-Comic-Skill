@@ -325,7 +325,9 @@ fn resolve_balloon_paper(
             dark,
         };
         let paper = seeded_interior(candidate, Some(clip), &luma)?;
-        if inset_balloon(&paper, 1)?.pixels.iter().any(|&p| p != 0) {
+        if resolved_paper_bounds(&paper, seed, clip).is_some()
+            && inset_balloon(&paper, 1)?.pixels.iter().any(|&p| p != 0)
+        {
             return Ok(Some((candidate, paper)));
         }
         used = Some(bounds);
@@ -345,24 +347,9 @@ fn resolve_balloon_paper(
             dark,
         };
         let inside = seeded_interior(probe, Some(clip), &luma)?;
-        let Some(tight) = mask_bounds(&inside.pixels) else {
+        let Some(tight) = resolved_paper_bounds(&inside, seed, clip) else {
             continue;
         };
-        let tight = Rect([
-            tight.x() + bounds.x(),
-            tight.y() + bounds.y(),
-            tight.width(),
-            tight.height(),
-        ]);
-        let area = inside.pixels.pixels().filter(|p| p[0] != 0).count() as u64;
-        if tight.width().min(tight.height()) < 8
-            || area * 10 > clip.area() * 8
-            || !tight
-                .intersection(seed)
-                .is_some_and(|intersection| intersection.area() * 3 >= seed.area())
-        {
-            continue;
-        }
         let bounds = tight
             .expand(2, size.0, size.1)
             .intersection(clip)
@@ -388,6 +375,23 @@ fn resolve_balloon_paper(
         )));
     }
     Ok(None)
+}
+
+fn resolved_paper_bounds(paper: &RegionMask, seed: Rect, clip: Rect) -> Option<Rect> {
+    let tight = mask_bounds(&paper.pixels)?;
+    let tight = Rect([
+        tight.x() + paper.bounds.x(),
+        tight.y() + paper.bounds.y(),
+        tight.width(),
+        tight.height(),
+    ]);
+    let area = paper.pixels.iter().filter(|&&p| p != 0).count() as u64;
+    (tight.width().min(tight.height()) >= 8
+        && area * 10 <= clip.area() * 8
+        && tight
+            .intersection(seed)
+            .is_some_and(|overlap| overlap.area() * 3 >= seed.area()))
+    .then_some(tight)
 }
 
 pub fn balloon_geometry(page: &RgbImage, balloon: Balloon) -> Result<serde_json::Value> {
@@ -541,7 +545,7 @@ fn region_mask_from_luma(
     let threshold = if allowed.is_some() {
         175
     } else {
-        imageproc::contrast::otsu_level(&oriented).min(179)
+        imageproc::contrast::otsu_level(&oriented).min(210)
     };
     let radius = (options.grow * side as f32).round().max(1.0) as u32;
     let pixels = if allowed.is_some() {
@@ -564,7 +568,8 @@ fn region_mask_from_luma(
             }])
         })
     } else {
-        let ink = free_ink(&oriented, b, bounds, threshold);
+        let guard = free_ink_guard(&oriented, threshold);
+        let ink = free_ink(&oriented, b, bounds, threshold, guard);
         let mut pixels = maskcore_rs::dilate_l2(
             Some(ink.as_raw()),
             i128::from(b.width()),
@@ -573,7 +578,7 @@ fn region_mask_from_luma(
         )
         .map_err(VisionError::kernel)?;
         for ((p, &luma), &is_ink) in pixels.iter_mut().zip(oriented.iter()).zip(ink.iter()) {
-            if luma < 180 && is_ink == 0 {
+            if luma <= guard && is_ink == 0 {
                 *p = 0;
             }
         }
@@ -630,12 +635,39 @@ pub fn elliptical_lettering_area(page: &RgbImage, bounds: Rect, dark: bool) -> R
     })
 }
 
-fn free_ink(oriented: &GrayImage, window: Rect, anchor: Rect, threshold: u8) -> GrayImage {
+fn free_ink_guard(oriented: &GrayImage, threshold: u8) -> u8 {
+    let mut histogram = [0usize; 256];
+    for &luma in oriented.iter() {
+        histogram[usize::from(luma)] += 1;
+    }
+    let lighter = &histogram[usize::from(threshold) + 1..];
+    let mut remaining = lighter.iter().sum::<usize>() / 2 + 1;
+    let paper = lighter.iter().enumerate().find_map(|(offset, &count)| {
+        if remaining <= count {
+            Some(threshold + 1 + offset as u8)
+        } else {
+            remaining -= count;
+            None
+        }
+    });
+    // Keep the art guard below the current paper, but include every detected ink shade.
+    threshold
+        .max(179)
+        .min(paper.unwrap_or(255).saturating_sub(1))
+}
+
+fn free_ink(
+    oriented: &GrayImage,
+    window: Rect,
+    anchor: Rect,
+    threshold: u8,
+    guard: u8,
+) -> GrayImage {
     use imageproc::region_labelling::{Connectivity, connected_components};
 
     let (w, h) = oriented.dimensions();
     let dark = GrayImage::from_fn(w, h, |x, y| {
-        Luma([if oriented.get_pixel(x, y)[0] < 180 {
+        Luma([if oriented.get_pixel(x, y)[0] <= guard {
             255
         } else {
             0
