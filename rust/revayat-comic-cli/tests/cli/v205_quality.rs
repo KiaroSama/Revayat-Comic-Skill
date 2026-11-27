@@ -189,12 +189,14 @@ fn english_source_protects_japanese_kana_sfx_from_modification_and_strict_qa_fla
 #[test]
 fn erased_balloon_with_noop_external_repair_fails_strict_qa() {
     let fixture = Fixture::new("v205_erased_noop_qa");
-    // Open white balloon touching the panel border with a large dark ink block whose
-    // 1px paper channel connects to the balloon interior while dilating to a solid mask.
+    // Open white balloon touching the panel border with a connected comb of dark bars:
+    // >55% of bbox is connected white paper (so resolve_balloon succeeds), yet every pixel
+    // in the padded cleanup window is <=1px from ink (so dilation produces a 100% solid mask
+    // that requires --external-dir) and the 36x36 connected glyph exceeds sweep_speckles.
     let page = RgbImage::from_fn(160, 140, |x, y| {
         let paper = (20..100).contains(&x) && (20..120).contains(&y);
-        let channel = y == 61 && (39..52).contains(&x);
-        let glyph = (40..64).contains(&x) && (50..74).contains(&y) && !channel;
+        let in_box = (34..70).contains(&x) && (42..78).contains(&y);
+        let glyph = in_box && (x % 3 == 0 || (58..62).contains(&y));
         Rgb([if paper && !glyph { 245 } else { 20 }; 3])
     });
     import_one(&fixture, &page);
@@ -204,8 +206,9 @@ fn erased_balloon_with_noop_external_repair_fails_strict_qa() {
         {
             "id": "p0001_r001",
             "kind": "speech",
-            "bbox": [44, 54, 16, 16],
+            "bbox": [40, 48, 24, 24],
             "source_text": "NOISE",
+            "polarity": "light",
             "erase": true,
             "locked": true
         }
@@ -227,6 +230,8 @@ fn erased_balloon_with_noop_external_repair_fails_strict_qa() {
         ],
         b"",
     ));
+    let doc = read_doc(&fixture);
+    assert_eq!(doc["pages"][0]["regions"][0]["fill"], "external");
 
     let qa_out = fixture.run(&["qa", "check", "--doc", DOC, "--strict"], b"");
     assert!(
