@@ -41,6 +41,44 @@ pub struct Diff {
     pub worst_delta: u8,
 }
 
+/// WCAG 2.1 relative luminance for an sRGB triple.
+fn srgb_luminance(rgb: [u8; 3]) -> f64 {
+    let linear = |c: u8| {
+        let s = f64::from(c) / 255.0;
+        if s <= 0.03928 {
+            s / 12.92
+        } else {
+            ((s + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * linear(rgb[0]) + 0.7152 * linear(rgb[1]) + 0.0722 * linear(rgb[2])
+}
+
+/// WCAG 2.1 contrast ratio between two sRGB triples.
+pub fn rgb_contrast(a: [u8; 3], b: [u8; 3]) -> f64 {
+    let (la, lb) = (srgb_luminance(a), srgb_luminance(b));
+    let (hi, lo) = if la >= lb { (la, lb) } else { (lb, la) };
+    (hi + 0.05) / (lo + 0.05)
+}
+
+/// Internal p5-vs-p95 WCAG contrast inside a solid external patch that includes both art and lettering.
+fn patch_internal_contrast(after: &RgbImage, changed: &GrayImage) -> f64 {
+    let mut lumas: Vec<f64> = after
+        .pixels()
+        .zip(changed.pixels())
+        .filter(|(_, m)| m[0] != 0)
+        .map(|(p, _)| srgb_luminance(p.0))
+        .collect();
+    if lumas.len() < 4 {
+        return 0.0;
+    }
+    lumas.sort_by(f64::total_cmp);
+    let idx = lumas.len() / 100;
+    let lo = lumas[idx];
+    let hi = lumas[lumas.len() - 1 - idx];
+    (hi + 0.05) / (lo + 0.05)
+}
+
 pub fn compare_outside_mask(
     original: &RgbImage,
     edited: &RgbImage,
@@ -300,7 +338,11 @@ pub fn run_strict_qa_with_reviews(
             3,
         )
         .map_err(VisionError::kernel)?;
-        if contrast.first().is_none_or(|&x| x < 3.0) {
+        let mut has_contrast = contrast.first().is_some_and(|&x| x >= 3.0);
+        if !has_contrast && region.font_size.is_none() && region.balloon.is_none() {
+            has_contrast = patch_internal_contrast(&after, &changed) >= 3.0;
+        }
+        if !has_contrast {
             report.add(
                 "low-contrast",
                 Some(region.id),

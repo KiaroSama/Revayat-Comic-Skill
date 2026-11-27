@@ -52,15 +52,16 @@ fn solid_external_on_art_patch_transfers_strokes_outside_source_glyphs_without_s
     success(&fixture.run(&["mask", "--doc", DOC], b""));
     success(&fixture.run(&["clean", "--doc", DOC, "--bubbles-only"], b""));
 
-    // External edited page paints new Persian strokes OUTSIDE the old 95..105 glyph box (at x=76..86).
+    // External edited page has subtle JPEG-like shading shift across the solid patch AND paints
+    // new Persian strokes OUTSIDE the old 95..105 glyph box (at x=74..88).
     let mut ext = page.clone();
-    for y in 70..110 {
-        for x in 70..150 {
-            ext.put_pixel(x, y, Rgb([180, 175, 190]));
+    for y in 64..116 {
+        for x in 64..156 {
+            ext.put_pixel(x, y, Rgb([192, 187, 202]));
         }
     }
-    for y in 82..96 {
-        for x in 76..86 {
+    for y in 80..98 {
+        for x in 74..88 {
             ext.put_pixel(x, y, Rgb([10, 10, 10]));
         }
     }
@@ -82,8 +83,75 @@ fn solid_external_on_art_patch_transfers_strokes_outside_source_glyphs_without_s
     .unwrap()
     .into_rgb8();
     // Both the erased English spot (100, 88) and the newly placed Persian stroke (80, 88) must come from ext.
-    assert_eq!(rendered.get_pixel(100, 88), &Rgb([180, 175, 190]));
+    assert_eq!(rendered.get_pixel(100, 88), &Rgb([192, 187, 202]));
     assert_eq!(rendered.get_pixel(80, 88), &Rgb([10, 10, 10]));
+    let qa = success_json(&fixture.run(&["qa", "check", "--doc", DOC, "--strict"], b""));
+    assert_eq!(
+        qa["ok"], true,
+        "solid external patch must pass strict QA: {qa}"
+    );
+}
+
+#[test]
+fn flat_colored_caption_and_untouched_external_page_region_render_deterministically() {
+    let fixture = Fixture::new("v206_flat_color_and_fallback");
+    // Top half: flat mauve TOC-style backing (contrast with white >= 3.3:1).
+    // Bottom half: white paper with an untouched caption on a page that also has --external-dir.
+    let page = RgbImage::from_fn(260, 220, |x, y| {
+        if y < 110 {
+            let old_text = (90..150).contains(&x) && (45..60).contains(&y);
+            if old_text {
+                Rgb([255, 255, 255])
+            } else {
+                Rgb([156, 128, 155])
+            }
+        } else {
+            let old_sfx = (90..140).contains(&x) && (155..170).contains(&y);
+            Rgb([if old_sfx { 20 } else { 245 }; 3])
+        }
+    });
+    import_one(&fixture, &page);
+    let mut doc = read_doc(&fixture);
+    doc["pages"][0]["regions"] = json!([
+        {
+            "id": "p0001_r001",
+            "kind": "caption",
+            "polarity": "dark",
+            "bbox": [30, 20, 200, 75],
+            "source_text": "CONTENTS",
+            "target_text": "فهرست",
+            "locked": true
+        },
+        {
+            "id": "p0001_r002",
+            "kind": "caption",
+            "polarity": "light",
+            "bbox": [40, 130, 180, 70],
+            "source_text": "PHEW...",
+            "target_text": "آخیش…",
+            "locked": true
+        }
+    ]);
+    write_doc(&fixture, &doc);
+    success(&fixture.run(&["mask", "--doc", DOC], b""));
+    // Sparse external dir without p0001.png must not fail clean; unchanged p0001.png in typeset
+    // must fall through to deterministic Vazir (including flat-colored mauve captions).
+    fs::create_dir(fixture.cwd.join("ext_sparse")).unwrap();
+    success(&fixture.run(
+        &["clean", "--doc", DOC, "--external-dir", "ext_sparse"],
+        b"",
+    ));
+    fs::create_dir(fixture.cwd.join("ext")).unwrap();
+    page.save(fixture.cwd.join("ext/p0001.png")).unwrap();
+    success(&fixture.run(&["typeset", "--doc", DOC, "--external-dir", "ext"], b""));
+    let doc = read_doc(&fixture);
+    assert_eq!(doc["pages"][0]["regions"][0]["typeset"]["status"], "fit");
+    assert_eq!(doc["pages"][0]["regions"][1]["typeset"]["status"], "fit");
+    let qa = success_json(&fixture.run(&["qa", "check", "--doc", DOC, "--strict"], b""));
+    assert_eq!(
+        qa["ok"], true,
+        "flat colored caption + fallback must pass strict QA: {qa}"
+    );
 }
 
 #[test]

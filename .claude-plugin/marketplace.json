@@ -15,7 +15,7 @@
       "name": "revayat-comic",
       "source": "./",
       "description": "Pure-Rust (1.100.0) manga, manhwa, manhua and Western comic translator to Persian: 6-stage multi-agent workflow, cropped on-art image editing, bundled Vazir RTL typesetting, pure-Rust PDF/CBZ/CBR/DOCX, bundled Humanizer 4.0.0 & Persian voice guides, and provably untouched artwork.",
-      "version": "2.0.5",
+      "version": "2.0.6",
       "author": {
         "name": "Kiaro Sama",
         "email": "Kiaro.Sama.Dev@gmail.com",

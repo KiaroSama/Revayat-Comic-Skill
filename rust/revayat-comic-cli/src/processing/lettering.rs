@@ -95,8 +95,9 @@ pub fn clean(path: &Path, bubbles_only: bool, external: Option<&Path>) -> Result
             images::validate_preservation_image(&native).map_err(failed)?;
             let image = native.to_rgb8();
             let external = external
-                .map(|directory| image_at(directory, page))
-                .transpose()?;
+                .map(|directory| external_page(directory, page))
+                .transpose()?
+                .flatten();
             let mut balloons = Vec::new();
             let mut balloon_regions = Vec::new();
             let panels = page_panels(page)?;
@@ -245,7 +246,8 @@ pub fn typeset(path: &Path, external: Option<&Path>) -> Result<Value> {
             let mut balloon_rects = Vec::new();
             for region in &page.regions {
                 if let Some(b) = resolve_balloon(&source, region, &panels, &neighbors, None)? {
-                    balloon_rects.push(b.bounds);
+                    let (_, open) = masks::balloon_paper(&source, b).map_err(failed)?;
+                    balloon_rects.push(if open { b.text_bounds } else { b.bounds });
                 }
             }
             for region in &mut page.regions {
@@ -291,31 +293,25 @@ pub fn typeset(path: &Path, external: Option<&Path>) -> Result<Value> {
                                 ext_img.get_pixel(patch.bounds.x() + x, patch.bounds.y() + y),
                             )
                     });
-                    if !changed {
-                        region.typeset.insert("status".into(), json!("unreliable"));
+                    if changed {
+                        let effective_box = Rect([
+                            patch.bounds.x() + tight.x(),
+                            patch.bounds.y() + tight.y(),
+                            tight.width(),
+                            tight.height(),
+                        ]);
+                        patch.apply_to(&mut external_mask).map_err(failed)?;
+                        patch.apply_to(&mut allowed).map_err(failed)?;
+                        region.typeset.insert("status".into(), json!("external"));
+                        region
+                            .typeset
+                            .insert("ink_box".into(), json!(effective_box));
                         region.typeset.insert(
-                            "reason".into(),
-                            json!("external patch unchanged from source"),
+                            "mask_sha256".into(),
+                            json!(ir::sha256_bytes(patch.pixels.as_raw())),
                         );
                         continue;
                     }
-                    let effective_box = Rect([
-                        patch.bounds.x() + tight.x(),
-                        patch.bounds.y() + tight.y(),
-                        tight.width(),
-                        tight.height(),
-                    ]);
-                    patch.apply_to(&mut external_mask).map_err(failed)?;
-                    patch.apply_to(&mut allowed).map_err(failed)?;
-                    region.typeset.insert("status".into(), json!("external"));
-                    region
-                        .typeset
-                        .insert("ink_box".into(), json!(effective_box));
-                    region.typeset.insert(
-                        "mask_sha256".into(),
-                        json!(ir::sha256_bytes(patch.pixels.as_raw())),
-                    );
-                    continue;
                 }
                 let mut entry =
                     typeset::TextRegion::new(&region.id, bounds(region)?, &region.target_text);
@@ -353,6 +349,20 @@ pub fn typeset(path: &Path, external: Option<&Path>) -> Result<Value> {
                     let mut interior =
                         masks::elliptical_lettering_area(&cleaned, area, dark(region))
                             .map_err(failed)?;
+                    if !interior.pixels.iter().any(|&p| p != 0) && region.kind == "caption" {
+                        let flat = clean::compact_lettering_area(&cleaned, area).map_err(failed)?;
+                        let covered = flat.pixels.iter().filter(|&&p| p != 0).count();
+                        let total = (area.width() as usize) * (area.height() as usize);
+                        let ink = if dark(region) { [255u8; 3] } else { [0u8; 3] };
+                        let [cx, cy] = area.center();
+                        let backing = cleaned.get_pixel(cx, cy).0;
+                        if total > 0
+                            && covered * 10 >= total * 7
+                            && qa::rgb_contrast(backing, ink) >= 3.0
+                        {
+                            interior = flat;
+                        }
+                    }
                     interior.exclude(&excluded);
                     if !interior.pixels.iter().any(|&p| p != 0) {
                         region.typeset.insert("status".into(), json!("unreliable"));
