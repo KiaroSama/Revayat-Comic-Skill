@@ -1,6 +1,9 @@
 use crate::{
     Rect, Result, VisionError, gray,
-    masks::{Balloon, RegionMask, balloon_interior},
+    masks::{
+        Balloon, RegionMask, balloon_interior, balloon_paper, inset_balloon,
+        open_balloon_cleanup_window,
+    },
     same_geometry,
 };
 use image::{RgbImage, imageops};
@@ -69,13 +72,33 @@ pub fn balloon_text_interior(original: &RgbImage, b: Balloon) -> Result<RegionMa
     balloon_interior(original, b, crate::masks::text_inset(b.bounds))
 }
 
+/// Check open-balloon cleanup only where its source text could authorize cleaning.
+pub fn balloon_cleanup_interior(original: &RgbImage, b: Balloon) -> Result<RegionMask> {
+    let (paper, open) = balloon_paper(original, b)?;
+    let inset = if open {
+        2
+    } else {
+        crate::masks::text_inset(b.bounds)
+    };
+    let mut safe = inset_balloon(&paper, inset)?;
+    if open {
+        let window = open_balloon_cleanup_window(b, original.dimensions());
+        for (x, y, pixel) in safe.pixels.enumerate_pixels_mut() {
+            if !window.contains(safe.bounds.x() + x, safe.bounds.y() + y) {
+                pixel[0] = 0;
+            }
+        }
+    }
+    Ok(safe)
+}
+
 pub fn full_balloon_surviving_ink(
     original: &RgbImage,
     cleaned: &RgbImage,
     b: Balloon,
 ) -> Result<u64> {
     same_geometry(original.dimensions(), cleaned.dimensions())?;
-    let safe = balloon_text_interior(original, b)?;
+    let safe = balloon_cleanup_interior(original, b)?;
     let r = safe.bounds;
     let crop = imageops::crop_imm(cleaned, r.x(), r.y(), r.width(), r.height()).to_image();
     let gray = gray(&crop, b.dark);
@@ -86,7 +109,7 @@ pub fn full_balloon_surviving_ink(
     let (sum, count) = paper.fold((0, 0), |(s, n), v| (s + v, n + 1));
     if count == 0 {
         return Err(VisionError::invalid(
-            "no enclosed balloon paper available for residual ink QA",
+            "no safe balloon paper available for residual ink QA",
         ));
     }
     let counts = qacore_rs::port::detect_residual_ink(

@@ -9,6 +9,9 @@ mod recheck;
 #[path = "cli/state_actions.rs"]
 mod state_actions;
 
+#[path = "cli/recheck27.rs"]
+mod recheck27;
+
 use std::{
     fs::{self, File},
     path::PathBuf,
