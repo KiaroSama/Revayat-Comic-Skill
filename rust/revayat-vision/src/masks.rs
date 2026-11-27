@@ -124,7 +124,7 @@ pub fn balloon_interior(page: &RgbImage, balloon: Balloon, inset: u32) -> Result
     inset_balloon(&paper, inset)
 }
 
-pub(crate) fn balloon_paper(page: &RgbImage, balloon: Balloon) -> Result<(RegionMask, bool)> {
+pub fn balloon_paper(page: &RgbImage, balloon: Balloon) -> Result<(RegionMask, bool)> {
     balloon.bounds.checked(page.dimensions())?;
     balloon.text_bounds.checked(page.dimensions())?;
     seeded_interior(balloon, None, |x, y| luminance(page.get_pixel(x, y)))
