@@ -195,7 +195,7 @@ fn erased_balloon_with_noop_external_repair_fails_strict_qa() {
     // that requires --external-dir) and the 36x36 connected glyph exceeds sweep_speckles.
     let page = RgbImage::from_fn(160, 140, |x, y| {
         let paper = (20..100).contains(&x) && (20..120).contains(&y);
-        let in_box = (34..70).contains(&x) && (42..78).contains(&y);
+        let in_box = (33..71).contains(&x) && (41..79).contains(&y);
         let glyph = in_box && (x % 3 == 0 || (58..62).contains(&y));
         Rgb([if paper && !glyph { 245 } else { 20 }; 3])
     });
