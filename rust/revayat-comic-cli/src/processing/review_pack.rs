@@ -27,9 +27,9 @@ pub fn review_pack(doc_path: &Path, opts: ReviewPackOptions) -> Result<Value> {
         vec!["page_id\tregion_id\tstage\tverdict\tdefect_codes\tnotes".to_owned()];
 
     for page in &document.pages {
-        let source = original(root, page)?;
+        let source = original(&root, page)?;
         let final_img = if let Some(path) = page.rendered.as_deref().or(page.cleaned.as_deref()) {
-            images::load_image(&asset(root, path)?, MAX_PAGE_PIXELS)
+            images::load_image(&asset(&root, path)?, MAX_PAGE_PIXELS)
                 .map_err(failed)?
                 .into_rgb8()
         } else {

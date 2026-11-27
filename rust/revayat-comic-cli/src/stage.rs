@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 use revayat_io::{
     export::{self, ExportOptions},
     inputs::{ImportOptions, MAX_PAGE_PIXELS},

@@ -1,4 +1,4 @@
-use super::lettering::{excluded_balloon_regions, protected_japanese, read_mask, reading_clean};
+use super::lettering::{excluded_balloon_regions, protected_japanese, read_mask};
 use super::*;
 use revayat_vision::qa;
 
