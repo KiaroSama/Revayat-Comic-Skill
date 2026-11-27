@@ -69,6 +69,7 @@ pub fn style_flags(value: &str) -> Result<TextStyle> {
     let has = |t| normalized.split(',').any(|s| s.trim() == t);
     Ok(TextStyle {
         bold: has("bold") || has("bold-italic"),
+        medium: false,
         italic: has("italic") || has("bold-italic"),
         outline: has("outline"),
         shadow: has("shadow"),

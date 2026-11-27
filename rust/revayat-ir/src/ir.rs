@@ -520,7 +520,7 @@ pub fn foreign_script_guard(
 }
 
 pub fn is_rtl_language(language: Option<&str>) -> bool {
-    language.map_or(true, |lang| {
+    language.is_none_or(|lang| {
         matches!(
             lang.trim().to_ascii_lowercase().as_str(),
             "" | "fa" | "fas" | "per" | "persian" | "ar" | "ara" | "arabic" | "he" | "ur"

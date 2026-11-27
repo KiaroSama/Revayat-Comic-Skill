@@ -14,7 +14,7 @@ pub(crate) fn masked_otsu_threshold(
     histogram_otsu_threshold(&histogram)
 }
 
-pub(crate) fn histogram_otsu_threshold(histogram: &[u64; 256]) -> u8 {
+fn histogram_otsu_threshold(histogram: &[u64; 256]) -> u8 {
     let total: u64 = histogram.iter().sum();
     let sum: f64 = histogram
         .iter()
