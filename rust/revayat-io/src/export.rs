@@ -4,7 +4,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use revayat_ir::{certify, ir, journal, stages, workspace};
+use revayat_ir::{
+    PageRecord, certify, ir, journal,
+    regions::{self, Artifact, RegionState},
+    stages, workspace,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -110,96 +114,66 @@ pub struct ExportReport {
     pub unrendered_pages: Vec<String>,
 }
 
-pub(crate) fn wants_translation(region: &Value, policy: &str) -> bool {
-    !["dropped", "erase", "keep"]
-        .into_iter()
-        .any(|key| region[key].as_bool() == Some(true))
-        && (region["kind"].as_str() != Some("sfx") || policy != "keep")
-}
-
-pub(crate) fn has_text(value: &Value) -> bool {
-    value.as_str().is_some_and(|s| !s.trim().is_empty())
-}
-
 fn read_page(
     root: &Path,
-    page: &Value,
+    page: &PageRecord,
     policy: &str,
     draft: bool,
 ) -> Result<(ExportPage, bool), IoError> {
-    let id = page["id"]
-        .as_str()
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| invalid("Page is missing an ID"))?;
-    let image = page["image"]
-        .as_str()
-        .or_else(|| page["source_path"].as_str())
-        .ok_or_else(|| invalid("Page is missing its immutable source"))?;
-    let original = workspace_asset(root, Path::new(image))?;
-    let asserted = page["sha256"]
-        .as_str()
-        .ok_or_else(|| invalid("Page is missing its source SHA-256"))?;
-    if file_digest(&original)? != asserted {
+    let id = &page.id;
+    if id.is_empty() {
+        return Err(invalid("Page is missing an ID"));
+    }
+    if page.image.is_empty() {
+        return Err(invalid("Page is missing its immutable source"));
+    }
+    let original = workspace_asset(root, Path::new(&page.image))?;
+    if file_digest(&original)? != page.sha256 {
         return Err(invalid(format!("Immutable source changed for {id}")));
     }
-    let regions = page["regions"]
-        .as_array()
-        .ok_or_else(|| invalid("Page is missing its region list"))?;
-    let final_needed = regions
-        .iter()
-        .any(|r| wants_translation(r, policy) && has_text(&r["target_text"]));
-    let clean_needed = regions.iter().any(|r| r["erase"].as_bool() == Some(true));
-    let reviewed = regions.iter().all(|r| {
-        !wants_translation(r, policy)
-            || (has_text(&r["target_text"])
-                && !matches!(
-                    r["typeset"]["status"].as_str(),
-                    Some("overflow" | "unreliable")
-                ))
-    });
-    let final_path = page["final"]
-        .as_str()
-        .or_else(|| page["final_path"].as_str());
-    let clean_path = page["clean"]
-        .as_str()
-        .or_else(|| page["clean_path"].as_str());
-    let pending = (final_needed && final_path.is_none())
-        || (clean_needed && clean_path.is_none() && final_path.is_none())
-        || !reviewed;
-    if pending && !draft {
-        return Err(invalid(format!(
-            "{id} does not pass publication preflight; finish its edits or export a draft"
-        )));
+    let mut reviewed = true;
+    for region in &page.regions {
+        reviewed &= regions::region_state(region, policy)? != RegionState::Pending;
     }
     let mut source = original;
-    for path in final_path.into_iter().chain(clean_path) {
+    let mut shipped = Artifact::Original;
+    for (artifact, path) in [
+        (Artifact::Rendered, page.rendered.as_deref()),
+        (Artifact::Cleaned, page.cleaned.as_deref()),
+    ]
+    .into_iter()
+    .filter_map(|(artifact, path)| path.map(|path| (artifact, path)))
+    {
         match workspace_asset(root, Path::new(path)) {
             Ok(path) => {
                 source = path;
+                shipped = artifact;
                 break;
             }
             Err(IoError::File(e)) if draft && e.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(error),
         }
     }
-    let dimension = |key: &str| {
-        page[key]
-            .as_u64()
-            .and_then(|n| u32::try_from(n).ok())
-            .filter(|n| *n > 0)
-            .ok_or_else(|| invalid("Invalid page pixel dimensions"))
-    };
-    let paper = if page.get("pdf_points").is_some() {
-        Some(pdf_points(page)?)
-    } else {
-        None
-    };
+    let pending = shipped < regions::required_artifact(page, policy) || !reviewed;
+    if pending && !draft {
+        return Err(invalid(format!(
+            "{id} does not pass publication preflight; finish its edits or export a draft"
+        )));
+    }
+    if page.width == 0 || page.height == 0 {
+        return Err(invalid("Invalid page pixel dimensions"));
+    }
+    let paper = page
+        .extra
+        .get("pdf_points")
+        .map(|points| pdf_points(&json!({"pdf_points": points})))
+        .transpose()?;
     Ok((
         ExportPage {
             source,
             id: Some(id.into()),
             paper,
-            expected_size: Some([dimension("width")?, dimension("height")?]),
+            expected_size: Some([page.width, page.height]),
         },
         pending,
     ))
@@ -318,9 +292,12 @@ pub fn export_document_with_preflight(
     let entries = doc["pages"]
         .as_array()
         .ok_or_else(|| invalid("Chapter is missing its page list"))?;
-    for (index, page) in entries.iter().enumerate() {
-        if page["index"].as_u64() != Some(index as u64) {
+    for (index, (raw_page, page)) in entries.iter().zip(&typed.pages).enumerate() {
+        if raw_page["index"].as_u64() != Some(index as u64) {
             return Err(invalid("Chapter page indices are not ordered"));
+        }
+        if !raw_page["regions"].is_array() {
+            return Err(invalid("Page is missing its region list"));
         }
         let (page, pending) = read_page(root, page, policy, resolved.draft)?;
         if pending && let Some(id) = &page.id {

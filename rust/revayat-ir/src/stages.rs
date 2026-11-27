@@ -134,6 +134,14 @@ pub fn facet_revision(page: &PageRecord, facet: &str) -> Result<String, IrError>
         "page" => {}
         "geometry" => data.push_str(&ir::page_fingerprint(page)),
         "render" | "text" => {
+            if facet == "render" && !page.panels.is_empty() {
+                let panels: Vec<_> = page
+                    .panels
+                    .iter()
+                    .map(|panel| panel.get("bbox").unwrap_or(panel))
+                    .collect();
+                let _ = write!(data, "panels:{}|", sorted_json(&json!(panels))?);
+            }
             for region in &page.regions {
                 data.push_str(&if facet == "render" {
                     region_render(region)?

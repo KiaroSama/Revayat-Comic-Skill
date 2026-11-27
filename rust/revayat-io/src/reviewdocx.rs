@@ -4,6 +4,10 @@ use quick_xml::{
     Writer,
     events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event},
 };
+use revayat_ir::{
+    RegionRecord, ir,
+    regions::{self, RegionState},
+};
 use serde::Serialize;
 use serde_json::Value;
 use unicode_bidi::{BidiClass, bidi_class};
@@ -11,7 +15,6 @@ use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
 use crate::{
     IoError,
-    export::{has_text, wants_translation},
     fsutil::{atomic_file, canonical_destination, digest, parent, read_file},
     geometry::pdf_points,
     inputs::MAX_PAGES,
@@ -263,12 +266,7 @@ impl Review {
         let id = self.id(&region["id"])?;
         let kind = region["kind"]
             .as_str()
-            .filter(|s| {
-                matches!(
-                    *s,
-                    "speech" | "thought" | "narration" | "sfx" | "sign" | "unknown"
-                )
-            })
+            .filter(|s| ir::REGION_KINDS.contains(s))
             .ok_or_else(|| invalid("Invalid review region kind"))?;
         for key in ["dropped", "erase", "keep", "locked"] {
             if region.get(key).is_some() && !region[key].is_boolean() {
@@ -280,19 +278,16 @@ impl Review {
         }
         text(&region["typeset"]["status"])?;
         text(&region["fill"])?;
+        let record = decision_record(region)?;
         self.paragraph(&format!("Region {id}"), Some("Heading2"), Some(false))?;
         self.paragraph(
-            &format!("Kind: {kind}; state: {}", state(region, policy)),
+            &format!("Kind: {kind}; state: {}", state(&record, region, policy)?),
             None,
             Some(false),
         )?;
         self.field("Speaker", text(&region["speaker"])?, false)?;
-        self.field(
-            "Source",
-            text(region.get("source_text").unwrap_or(&region["source"]))?,
-            false,
-        )?;
-        let target = text(region.get("target_text").unwrap_or(&region["target"]))?;
+        self.field("Source", &record.source_text, false)?;
+        let target = &record.target_text;
         self.field("Displayed Persian", target, true)?;
         if target.is_empty() {
             self.paragraph("No displayed Persian recorded.", None, Some(false))?;
@@ -318,33 +313,71 @@ impl Review {
     }
 }
 
-fn state(region: &Value, policy: &str) -> &'static str {
-    if region["dropped"].as_bool() == Some(true) {
-        "dropped_false_detection"
-    } else if region["erase"].as_bool() == Some(true) {
-        if matches!(region["fill"].as_str(), None | Some("none" | "keep")) {
-            "needs_review"
-        } else {
-            "erased"
+fn decision_record(region: &Value) -> Result<RegionRecord, IoError> {
+    // A review snapshot can omit geometry and carry free-form notes. Decode its
+    // decision and text fields through the same aliases as a full IR record.
+    let mut fields = region
+        .as_object()
+        .cloned()
+        .ok_or_else(|| invalid("Review regions must be objects"))?;
+    fields.retain(|key, _| {
+        matches!(
+            key.as_str(),
+            "id" | "kind"
+                | "state"
+                | "dropped"
+                | "keep"
+                | "erase"
+                | "fill"
+                | "typeset"
+                | "source_text"
+                | "ocr_text"
+                | "target_text"
+                | "fa_text"
+        )
+    });
+    for (canonical, alias, legacy) in [
+        ("source_text", "ocr_text", "source"),
+        ("target_text", "fa_text", "target"),
+    ] {
+        if !fields.contains_key(canonical)
+            && !fields.contains_key(alias)
+            && let Some(value) = region.get(legacy)
+        {
+            fields.insert(canonical.into(), value.clone());
         }
-    } else if !wants_translation(region, policy) {
-        "kept_by_policy"
-    } else if matches!(
-        region["typeset"]["status"].as_str(),
-        Some("overflow" | "unreliable")
-    ) {
-        "needs_review"
-    } else if has_text(region.get("target_text").unwrap_or(&region["target"])) {
-        "translated"
-    } else if ["review", "audit"].into_iter().any(|key| {
-        region[key]
-            .as_array()
-            .is_some_and(|items| !items.is_empty())
-    }) {
-        "needs_review"
-    } else {
-        "unresolved"
     }
+    for key in ["source_text", "ocr_text", "target_text", "fa_text", "fill"] {
+        if fields.get(key).is_some_and(Value::is_null) {
+            fields.remove(key);
+        }
+    }
+    Ok(serde_json::from_value(Value::Object(fields))?)
+}
+
+fn state(record: &RegionRecord, raw: &Value, policy: &str) -> Result<&'static str, IoError> {
+    Ok(match regions::region_state(record, policy)? {
+        RegionState::Dropped => "dropped_false_detection",
+        RegionState::Kept => "kept_by_policy",
+        RegionState::Erased => "erased",
+        RegionState::Translated => "translated",
+        RegionState::Pending => {
+            if record.erase
+                || record.state == Some(RegionState::Erased)
+                || matches!(
+                    record.typeset.get("status").and_then(Value::as_str),
+                    Some("overflow" | "unreliable")
+                )
+                || ["review", "audit"]
+                    .into_iter()
+                    .any(|key| raw[key].as_array().is_some_and(|items| !items.is_empty()))
+            {
+                "needs_review"
+            } else {
+                "unresolved"
+            }
+        }
+    })
 }
 
 fn styles() -> Result<Vec<u8>, IoError> {
