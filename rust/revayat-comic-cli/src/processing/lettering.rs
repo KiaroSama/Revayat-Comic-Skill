@@ -65,7 +65,11 @@ fn clears_balloon(region: &RegionRecord, policy: &str) -> bool {
 fn excluded_balloon_regions(page: &PageRecord, policy: &str) -> Result<Vec<Rect>> {
     page.regions
         .iter()
-        .filter(|region| !clears_balloon(region, policy))
+        .filter(|region| {
+            !region.dropped
+                && region.state != Some(revayat_ir::RegionState::Dropped)
+                && !clears_balloon(region, policy)
+        })
         .map(bounds)
         .collect()
 }

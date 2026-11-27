@@ -8,8 +8,8 @@
 
 [![وضعیت گردش‌کار CI در GitHub Actions](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/ci.yml/badge.svg?branch=main)](.github/workflows/ci.yml)
 [![مجوز GPL نسخهٔ ۳ یا بالاتر](https://img.shields.io/badge/license-GPL--3.0-2563eb?style=flat-square)](LICENSE)
-[![آخرین برچسب نسخه در گیت‌هاب](https://img.shields.io/badge/version-v2.0.2-ea580c?style=flat-square)](#releases-and-tags)
-[![آخرین انتشار گیت‌هاب](https://img.shields.io/badge/release-v2.0.2-dc2626?style=flat-square)](https://github.com/KiaroSama/Revayat-Comic-Skill/releases)
+[![آخرین برچسب نسخه در گیت‌هاب](https://img.shields.io/badge/version-v2.0.3-ea580c?style=flat-square)](#releases-and-tags)
+[![آخرین انتشار گیت‌هاب](https://img.shields.io/badge/release-v2.0.3-dc2626?style=flat-square)](https://github.com/KiaroSama/Revayat-Comic-Skill/releases)
 [![آزمون‌های خودکار ورک‌اسپیس Cargo](https://img.shields.io/badge/tests-Cargo%20workspace-0d9488?style=flat-square)](#توسعه)
 [![نسخهٔ ثابت Rust 1.100.0](https://img.shields.io/badge/Rust-1.100.0-8b5cf6?style=flat-square)](rust-toolchain.toml)
 [![پلتفرم‌های پشتیبانی‌شده: لینوکس و ویندوز ۶۴ بیتی](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%28x64%20%7C%20arm64%29-0891b2?style=flat-square)](.github/workflows/ci.yml)
@@ -78,7 +78,7 @@
 
 فایل ZIP انتشار، برنامهٔ خط فرمان را در خود دارد. مهارت را از تعریف‌های افزونه در مخزن یا با [نصب‌کنندهٔ مهارت](install/README.md) نصب کنید و `revayat-comic` را در `PATH` نگه دارید.
 
-مخزن برای پنج نوع افزونه فایل تعریف نسخهٔ `2.0.2` دارد: Agent Plugins (`plugin.json` و `.agents/plugins/marketplace.json`)، Claude Code (`.claude-plugin/`)، Codex (`.codex-plugin/`)، Cursor (`.cursor-plugin/`) و Antigravity (`.antigravity-plugin/`).
+مخزن برای پنج نوع افزونه فایل تعریف نسخهٔ `2.0.3` دارد: Agent Plugins (`plugin.json` و `.agents/plugins/marketplace.json`)، Claude Code (`.claude-plugin/`)، Codex (`.codex-plugin/`)، Cursor (`.cursor-plugin/`) و Antigravity (`.antigravity-plugin/`).
 
 در Claude Code:
 

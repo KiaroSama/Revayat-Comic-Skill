@@ -6,8 +6,8 @@
 
 [![GitHub Actions CI workflow status](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/ci.yml/badge.svg?branch=main)](.github/workflows/ci.yml)
 [![GNU General Public License v3.0 or later](https://img.shields.io/badge/license-GPL--3.0-2563eb?style=flat-square)](LICENSE)
-[![Latest GitHub version tag](https://img.shields.io/badge/version-v2.0.2-ea580c?style=flat-square)](#releases-and-tags)
-[![Latest GitHub release](https://img.shields.io/badge/release-v2.0.2-dc2626?style=flat-square)](https://github.com/KiaroSama/Revayat-Comic-Skill/releases)
+[![Latest GitHub version tag](https://img.shields.io/badge/version-v2.0.3-ea580c?style=flat-square)](#releases-and-tags)
+[![Latest GitHub release](https://img.shields.io/badge/release-v2.0.3-dc2626?style=flat-square)](https://github.com/KiaroSama/Revayat-Comic-Skill/releases)
 [![Automated Cargo workspace tests](https://img.shields.io/badge/tests-Cargo%20workspace-0d9488?style=flat-square)](#development)
 [![Rust 1.100.0 pinned toolchain](https://img.shields.io/badge/Rust-1.100.0-8b5cf6?style=flat-square)](rust-toolchain.toml)
 [![Supported platforms: Linux and Windows 64-bit x64 and arm64](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%28x64%20%7C%20arm64%29-0891b2?style=flat-square)](.github/workflows/ci.yml)
@@ -70,7 +70,7 @@ Prebuilt release binaries and CI cover four 64-bit targets:
 
 The release ZIP contains the standalone CLI. Install the skill from the repository's plugin manifests or with the [skill installer](install/README.md), and keep `revayat-comic` on `PATH`.
 
-The repository has v2.0.2 manifests for five plugin systems: Agent Plugins (`plugin.json` and `.agents/plugins/marketplace.json`), Claude Code (`.claude-plugin/`), Codex (`.codex-plugin/`), Cursor (`.cursor-plugin/`), and Antigravity (`.antigravity-plugin/`).
+The repository has v2.0.3 manifests for five plugin systems: Agent Plugins (`plugin.json` and `.agents/plugins/marketplace.json`), Claude Code (`.claude-plugin/`), Codex (`.codex-plugin/`), Cursor (`.cursor-plugin/`), and Antigravity (`.antigravity-plugin/`).
 
 In Claude Code:
 

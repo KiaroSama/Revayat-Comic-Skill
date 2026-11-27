@@ -3,7 +3,7 @@ name: revayat-comic
 description: Translate manga, manhwa, manhua and Western comics into Persian and produce a finished CBZ, PDF or folder of pages. Detects panels, speech balloons and sound effects, reads them with your own eyes from rendered crops, removes the original lettering without altering the artwork, and typesets real right-to-left Persian into each balloon. Use for translating a manga chapter, a webtoon, a comic, a CBZ/CBR archive or a comic PDF into Persian (فارسی).
 license: GPL-3.0-or-later
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, Agent, AskUserQuestion
-metadata: {"homepage":"https://github.com/KiaroSama/Revayat-Comic-Skill","version":"2.0.2","requires":{"bins":["revayat-comic"]}}
+metadata: {"homepage":"https://github.com/KiaroSama/Revayat-Comic-Skill","version":"2.0.3","requires":{"bins":["revayat-comic"]}}
 ---
 
 # Revayat Comic: comics into Persian

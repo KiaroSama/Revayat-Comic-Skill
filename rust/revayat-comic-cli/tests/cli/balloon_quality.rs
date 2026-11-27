@@ -542,6 +542,7 @@ fn closed_and_twin_lobe_balloons_clean_and_letter_without_touching_neighbors() {
     doc["pages"][0]["panels"] = json!([{"bbox":[0,0,220,210]}]);
     doc["pages"][0]["regions"] = json!([
         {"id":"closed", "bbox":[68,41,20,18], "kind":"speech", "source_text":"Yes", "target_text":"باشه."},
+        {"id":"dropped_overlap", "bbox":[48,30,52,45], "kind":"speech", "dropped":true},
         {"id":"kept", "bbox":[119,38,15,12], "kind":"speech", "source_text":"Keep", "keep":true},
         {"id":"left", "bbox":[29,141,16,17], "kind":"speech", "source_text":"Are you there?", "target_text":"کجا رفتی؟"},
         {"id":"right", "bbox":[119,141,16,17], "kind":"speech", "source_text":"Are you there?", "target_text":"کجا رفتی؟"}
@@ -574,7 +575,7 @@ fn closed_and_twin_lobe_balloons_clean_and_letter_without_touching_neighbors() {
     let doc = read_doc();
     let page = &doc["pages"][0];
     let rendered = load(&page["final"]).into_rgb8();
-    let sizes = [2, 3].map(|i| page["regions"][i]["typeset"]["font_size"].as_f64().unwrap());
+    let sizes = [3, 4].map(|i| page["regions"][i]["typeset"]["font_size"].as_f64().unwrap());
     assert!(sizes.iter().all(|&size| size >= 17.0), "{sizes:?}");
     assert!((sizes[0] - sizes[1]).abs() <= 2.0, "{sizes:?}");
     for (x, y, p) in cleaned
