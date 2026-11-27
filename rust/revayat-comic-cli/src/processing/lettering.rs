@@ -55,6 +55,25 @@ fn read_mask(root: &Path, page: &PageRecord, field: &str) -> Result<GrayImage> {
     }
 }
 
+fn clears_balloon(region: &RegionRecord, policy: &str) -> bool {
+    editable(region, policy)
+        && (region.erase
+            || region.state == Some(revayat_ir::RegionState::Erased)
+            || !region.target_text.trim().is_empty())
+}
+
+fn excluded_balloon_regions(page: &PageRecord, policy: &str) -> Result<Vec<Rect>> {
+    page.regions
+        .iter()
+        .filter(|region| {
+            !region.dropped
+                && region.state != Some(revayat_ir::RegionState::Dropped)
+                && !clears_balloon(region, policy)
+        })
+        .map(bounds)
+        .collect()
+}
+
 pub fn clean(path: &Path, bubbles_only: bool, external: Option<&Path>) -> Result<Value> {
     write_doc(path, "clean", |loaded| {
         let root = ir::doc_dir(loaded.path()).to_owned();
@@ -70,8 +89,9 @@ pub fn clean(path: &Path, bubbles_only: bool, external: Option<&Path>) -> Result
             let mut balloon_regions = Vec::new();
             let panels = page_panels(page)?;
             let neighbors = on_art_bounds(page)?;
+            let excluded = excluded_balloon_regions(page, &policy)?;
             for (index, region) in page.regions.iter_mut().enumerate() {
-                if editable(region, &policy)
+                if clears_balloon(region, &policy)
                     && let Some(balloon) =
                         resolve_balloon(&image, region, &panels, &neighbors, None)?
                 {
@@ -80,7 +100,8 @@ pub fn clean(path: &Path, bubbles_only: bool, external: Option<&Path>) -> Result
                     balloon_regions.push(index);
                 }
             }
-            let mut cleaned = clean::clean_page_bubbles(&image, &balloons).map_err(failed)?;
+            let mut cleaned =
+                clean::clean_page_bubbles_except(&image, &balloons, &excluded).map_err(failed)?;
             for (index, strategy) in balloon_regions.into_iter().zip(&cleaned.strategies) {
                 let region = &mut page.regions[index];
                 if region.erase || region.state == Some(regions::RegionState::Erased) {
@@ -94,7 +115,8 @@ pub fn clean(path: &Path, bubbles_only: bool, external: Option<&Path>) -> Result
             if !bubbles_only {
                 for region in &mut page.regions {
                     if !editable(region, &policy)
-                        || (bubble_kind(region) && balloon(region)?.is_some())
+                        || (bubble_kind(region)
+                            && (!clears_balloon(region, &policy) || balloon(region)?.is_some()))
                     {
                         continue;
                     }
@@ -186,6 +208,7 @@ pub fn typeset(path: &Path, external: Option<&Path>) -> Result<Value> {
             }
             let panels = page_panels(page)?;
             let neighbors = on_art_bounds(page)?;
+            let excluded = excluded_balloon_regions(page, &policy)?;
             for region in &mut page.regions {
                 region.typeset.clear();
                 if region.target_text.trim().is_empty() {
@@ -215,8 +238,10 @@ pub fn typeset(path: &Path, external: Option<&Path>) -> Result<Value> {
                     let interior =
                         revayat_vision::qachecks::balloon_text_interior(&source, balloon)
                             .map_err(failed)?;
-                    let interior = clean::clear_lettering_area(&cleaned, interior, balloon.dark)
-                        .map_err(failed)?;
+                    let mut interior =
+                        clean::clear_lettering_area(&cleaned, interior, balloon.dark)
+                            .map_err(failed)?;
+                    interior.exclude(&excluded);
                     interior.apply_to(&mut allowed).map_err(failed)?;
                     entry
                         .style
@@ -578,7 +603,7 @@ pub fn qa(path: &Path, strict: bool) -> Result<Value> {
                 spans: spans[index].as_deref(),
             })
             .collect::<Vec<_>>();
-        let result = qa::run_strict_qa_with_reviews(
+        let mut result = qa::run_strict_qa_with_reviews(
             qa::QaPage {
                 original: &image,
                 cleaned: &clean,
@@ -589,6 +614,52 @@ pub fn qa(path: &Path, strict: bool) -> Result<Value> {
             &reviews,
         )
         .map_err(failed)?;
+        let excluded = excluded_balloon_regions(page, document.policy())?;
+        for finding in &mut result.findings {
+            if finding.code != "balloon-ink-survives" {
+                continue;
+            }
+            let Some(balloon) = regions
+                .iter()
+                .find(|region| finding.region.as_deref() == Some(region.id))
+                .and_then(|region| region.balloon)
+            else {
+                continue;
+            };
+            let mut interior =
+                revayat_vision::qachecks::balloon_text_interior(&image, balloon).map_err(failed)?;
+            interior.exclude(&excluded);
+            let b = interior.bounds;
+            let paper =
+                image::imageops::crop_imm(&clean, b.x(), b.y(), b.width(), b.height()).to_image();
+            let gray = masks::page_luminance(&paper);
+            let samples = gray
+                .iter()
+                .zip(interior.pixels.iter())
+                .filter_map(|(&p, &m)| {
+                    let luma = if balloon.dark { 255 - p } else { p };
+                    (m != 0 && luma > 185).then_some(u64::from(luma))
+                });
+            let (sum, count) = samples.fold((0u64, 0u64), |(sum, count), v| (sum + v, count + 1));
+            let Some(paper_luma) = sum.checked_div(count) else {
+                continue;
+            };
+            let ink = gray
+                .iter()
+                .zip(interior.pixels.iter())
+                .filter(|&(&p, &m)| {
+                    let luma = if balloon.dark { 255 - p } else { p };
+                    m != 0 && paper_luma.abs_diff(u64::from(luma)) >= 38
+                })
+                .count();
+            if ink == 0 {
+                finding.code.clear();
+                result.errors -= 1;
+            } else {
+                finding.detail = format!("{ink} ink pixels remain in the cleared balloon");
+            }
+        }
+        result.findings.retain(|finding| !finding.code.is_empty());
         if native_changed > result.artwork_pixels_changed {
             errors += 1;
             findings.push(json!({"code":"artwork-changed","page":page.id,"detail":format!("{native_changed} pixels changed outside authorized masks, including native precision and alpha")}));

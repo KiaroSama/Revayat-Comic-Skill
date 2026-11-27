@@ -23,8 +23,8 @@ const GLOSSARY: &str = include_str!(
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Digits {
-    #[default]
     Persian,
+    #[default]
     Latin,
     Keep,
 }

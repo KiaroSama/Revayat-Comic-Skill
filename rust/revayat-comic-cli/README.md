@@ -1,4 +1,4 @@
-# Revayat Comic CLI 2.0.1
+# Revayat Comic CLI 2.0.3
 
 `revayat-comic` imports comic pages, prepares translation worksheets, sets Persian lettering in the cleaned artwork, and exports CBZ, PDF, or page images. The executable uses Rust for the local pipeline and includes the Vazir fonts and Persian terminology data. Hosted OCR and translation are optional.
 

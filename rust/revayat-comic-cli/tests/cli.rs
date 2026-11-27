@@ -154,7 +154,7 @@ fn help_and_version_report_supported_commands() {
     let fixture = Fixture::staged();
     let output = fixture.run(&["--version"], b"");
     success(&output);
-    assert_eq!(output.stdout, b"revayat-comic 2.0.1\n");
+    assert_eq!(output.stdout, b"revayat-comic 2.0.3\n");
     let output = fixture.run(&["--help"], b"");
     success(&output);
     let help = std::str::from_utf8(&output.stdout).unwrap();
@@ -224,7 +224,7 @@ fn stdio_advertises_the_same_pipeline_commands_as_help() {
 fn persian_voice_lint_and_lookup_run_without_a_path_tool() {
     let fixture = Fixture::staged();
     let input = fixture.cwd.join("lines.txt");
-    fs::write(&input, "من مي روم").unwrap();
+    fs::write(&input, "من تا ساعت ٠٥ می‌روم و 15 کتاب می‌برم.").unwrap();
     let check = fixture.run(&["voice", "lint", "--check", "--style", "lines.txt"], b"");
     assert_eq!(check.status.code(), Some(1));
     assert!(
@@ -235,6 +235,18 @@ fn persian_voice_lint_and_lookup_run_without_a_path_tool() {
     );
     success(&fixture.run(&["voice", "lint", "--fix", "lines.txt"], b""));
     success(&fixture.run(&["voice", "lint", "--check", "--style", "lines.txt"], b""));
+    assert_eq!(
+        fs::read_to_string(&input).unwrap(),
+        "من تا ساعت 05 می‌روم و 15 کتاب می‌برم."
+    );
+    success(&fixture.run(
+        &["voice", "lint", "--fix", "--digits", "persian", "lines.txt"],
+        b"",
+    ));
+    assert_eq!(
+        fs::read_to_string(&input).unwrap(),
+        "من تا ساعت ۰۵ می‌روم و ۱۵ کتاب می‌برم."
+    );
     let lookup = fixture.run(&["voice", "lookup", "business partners"], b"");
     success(&lookup);
     assert!(
@@ -246,12 +258,65 @@ fn persian_voice_lint_and_lookup_run_without_a_path_tool() {
 }
 
 #[test]
+fn falint_check_and_fix_apply_the_selected_digits() {
+    let fixture = Fixture::staged();
+    image::RgbImage::from_pixel(128, 128, image::Rgb([255; 3]))
+        .save(fixture.cwd.join("page.png"))
+        .unwrap();
+    let imported = fixture.run(&["import", "page.png", "--out", "work"], b"");
+    success(&imported);
+    let path = "work/comic.json";
+    let file = fixture.cwd.join(path);
+    let mut doc: Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+    let id = doc["pages"][0]["id"].as_str().unwrap();
+    let mut region = revayat_ir::ir::new_region(
+        format!("{id}r001"),
+        [20., 20., 80., 30.],
+        "speech",
+        "horizontal",
+        "manual",
+        1.,
+    )
+    .unwrap();
+    region.source_text = "I have 15 books.".into();
+    region.target_text = "من 15 کتاب دارم.".into();
+    doc["pages"][0]["regions"] = json!([region]);
+    let original = serde_json::to_vec(&doc).unwrap();
+    fs::write(&file, &original).unwrap();
+    let default_check = fixture.run(&["falint", "check", "--doc", path], b"");
+    success(&default_check);
+    let check = fixture.run(
+        &["falint", "check", "--doc", path, "--digits", "persian"],
+        b"",
+    );
+    assert_eq!(check.status.code(), Some(1));
+    assert_eq!(
+        fs::read(&file).unwrap(),
+        original,
+        "check rewrote the document"
+    );
+
+    for (args, expected) in [
+        (vec!["--digits", "persian"], "من ۱۵ کتاب دارم."),
+        (vec![], "من 15 کتاب دارم."),
+    ] {
+        let mut command = vec!["falint", "fix", "--doc", path];
+        command.extend(args);
+        let output = fixture.run(&command, b"");
+        success(&output);
+        assert_eq!(json_stdout(&output)["changed"], 1);
+        let fixed: Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+        assert_eq!(fixed["pages"][0]["regions"][0]["target_text"], expected);
+    }
+}
+
+#[test]
 fn doctor_reports_all_nine_kernels_without_path_tools() {
     let fixture = Fixture::staged();
     let output = fixture.run(&["doctor", "--json"], b"");
     success(&output);
     let report = json_stdout(&output);
-    assert_eq!(report["version"], "2.0.1");
+    assert_eq!(report["version"], "2.0.3");
     assert_eq!(report["ok"], true);
     assert_eq!(report["kernels"].as_object().unwrap().len(), KERNELS.len());
     for name in KERNELS {
@@ -260,7 +325,7 @@ fn doctor_reports_all_nine_kernels_without_path_tools() {
     let human = fixture.run(&["doctor"], b"");
     success(&human);
     let text = std::str::from_utf8(&human.stdout).unwrap();
-    assert!(text.contains("2.0.1"));
+    assert!(text.contains("2.0.3"));
     assert!(KERNELS.iter().all(|name| text.contains(name)));
 }
 
@@ -472,7 +537,7 @@ fn run_logs_have_utc_names_and_do_not_leak_input_or_paths() {
         }
         for key in [
             "command=",
-            "version=2.0.1",
+            "version=2.0.3",
             "run_id=",
             "exit=",
             "duration_ms=",

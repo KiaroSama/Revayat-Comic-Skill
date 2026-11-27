@@ -109,6 +109,101 @@ fn narrow_open_tail_recovers_both_lobes_without_the_panel_paper() -> Result<()> 
 }
 
 #[test]
+fn closed_balloon_clean_authorizes_the_whole_safe_interior() -> Result<()> {
+    let page = RgbImage::from_fn(124, 100, |x, y| {
+        let paper = (14..106).contains(&x) && (14..86).contains(&y);
+        let main_ink = (50..58).contains(&x) && (44..49).contains(&y);
+        let stray = (27..63).contains(&y) && x == 16 + y.abs_diff(45) / 10;
+        Rgb([if !paper || main_ink {
+            20
+        } else if stray {
+            195 + (y % 3) as u8 * 10
+        } else {
+            245
+        }; 3])
+    });
+    let balloon = Balloon {
+        bounds: Rect([10, 10, 100, 80]),
+        text_bounds: Rect([44, 37, 25, 18]),
+        dark: false,
+    };
+    let cleaned = clean::clean_page_bubbles(&page, &[balloon])?;
+    assert_eq!(cleaned.strategies, [clean::CleanStrategy::Flat]);
+    for (x, y, original) in page.enumerate_pixels() {
+        let safe = (16..104).contains(&x) && (16..84).contains(&y);
+        assert_eq!(cleaned.mask.get_pixel(x, y)[0], if safe { 255 } else { 0 });
+        assert_eq!(
+            cleaned.image.get_pixel(x, y),
+            if safe { &Rgb([245; 3]) } else { original },
+            "({x}, {y})"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn panel_clipped_balloon_recovers_beyond_the_ocr_search_window() -> Result<()> {
+    let panel = Rect([18, 18, 100, 88]);
+    let page = RgbImage::from_fn(130, 122, |x, y| {
+        let edge = 55 - y.abs_diff(60) / 5;
+        let dark = x >= edge && x < panel.right() && (panel.y()..panel.bottom()).contains(&y);
+        Rgb([if dark { 24 } else { 245 }; 3])
+    });
+    let anchor = Rect([20, 23, 9, 9]);
+    let resolved = masks::resolve_balloon_with_interior(
+        &masks::page_luminance(&page),
+        anchor,
+        None,
+        Some(panel),
+        false,
+    )?;
+    let Some((balloon, paper)) = resolved else {
+        return Err(revayat_vision::VisionError::Invalid(
+            "panel-clipped balloon not recovered".into(),
+        ));
+    };
+    assert_eq!(panel.intersection(balloon.bounds), Some(balloon.bounds));
+    for interior in [paper, balloon_interior(&page, balloon, 2)?] {
+        let mut allowed = image::GrayImage::new(page.width(), page.height());
+        interior.apply_to(&mut allowed)?;
+        assert_eq!(allowed.get_pixel(38, 90)[0], 255);
+        for (x, y, p) in allowed.enumerate_pixels().filter(|(_, _, p)| p[0] != 0) {
+            assert!(
+                panel.contains(x, y) && page.get_pixel(x, y)[0] >= 220,
+                "{x}, {y}: {p:?}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn twin_lobe_partition_uses_the_neck_instead_of_the_ocr_midpoint() -> Result<()> {
+    let mask = image::GrayImage::from_fn(180, 120, |x, y| {
+        let lobes = [49, 135]
+            .into_iter()
+            .any(|cx| x.abs_diff(cx).pow(2) + y.abs_diff(60).pow(2) < 38 * 38);
+        let neck = (49..135).contains(&x) && y.abs_diff(60) <= 3;
+        image::Luma([if lobes || neck { 255 } else { 0 }])
+    });
+    let anchors = [Rect([18, 55, 12, 10]), Rect([106, 55, 12, 10])];
+    let lobes = revayat_vision::typefit::partition_shared_interiors(&mask, [0, 0], &anchors, 1)?;
+    assert_eq!(lobes[0].get_pixel(76, 60)[0], 255);
+    assert_eq!(lobes[1].get_pixel(76, 60)[0], 0);
+    for lobe in lobes {
+        assert_eq!(lobe.get_pixel(90, 60)[0], 0);
+        for (x, y, _) in lobe.enumerate_pixels().filter(|(_, _, p)| p[0] != 0) {
+            for xx in x - 2..=x + 2 {
+                for yy in y - 2..=y + 2 {
+                    assert_ne!(mask.get_pixel(xx, yy)[0], 0, "{x}, {y}");
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn free_lettering_mask_preserves_curved_outline_panel_frame_and_hair() -> Result<()> {
     let page = RgbImage::from_fn(170, 130, |x, y| {
         let oval = x.abs_diff(92).pow(2) + y.abs_diff(68).pow(2);

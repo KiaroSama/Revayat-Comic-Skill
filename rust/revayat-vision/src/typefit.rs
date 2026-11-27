@@ -151,6 +151,16 @@ pub(crate) fn fit_region(
     let max_width = spans.as_ref().map_or(bounds.width(), |v| {
         v.iter().map(|[l, r]| r - l).max().unwrap_or_default() as u32
     });
+    let paper_center = spans.as_ref().and_then(|rows| {
+        let (weighted_y, weight) =
+            rows.iter()
+                .enumerate()
+                .fold((0.0, 0.0), |(sum, total), (y, [l, r])| {
+                    let weight = ((*r - *l) as f32).powi(2);
+                    (sum + (y as f32 + 0.5) * weight, total + weight)
+                });
+        (weight > 0.0).then_some(weighted_y / weight)
+    });
     for size in (min_size..=max_size).rev() {
         let line_height = (size as f32 * spacing.max(MIN_LINE_HEIGHT)).ceil();
         let effect =
@@ -179,8 +189,9 @@ pub(crate) fn fit_region(
             else {
                 continue;
             };
-            let centered =
-                ((bounds.height() as f32 - line_height * lines.len() as f32) / 2.0).floor() as i32;
+            let centered = (paper_center.unwrap_or(bounds.height() as f32 / 2.0)
+                - line_height * lines.len() as f32 / 2.0)
+                .floor() as i32;
             let mut shaped_lines = Vec::new();
             let mut isolates = Vec::new();
             for (i, text) in lines.into_iter().enumerate() {
@@ -344,15 +355,84 @@ pub fn partition_shared_interiors(
         i128::from(seam),
     )
     .map_err(VisionError::kernel)?;
+    use image::Luma;
+    use imageproc::region_labelling::{Connectivity, connected_components};
+
+    // An opened core separates lobes at a narrow neck before considering OCR distances.
+    let mut core = crate::masks::morphology(mask, 5, true)?;
+    for (x, y, p) in core.enumerate_pixels_mut() {
+        if x < 5 || y < 5 || mask.width() - x <= 5 || mask.height() - y <= 5 {
+            p[0] = 0;
+        }
+    }
+    let labels = connected_components(&core, Connectivity::Four, Luma([0]));
+    let mut nearest = vec![(u128::MAX, 0); members.len()];
+    for (x, y, p) in labels.enumerate_pixels().filter(|(_, _, p)| p[0] != 0) {
+        for (member, best) in members.iter().zip(&mut nearest) {
+            let [cx, cy] = member.center();
+            let dx = u128::from((origin[0] as u64 + u64::from(x)).abs_diff(u64::from(cx)));
+            let dy = u128::from((origin[1] as u64 + u64::from(y)).abs_diff(u64::from(cy)));
+            if dx * dx + dy * dy < best.0 {
+                *best = (dx * dx + dy * dy, p[0]);
+            }
+        }
+    }
+    let separate = members.len() > 1
+        && nearest.iter().enumerate().all(|(i, &(_, label))| {
+            label != 0 && nearest[..i].iter().all(|&(_, earlier)| earlier != label)
+        });
+    let overlap = if separate {
+        let lobes = nearest
+            .iter()
+            .map(|&(_, label)| {
+                let core = GrayImage::from_fn(mask.width(), mask.height(), |x, y| {
+                    Luma([if labels.get_pixel(x, y)[0] == label {
+                        255
+                    } else {
+                        0
+                    }])
+                });
+                crate::masks::morphology(&core, 3, false)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut count = vec![0u8; owners.len()];
+        for lobe in &lobes {
+            for (n, &active) in count.iter_mut().zip(lobe.iter()) {
+                *n = n.saturating_add(u8::from(active != 0));
+            }
+        }
+        Some((lobes, count))
+    } else {
+        None
+    };
     (0..members.len())
         .map(|i| {
-            crate::masks::from_raw(
+            if let Some((lobes, count)) = &overlap {
+                return crate::masks::from_raw(
+                    mask.dimensions(),
+                    lobes[i]
+                        .iter()
+                        .zip(count)
+                        .map(|(&p, &n)| if n == 1 { p } else { 0 })
+                        .collect(),
+                );
+            }
+            let paper = crate::masks::from_raw(
                 mask.dimensions(),
                 owners
                     .iter()
                     .map(|p| if *p == i as i64 { 255 } else { 0 })
                     .collect(),
-            )
+            )?;
+            let b = Rect([0, 0, mask.width(), mask.height()]);
+            Ok(crate::masks::inset_balloon(
+                &crate::masks::RegionMask {
+                    bounds: b,
+                    pixels: paper,
+                },
+                2,
+            )?
+            .pixels)
         })
         .collect()
 }

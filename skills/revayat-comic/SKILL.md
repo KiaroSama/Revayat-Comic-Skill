@@ -3,7 +3,7 @@ name: revayat-comic
 description: Translate manga, manhwa, manhua and Western comics into Persian and produce a finished CBZ, PDF or folder of pages. Detects panels, speech balloons and sound effects, reads them with your own eyes from rendered crops, removes the original lettering without altering the artwork, and typesets real right-to-left Persian into each balloon. Use for translating a manga chapter, a webtoon, a comic, a CBZ/CBR archive or a comic PDF into Persian (فارسی).
 license: GPL-3.0-or-later
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, Agent, AskUserQuestion
-metadata: {"homepage":"https://github.com/KiaroSama/Revayat-Comic-Skill","version":"2.0.1","requires":{"bins":["revayat-comic"]}}
+metadata: {"homepage":"https://github.com/KiaroSama/Revayat-Comic-Skill","version":"2.0.3","requires":{"bins":["revayat-comic"]}}
 ---
 
 # Revayat Comic: comics into Persian
@@ -16,13 +16,17 @@ Set `WORK` to the chapter workspace and `OUTPUT` to the final CBZ, PDF or page f
 
 The examples use the standalone v2 `revayat-comic` on `PATH`. Set `DRAFT` to a UTF-8 file when linting draft prose and `BATCH` to a separate shard directory when using batch mode.
 
+**English Digits Standing Law.** Write every digit in dialogue, titles, captions, and on-art text as ASCII (`0-9`). Standalone numeric artwork, such as a volume badge `15`, map pins `1-8`, or a watch showing `00:00`, stays pixel-for-pixel unchanged. Keep its lettering, position, and background; exclude it from cleaning and edit masks. In bonus sketch pages, preserve tilted captions, hand lettering, and hand-drawn frames.
+
+**Story Continuity Memory.** Every chapter or book keeps `work/story.md` (`$WORK/story.md` for a custom workspace). Start it before drafting. Every translation worker, including every shard, reads it before drafting and updates it with the beats from their pages. Track the plot so far, active scene, speakers and listeners, relationships and honorifics, emotional register, and open sentences crossing bubble or page boundaries (for example `p0019 -> p0020`). Use `references/translation-policy.md` for the entry format and `references/multi-agent-workflow.md` for coordinated updates.
+
 ### Six-stage workflow and on-art editing
 
 Every comic translation runs through the **six-stage multi-agent workflow** in `references/multi-agent-workflow.md`:
 1. **Initial Translation (`ترجمه اولیه`)**: Web-search official series character names, honorifics, and canon terminology first; draft natural spoken Persian applying `references/voice/persian/SKILL.md` and `references/voice/humanizer/SKILL.md` (v4.0.0).
 2. **Layout & Typesetting Planning (`صفحه آرایی`)**: Set balanced line breaks, generous line spacing (`>= 1.38x`), RTL punctuation, anti-overlap badge/title checks, and classify each region as `typeset` (clean uniform bubble) vs `fullpage_edit` (on-art/speedlines/maps/covers/SFX).
 3. **Bilingual and tone review**: Check the Persian against the source crops and run `revayat-comic voice lint "$DRAFT" --check --style` on a UTF-8 draft file.
-4. **Apply the translation**: Merge the worksheets, then clean and typeset. For lettering on artwork, follow `references/fullpage-image-edit.md`: send tight context crops to `antigravity/gemini-3.1-flash-image` and align approved edits back to their original rectangles. If visual review flags an edge defect, repair only that small strip. Pass the assembled `<page_id>.png` to `typeset --external-dir` for approved pages only; the CLI typesets pages without a matching PNG normally.
+4. **Apply the translation**: Merge the worksheets, then clean and typeset. For lettering on artwork, follow `references/fullpage-image-edit.md`: give `antigravity/gemini-3.1-flash-image` 120-240 px of context beyond the full lettering and its effects. Erase the old letters and all shadows, glows, and outlines before writing Persian; feather approved edits back in place. If visual review flags an edge defect, repair only that small strip. Pass the assembled `<page_id>.png` to `typeset --external-dir` for approved pages only; the CLI typesets pages without a matching PNG normally.
 5. **Visual recheck**: Open every rendered page with `Read`, then run `revayat-comic qa check --doc "$WORK/comic.json" --strict`. Fix remaining marks, overflows and missing glyphs.
 6. **Delivery**: Export the requested formats, verify each package with `qa package --package`, and update the translation and QA log.
 
@@ -146,10 +150,10 @@ Read `references/voice/index.md` before drafting or reviewing prose. For comic
 translation, use `references/voice/persian/SKILL.md` and its bundled guides
 (`register-guide.md`, `pitfalls.md`, and `ai-tells.md` inside that folder).
 Write every speech balloon in natural spoken Persian. Match the character's
-voice, their listener, and the scene's tension. Ordinary dialogue should not
-sound like an essay: avoid phrases such as `همان‌طور که پیش‌تر گفتم` and
-`ناگفته پیداست`. Reserve elevated wording for characters who actually speak
-that way. Read the lines aloud and compare them with the source. For stilted
+voice, their listener, and the scene's tension. Use contractions and colloquial
+verbs the speaker would say, such as `می‌خوام` or `گفتم که`, and let connected
+balloons follow the same spoken rhythm. Reserve elevated wording for characters
+who actually speak that way. Read the exchange aloud against the source. For stilted
 Persian or ambiguous replies, follow `references/persian-review.md`.
 
 For manga, always keep Japanese honorifics in Persian script: `-سان`, `-کون`,
@@ -192,9 +196,11 @@ themselves, and the more a chapter introduces (a new character, a place, a term
 of address) the more that shows.
 
 With the user's explicit opt-in, follow `references/parallel-workflow.md`:
-workers draft independent assignments and cross-review completed drafts in
-separate files. The coordinator resolves terms/voices and merges in source order;
-workers never concurrently write canonical worksheets, glossary or stage state.
+workers read `story.md`, draft independent assignments, and cross-review
+completed drafts in separate files. Each worker prepares a page-keyed story
+update. The coordinator gives each worker a turn to update `story.md`, resolves
+terms and voices, and merges in source order. Workers never write the shared
+story file, canonical worksheets, glossary, or stage state concurrently.
 Dependent pages remain ordered. Rebuild context after acceptance and re-review
 pending work affected by changes. When independence is absent, parallel reading
 preparation/review can help while translation remains sequential.
@@ -206,7 +212,11 @@ preparation/review can help while translation remains sequential.
 Use shards only when page ranges can proceed independently. Finish the chapter
 prep and verify and lock the cast glossary before splitting it. Give one agent
 exclusive ownership of each shard, with any scene context it needs. Keep pages
-ordered inside each shard. Dependent ranges use the sequential workflow above.
+ordered inside each shard. Before drafting, each shard reads the current canonical
+`$WORK/story.md` and keeps its page beats in `story.md` in its own shard directory.
+After the shard review, update the canonical file one shard at a time in source
+order and resolve open handoffs before translating a dependent range. Dependent
+ranges use the sequential workflow above.
 
 ```bash
 revayat-comic batch plan --doc "$WORK/comic.json" --shards 3 --out "$BATCH"
@@ -266,6 +276,9 @@ assignment/snapshot contract from `references/parallel-workflow.md`:**
 >
 > **Open the overview and every crop sheet named in the worksheet with `Read` before writing.** The overview shows the whole page in reading order. Use it to identify the speakers and connect replies. The sheets show enlarged crops labelled with their region IDs.
 >
+> Before drafting, read `$WORK/story.md` and check the open continuations.
+> After finishing the page, update it with the confirmed story beats and the
+> continuation status. Use an assigned private update if working in parallel.
 > Read `$SKILL_DIR/references/translation-policy.md` first and follow it.
 > Read the common pass and matching section in `references/source-languages.md`.
 > For sound effects, use `references/sfx-glossary.md`. Verify unfamiliar readings
@@ -484,7 +497,7 @@ it cannot waive pixel, glyph, geometry, freshness or package integrity failures.
 | `text-not-rendered` | Text has no valid visible rendered placement. | Resolve fit or missing placement evidence and rerun typeset. |
 | `tight-line-spacing` | Line spacing is below the required readability floor. | Reflow with the required spacing; review a full/short variant if necessary. |
 | `low-contrast` | Text and its background lack sufficient contrast. | Match the balloon polarity and use a readable approved style. |
-| `arabic-forms` | Arabic variants or unwanted character forms remain in Persian. | Run falint fix, then review intentional quotations before a named acknowledgement. |
+| `arabic-forms` | Arabic letter variants or digits outside the selected style remain. | Run `falint fix`, then review intentional quotations before a named acknowledgement. |
 | `double-punctuation` | Repeated punctuation needs correction. | Correct it in the worksheet and rerun the linter. |
 | `guillemets` | Persian quotation marks are unbalanced. | Restore paired quotes and check logical order. |
 | `latin-quotes` | Latin quotes remain in Persian dialogue. | Use Persian quotes unless the exact quotation was intentionally reviewed. |

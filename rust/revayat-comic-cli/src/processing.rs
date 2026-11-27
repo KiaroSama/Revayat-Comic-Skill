@@ -537,7 +537,11 @@ pub fn crops(path: &Path) -> Result<Value> {
     })
 }
 
-pub fn falint(path: &Path, fix: bool) -> Result<(Value, i32)> {
+pub fn falint(path: &Path, fix: bool, digits: falint::Digits) -> Result<(Value, i32)> {
+    let options = falint::Options {
+        digits,
+        ..Default::default()
+    };
     let apply = |document: &mut revayat_ir::ComicDocument| -> Result<Value> {
         let mut findings = Vec::new();
         let mut changed = 0;
@@ -546,8 +550,7 @@ pub fn falint(path: &Path, fix: bool) -> Result<(Value, i32)> {
                 continue;
             }
             if fix {
-                let fixed = falint::fix_text(&region.target_text, falint::Options::default())
-                    .map_err(failed)?;
+                let fixed = falint::fix_text(&region.target_text, options).map_err(failed)?;
                 if fixed != region.target_text {
                     changed += 1;
                     region.target_text = fixed;
@@ -556,9 +559,13 @@ pub fn falint(path: &Path, fix: bool) -> Result<(Value, i32)> {
             }
             let acknowledged = review::acknowledged(region);
             let spans = review::acknowledged_spans(region);
-            let issues =
-                falint::lint_acknowledged(&region.target_text, &acknowledged, spans.as_deref())
-                    .map_err(failed)?;
+            let issues = falint::lint_with_digits(
+                &region.target_text,
+                &acknowledged,
+                spans.as_deref(),
+                digits,
+            )
+            .map_err(failed)?;
             if !issues.is_empty() {
                 findings.push(json!({"region":region.id,"issues":issues}));
             }

@@ -9,7 +9,7 @@ fn falint_fixes_persian_but_leaves_structured_spans_and_ambiguous_words() -> Res
         "كيان , گفت: \"سلام Bob\" 25 ... https://example.org/a.2",
         falint::Options::default(),
     )?;
-    assert_eq!(normal, "کیان، گفت: «سلام Bob» ۲۵… https://example.org/a.2");
+    assert_eq!(normal, "کیان، گفت: «سلام Bob» 25… https://example.org/a.2");
     assert_eq!(
         falint::fix_text("موهایم تر شد.", falint::Options::default())?,
         "موهایم تر شد."
@@ -22,6 +22,24 @@ fn falint_fixes_persian_but_leaves_structured_spans_and_ambiguous_words() -> Res
     assert_eq!(
         falint::fix_text(&normal, falint::Options::default())?,
         normal
+    );
+    Ok(())
+}
+
+#[test]
+fn falint_defaults_to_ascii_digits_and_accepts_explicit_persian() -> Result<()> {
+    let text = "ساعت ٠٥:٣٠ رسیدم و ۱۵ کتاب دارم. https://example.test/٠٥";
+    assert_eq!(
+        falint::fix_text(text, falint::Options::default())?,
+        "ساعت 05:30 رسیدم و 15 کتاب دارم. https://example.test/٠٥"
+    );
+    let options = falint::Options {
+        digits: falint::Digits::Persian,
+        ..Default::default()
+    };
+    assert_eq!(
+        falint::fix_text("شماره 15 یا ٠٥ است.", options)?,
+        "شماره ۱۵ یا ۰۵ است."
     );
     Ok(())
 }

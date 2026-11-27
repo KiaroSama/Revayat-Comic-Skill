@@ -2,11 +2,22 @@
 
 Every chapter translation runs through **six distinct, specialized agent roles** in order. Separating translation, layout, bilingual review, execution, visual recheck, and final sign-off prevents one busy pass from rushing Persian tone, missing on-art sound effects, or overlooking visual defects.
 
+## Story Continuity Memory
+
+Every chapter or book has a running `work/story.md` (or `<workdir>/story.md`).
+Each translation worker and shard reads it before drafting, then records their
+page beats, current scene, speakers and listeners, relationships, honorifics,
+emotional register, and any open cross-bubble or cross-page sentences. Follow
+[the translation policy](translation-policy.md#story-continuity-memory) for the
+handoff fields. Workers can record their updates privately while drafting; the
+coordinator schedules shared writes one worker at a time in page order. A shard
+that needs an unresolved handoff waits for the prior shard's update.
+
 ## Stage Overview
 
 | Stage | Persian Title | Role | Primary Input | Required Output |
 | --- | --- | --- | --- | --- |
-| **1** | ترجمه اولیه | Initial Translation Agent | Full page images, crop sheets, OCR/worksheet stubs, chapter glossary | Draft worksheets (`pNNNN.done.txt`) + glossary proposals for `comic.json` |
+| **1** | ترجمه اولیه | Initial Translation Agent | Full page images, crop sheets, OCR/worksheet stubs, chapter glossary, `story.md` | Draft worksheets (`pNNNN.done.txt`), `story.md` updates, glossary proposals |
 | **2** | صفحه آرایی | Layout & Typesetting Planner Agent | Draft worksheets + full page images + bubble/region geometry | Line-broken, spaced worksheets + routing tag (`typeset` vs `fullpage_edit`) per region |
 | **3** | بازبینی | Bilingual & Tone Review Agent | Original full pages + draft/planned worksheets + Persian voice guide | Reviewed, natural spoken-Persian worksheets with zero AI tells and verified meaning |
 | **4** | اعمال ترجمه | Apply Translation Agent | Approved worksheets + `comic.json` | Emptied clean speech bubbles + approved crop edits pasted back in place + Vazir RTL typeset pages |
@@ -27,6 +38,7 @@ Input files:
 - Full original pages: <workdir>/pages/pNNNN.*
 - Crop sheets and overview: <workdir>/crops/overview.png, <workdir>/crops/sheet*.png
 - Pending worksheets: <workdir>/worksheets/pNNNN.txt
+- Story Continuity Memory: <workdir>/story.md (read before drafting)
 - Glossary: the `glossary` field in <workdir>/comic.json
 - Persian voice rules: skills/revayat-comic/references/voice/persian/SKILL.md
 
@@ -39,9 +51,10 @@ Instructions:
    - Translate sound effects (SFX) and exclamations idiomatically (e.g., "MM-HMM" -> «آره، آره.» or «اوهوم، اوهوم.»; "TCH!" -> «اِه!» or «چِق!»; "UWAAAAH!" -> «آااااه!» with madda ONLY on the first alef).
    - Never soften, omit, or censor meaning.
 4. Preserve every stable region ID (`@@ pNNNNrNNN`) and assign an explicit terminal action (`fa:`, `keep`, `drop`, `erase`).
-5. Record every on-art lettering, map callout, chapter title, cover text, and SFX so Stage 2 can route it to the cropped on-art workflow.
+5. Write ASCII digits (0-9) in dialogue, titles, captions, and translated on-art text. Mark standalone numeric art (volume 15, map pins 1-8, watch 00:00) keep and exclude it from edit masks. Record the source angle and weight of handwritten or tilted sketch lettering and preserve hand-drawn frames.
+6. Update story.md with the page or shard beats and open continuations in the assigned write slot. Keep Japanese honorifics in Persian script and read connected balloons aloud together.
 
-Output: Completed draft worksheets (`pNNNN.done.txt`) and glossary proposals for the coordinator to accept in `comic.json`.
+Output: Draft worksheets (pNNNN.done.txt), story.md updates, and glossary proposals for the coordinator.
 ```
 
 ---
@@ -63,11 +76,11 @@ Instructions:
 1. Inspect every region's shape and width on the full page:
    - Narrow/vertical speech bubbles: break lines explicitly so words never squeeze into cramped 1-word overhangs and trailing punctuation («.», «،», «؟!», «…») never clips or detaches.
    - Map labels, diagram callouts, and stacked captions: balance line lengths evenly and specify generous vertical line spacing (line-height >= 1.38x font size) so Persian dots/ascenders never collide between lines.
-   - Cover titles, volume number circles, and spine badges: check bounding-box clearance so volume badges (e.g., «۱۵») NEVER overlap Persian title glyphs (e.g., «سِکیری»).
+   - Cover titles, volume number circles, and spine badges: leave the original volume badge (e.g., `15`) in place and check clearance so the Persian title never overlaps it (e.g., «سِکیری»).
 2. Classify EVERY active region into exactly one rendering route:
    - `typeset`: clean interior speech bubbles with uniform white/solid background -> emptied cleanly in `clean`, rendered with bundled Vazir TTF via pure-Rust `cosmic-text` RTL shaping.
    - `fullpage_edit`: on-art lettering over speedlines, screentones, character art, maps, covers, chapter titles, and stylized SFX -> routed to Stage 4's cropped editing workflow using the page-level manifest (`revayat-comic fullpage-prompt`).
-3. Verify Persian mechanics: Persian digits (`۰–۹`), proper ZWNJ (`می‌`, `نمی‌`, `‌ها`, `‌ترین`), Persian punctuation (`،`, `؛`, `؟`), and `RLI`/`PDI` isolation for mixed Latin/Persian lines (e.g., `MBI`).
+3. Verify ASCII digits (`0-9`) and Persian mechanics: proper ZWNJ (`می‌`, `نمی‌`, `‌ها`, `‌ترین`), Persian punctuation (`،`, `؛`, `؟`), and `RLI`/`PDI` isolation for mixed Latin/Persian lines (e.g., `MBI`).
 
 Output: Layout-planned worksheets and per-page `fullpage_edit` region manifests.
 ```
@@ -103,7 +116,7 @@ Output: Approved, review-signed worksheets ready for Stage 4 execution.
 
 ## Stage 4 — Apply Translation (`اعمال ترجمه`)
 
-**Objective:** Clean only uniform speech balloons first. Edit on-art lettering in tight context crops, paste the approved lettering back at its original coordinates, then typeset the balloons with the bundled Vazir fonts.
+**Objective:** Clean only uniform speech balloons first. Edit on-art lettering in wide context crops, paste only the approved, feathered edit back at its original coordinates, then typeset the balloons with the bundled Vazir fonts.
 
 ### Prompt Template (Stage 4)
 
@@ -117,8 +130,8 @@ Instructions:
 1. Merge approved worksheets (`revayat-comic worksheet merge`) and run `revayat-comic falint fix`.
 2. Empty ONLY clean speech bubbles first (`revayat-comic clean --bubbles-only`) with interior speckle sweep so zero residual ink dots remain inside emptied bubbles while speedlines, screentones, and on-art lettering stay 100% untouched.
 3. For every page containing `fullpage_edit` regions (on-art SFX, speedline shouts, map labels, covers, spines, chapter titles):
-   - Follow `references/fullpage-image-edit.md` for crop sizing, the exact-text prompt, and paste-back. Submit one tight context crop at a time to `antigravity/gemini-3.1-flash-image` via `Numera-Gen-mcp`.
-   - Apply approved edits inside their original rectangles. If a reviewer spots a seam, repair only that strip. Save each approved composite as `<page_id>.png` at the original page dimensions.
+   - Follow `references/fullpage-image-edit.md` for crop sizing, the exact-text prompt, and paste-back. Give `antigravity/gemini-3.1-flash-image` 120-240 px of context beyond the full lettering effects. Ask it to remove the letters and their entire shadow, glow, and outline before drawing Persian at the source angle and weight.
+   - Include the whole old and new lettering footprint in the paste mask and feather outside those effects. Keep standalone digits and sketch frames untouched. If a reviewer spots a seam, repair only that strip. Save each approved composite as `<page_id>.png` at the original page dimensions.
 4. Run `revayat-comic typeset --external-dir <approved-png-directory>` to apply the approved on-art edits and set the speech balloons in Vazir. If there are no external edits, omit `--external-dir`.
 
 Output: Rendered full pages at the paths recorded in each page's `rendered` field in `<workdir>/comic.json`, ready for visual inspection.
@@ -146,9 +159,9 @@ Instructions:
    - Noisy black/white rectangular patches or dirty white halos over speedlines/screentones.
    - Broken line spacing (cramped or overlapping lines in maps/captions/bubbles).
    - Overlapping elements (e.g., volume circle colliding with title letters).
-   - Misspelled Persian glyphs from image editing (e.g., extra maddas `آآآآ`, `آه` instead of `اِه`, disconnected letters, Latin digits instead of Persian digits).
+   - Misspelled Persian glyphs from image editing (e.g., extra maddas `آآآآ`, `آه` instead of `اِه`, disconnected letters, Persian digits instead of ASCII digits).
    - Unintended artwork distortion, missing panel edges, or untranslated English remnants.
-3. Fix every defect immediately (tighten the full-page edit prompt and rerun that page, adjust bubble line breaks/font size, or expand bubble interior sweep) and re-verify the repaired page visually until ZERO defects remain.
+3. Fix every defect immediately (revise the crop prompt and rerun only the affected zone or strip, adjust bubble line breaks/font size, or expand bubble interior sweep) and re-verify the repaired page visually until ZERO defects remain.
 
 Output: Zero-defect verified final pages and a clean `qa check --strict` report (`errors: 0`).
 ```

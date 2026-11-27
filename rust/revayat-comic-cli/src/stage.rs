@@ -145,6 +145,13 @@ enum FalintAction {
 }
 
 #[derive(Clone, Copy, ValueEnum)]
+enum DigitMode {
+    Latin,
+    Persian,
+    Keep,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
 enum QaAction {
     Check,
     Package,
@@ -167,6 +174,9 @@ enum VoiceAction {
         fix: bool,
         #[arg(long)]
         style: bool,
+        /// Digit style for translated text.
+        #[arg(long, value_enum, default_value = "latin")]
+        digits: DigitMode,
     },
     Lookup {
         text: Vec<String>,
@@ -246,6 +256,9 @@ enum Stage {
         mode: FalintAction,
         #[command(flatten)]
         doc: Doc,
+        /// Digit style for translated text.
+        #[arg(long, value_enum, default_value = "latin")]
+        digits: DigitMode,
     },
     /// Remove source lettering inside approved masks.
     Clean {
@@ -581,8 +594,14 @@ fn stage_output(stage: Stage, output: &mut dyn Write) -> Result<i32, StageError>
                 );
             }
         },
-        Stage::Falint { mode, doc } => {
-            let (value, status) = processing::falint(&doc.doc, matches!(mode, FalintAction::Fix))?;
+        Stage::Falint { mode, doc, digits } => {
+            let digits = match digits {
+                DigitMode::Latin => revayat_vision::falint::Digits::Latin,
+                DigitMode::Persian => revayat_vision::falint::Digits::Persian,
+                DigitMode::Keep => revayat_vision::falint::Digits::Keep,
+            };
+            let (value, status) =
+                processing::falint(&doc.doc, matches!(mode, FalintAction::Fix), digits)?;
             return report(output, value, status);
         }
         Stage::Clean {
@@ -703,11 +722,17 @@ fn stage_output(stage: Stage, output: &mut dyn Write) -> Result<i32, StageError>
                     check,
                     fix,
                     style,
+                    digits,
                 },
         } => {
             let path = path.ok_or_else(|| usage("voice lint requires a UTF-8 input path"))?;
             let text = read_text(&path)?;
-            let lint = voice::lint_persian(&text, voice::Digits::Keep, style).map_err(failed)?;
+            let digits = match digits {
+                DigitMode::Latin => voice::Digits::Latin,
+                DigitMode::Persian => voice::Digits::Persian,
+                DigitMode::Keep => voice::Digits::Keep,
+            };
+            let lint = voice::lint_persian(&text, digits, style).map_err(failed)?;
             if fix && lint.changed_lines > 0 {
                 ir::write_text(&path, &lint.fixed).map_err(failed)?;
             }

@@ -35,6 +35,23 @@ exercise these distinctions; their automatic scores cannot certify them. That
 benchmark is repository-only, not copied into the standalone installed skill;
 [evaluation.md](evaluation.md) is the shipped review guide.
 
+## Story Continuity Memory
+
+Create `work/story.md` (or `$WORK/story.md`) before the first draft of every
+chapter or book. Every translator or shard reads the current file before
+writing. After each page, update the running plot summary and active scene:
+what happened, who's speaking and listening, their relationships and
+honorifics, and how the exchange feels. Record uncertain readings as open.
+
+For every sentence split across bubbles or pages, record the source page and
+region ID, the English lead (or the original lead for another source language),
+the Persian lead, and the grammar the next balloon must finish. For example,
+for `p0019 -> p0020`, finish the sentence in context and read both halves aloud
+before closing the entry. In parallel mode, record beats and handoffs in the
+worker or shard's private notes, then update the shared story in source order
+under the coordinator's single-writer handoff. If a page depends on an open
+handoff, wait for that handoff before drafting it.
+
 ## Three passes, in this order
 
 One pass that reads, writes and fits at the same time is where meaning gets
@@ -97,8 +114,12 @@ like natural spoken Persian. Match the character, their listener, and the
 scene's tension. Read the line aloud. Keep ordinary dialogue free of bookish
 phrases like `همان‌طور که پیش‌تر گفتم`, `می‌تواند`, `نشان می‌دهند`, `بنگرید`,
 `طبعاً`, and `ناگفته پیداست`. For example, `گفتم که` can fit an impatient
-reminder, while `قبلاً بهت گفتم` keeps the timing when it matters. Reserve
-archaic or elevated wording for characters who actually speak that way.
+reminder, while `قبلاً بهت گفتم` keeps the timing when it matters. In casual
+speech, choose contractions and ordinary verbs the speaker would use:
+`می‌خوام ببینم` for `می‌خواهم ببینم`, or `داره می‌رسه` for `در حال رسیدن است`.
+Let interruptions and replies land where the art puts them. Read connected
+balloons as one exchange. Reserve elevated wording for characters who actually
+speak that way, and keep Japanese honorifics in Persian script.
 
 | The art shows | What it is usually evidence of |
 | --- | --- |
@@ -244,13 +265,19 @@ is absent, use the defaults above.
 
 ## Persian specifics
 
-- Natural Persian punctuation: `،` `؛` `؟` `«»`. The typography pass fixes these
-  mechanically, so write naturally and do not fight it. Structured quantity notation
-  is protected exactly: decimal/grouping separators, signs, clocks/dates, leading
-  decimals and scientific notation are not localized or reinterpreted. `3,14` and
-  `1,200` keep their original digits. The current CLI uses the default digit
-  policy and has no digit-selection flag. Physical CR/LF/CRLF line endings normalize to logical LF,
-  with deliberate blank lines preserved; this is not broad Unicode line splitting.
+- **English Digits Standing Law.** Use ASCII digits (`0-9`) in dialogue,
+  titles, captions, and translated on-art text. Preserve the value, separators,
+  and signs of quantities, dates, and times. `falint` and `voice lint` default
+  to `--digits latin`; `--digits persian` is an explicit CLI override, not the
+  comic policy. Keep standalone numeric art (`15` on a volume badge, map pins
+  `1-8`, or a watch reading `00:00`) pixel-for-pixel unchanged. Mark it `keep`
+  and exclude it from cleanup and crop composites.
+- Natural Persian punctuation: `،` `؛` `؟` `«»`. The typography pass fixes
+  these mechanically. Physical CR/LF/CRLF line endings normalize to logical LF
+  with deliberate blank lines preserved.
+- Match handwritten or tilted captions on bonus and sketch pages. Follow the
+  original baseline and stroke weight; preserve hand-drawn frames and follow
+  [the on-art crop workflow](fullpage-image-edit.md) for lettering over art.
 - Persian letters, not Arabic: `ی` and `ک`, never `ي` and `ك`.
 - Half-spaces where they belong: `می‌روم`, `کتاب‌ها`. **Write them yourself.**
   What is joined for you is the possessive family — `کتاب هایم` → `کتاب‌هایم`,
