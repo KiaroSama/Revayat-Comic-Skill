@@ -503,6 +503,159 @@ fn open_speech_and_caption_fit_without_repainting_dark_artwork() {
 }
 
 #[test]
+fn closed_and_twin_lobe_balloons_clean_and_letter_without_touching_neighbors() {
+    use image::{Rgb, RgbImage};
+
+    let fixture = Fixture::staged();
+    let input = fixture.cwd.join("source");
+    fs::create_dir(&input).unwrap();
+    let source = RgbImage::from_fn(220, 210, |x, y| {
+        let closed = (40..144).contains(&x) && (21..86).contains(&y);
+        let lobes = [60, 151]
+            .into_iter()
+            .any(|cx| x.abs_diff(cx).pow(2) + y.abs_diff(150).pow(2) < 40 * 40);
+        let neck = (60..151).contains(&x) && y.abs_diff(150) <= 4;
+        let kept = (123..130).contains(&x) && (41..46).contains(&y);
+        let ink = (74..79).contains(&x) && (46..51).contains(&y)
+            || (33..38).contains(&x) && (147..151).contains(&y)
+            || (123..128).contains(&x) && (147..151).contains(&y);
+        let stray = x == 43 && (31..78).contains(&y);
+        Rgb([if kept || ink || !(closed || lobes || neck) {
+            24
+        } else if stray {
+            207
+        } else {
+            245
+        }; 3])
+    });
+    source.save(input.join("page.png")).unwrap();
+    let run = |args: &[&str]| {
+        let output = fixture.run(args, b"");
+        success(&output);
+        json_stdout(&output)
+    };
+    const DOC: &str = "work/comic.json";
+    run(&["import", "source", "--out", "work"]);
+    let path = fixture.cwd.join(DOC);
+    let read_doc = || serde_json::from_slice::<Value>(&fs::read(&path).unwrap()).unwrap();
+    let mut doc = read_doc();
+    doc["pages"][0]["panels"] = json!([{"bbox":[0,0,220,210]}]);
+    doc["pages"][0]["regions"] = json!([
+        {"id":"closed", "bbox":[68,41,20,18], "kind":"speech", "source_text":"Yes", "target_text":"باشه."},
+        {"id":"kept", "bbox":[119,38,15,12], "kind":"speech", "source_text":"Keep", "keep":true},
+        {"id":"left", "bbox":[29,141,16,17], "kind":"speech", "source_text":"Are you there?", "target_text":"کجا رفتی؟"},
+        {"id":"right", "bbox":[119,141,16,17], "kind":"speech", "source_text":"Are you there?", "target_text":"کجا رفتی؟"}
+    ]);
+    fs::write(&path, serde_json::to_vec(&doc).unwrap()).unwrap();
+    run(&["mask", "--doc", DOC]);
+    run(&["clean", "--doc", DOC]);
+    let load =
+        |name: &Value| image::open(fixture.cwd.join("work").join(name.as_str().unwrap())).unwrap();
+    let doc = read_doc();
+    let page = &doc["pages"][0];
+    let cleaned = load(&page["clean"]).into_rgb8();
+    let mask = load(&page["clean_mask"]).into_luma8();
+    for (x, y, p) in source.enumerate_pixels() {
+        let kept = (119..134).contains(&x) && (38..50).contains(&y);
+        if kept
+            || (40..42).contains(&x) && (21..86).contains(&y)
+            || p[0] == 24
+                && !((68..88).contains(&x) && (41..59).contains(&y)
+                    || y > 140 && y < 158 && ((29..45).contains(&x) || (119..135).contains(&x)))
+        {
+            assert_eq!(cleaned.get_pixel(x, y), p, "{x}, {y}");
+            assert_eq!(mask.get_pixel(x, y)[0], 0, "{x}, {y}");
+        } else if (42..142).contains(&x) && (23..84).contains(&y) {
+            assert_eq!(cleaned.get_pixel(x, y), &Rgb([245; 3]), "{x}, {y}");
+            assert_eq!(mask.get_pixel(x, y)[0], 255, "{x}, {y}");
+        }
+    }
+    assert_eq!(run(&["typeset", "--doc", DOC])["typeset"], 3);
+    let doc = read_doc();
+    let page = &doc["pages"][0];
+    let rendered = load(&page["final"]).into_rgb8();
+    let sizes = [2, 3].map(|i| page["regions"][i]["typeset"]["font_size"].as_f64().unwrap());
+    assert!(sizes.iter().all(|&size| size >= 17.0), "{sizes:?}");
+    assert!((sizes[0] - sizes[1]).abs() <= 2.0, "{sizes:?}");
+    for (x, y, p) in cleaned
+        .enumerate_pixels()
+        .filter(|(x, y, p)| *p != rendered.get_pixel(*x, *y))
+    {
+        if y < 100 {
+            assert!(
+                !((119..134).contains(&x) && (38..50).contains(&y)),
+                "{x}, {y}"
+            );
+        } else {
+            let cx = if x < 105 { 60 } else { 151 };
+            assert!(
+                x.abs_diff(cx).pow(2) + y.abs_diff(150).pow(2) < 38 * 38,
+                "{x}, {y}: {p:?}"
+            );
+        }
+    }
+    assert_eq!(
+        run(&["qa", "check", "--doc", DOC])["artwork_pixels_changed"],
+        0
+    );
+}
+
+#[test]
+fn panel_clipped_balloon_letters_beyond_the_corner_without_touching_the_border() {
+    use image::{Rgb, RgbImage};
+
+    let fixture = Fixture::staged();
+    let input = fixture.cwd.join("source");
+    fs::create_dir(&input).unwrap();
+    let source = RgbImage::from_fn(130, 122, |x, y| {
+        let wall = x >= 86 - y.abs_diff(60) / 5 && x < 118 && (18..106).contains(&y);
+        let ink = (28..32).contains(&x) && (26..29).contains(&y);
+        Rgb([if wall || ink { 24 } else { 245 }; 3])
+    });
+    source.save(input.join("page.png")).unwrap();
+    let run = |args: &[&str]| {
+        let output = fixture.run(args, b"");
+        success(&output);
+        json_stdout(&output)
+    };
+    const DOC: &str = "work/comic.json";
+    run(&["import", "source", "--out", "work"]);
+    let path = fixture.cwd.join(DOC);
+    let read_doc = || serde_json::from_slice::<Value>(&fs::read(&path).unwrap()).unwrap();
+    let mut doc = read_doc();
+    doc["pages"][0]["panels"] = json!([{"bbox":[18,18,100,88]}]);
+    doc["pages"][0]["regions"] = json!([
+        {"id":"edge", "bbox":[26,23,9,9], "kind":"speech", "source_text":"Yes", "target_text":"باشه."}
+    ]);
+    fs::write(&path, serde_json::to_vec(&doc).unwrap()).unwrap();
+    run(&["mask", "--doc", DOC]);
+    let doc = read_doc();
+    let balloon = &doc["pages"][0]["regions"][0]["balloon"];
+    assert_eq!(balloon["bounds"][0], 18);
+    assert_eq!(balloon["bounds"][3], 88);
+    run(&["clean", "--doc", DOC]);
+    assert_eq!(run(&["typeset", "--doc", DOC])["typeset"], 1);
+    let doc = read_doc();
+    let page = &doc["pages"][0];
+    let layout = &page["regions"][0]["typeset"];
+    assert!(layout["font_size"].as_f64().unwrap() >= 16.0);
+    assert!(layout["ink_box"][1].as_u64().unwrap() > 32);
+    let rendered = image::open(
+        fixture
+            .cwd
+            .join("work")
+            .join(page["final"].as_str().unwrap()),
+    )
+    .unwrap()
+    .into_rgb8();
+    for (x, y, p) in source.enumerate_pixels() {
+        if x < 18 || x >= 86 - y.abs_diff(60) / 5 || !(18..106).contains(&y) {
+            assert_eq!(rendered.get_pixel(x, y), p, "{x}, {y}");
+        }
+    }
+}
+
+#[test]
 fn install_scope_and_path_aliases_reach_the_installer() {
     let fixture = Fixture::staged();
     let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

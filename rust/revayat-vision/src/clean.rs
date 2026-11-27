@@ -1,6 +1,9 @@
 use crate::{
-    Result, VisionError, gray, luminance,
-    masks::{Balloon, MaskOptions, RegionMask, balloon_interior, region_mask},
+    Rect, Result, VisionError, gray, luminance,
+    masks::{
+        Balloon, MaskOptions, RegionMask, balloon_paper, inset_balloon, page_luminance,
+        region_mask_with_interior,
+    },
     same_geometry,
 };
 use image::{GrayImage, Luma, Rgb, RgbImage, imageops};
@@ -18,7 +21,7 @@ pub enum CleanStrategy {
 #[derive(Debug, Clone)]
 pub struct CleanedPage {
     pub image: RgbImage,
-    /// Exact authorization, including the dot sweep, in full-page coordinates.
+    /// Exact authorization in full-page coordinates.
     pub mask: GrayImage,
     pub strategies: Vec<CleanStrategy>,
 }
@@ -32,27 +35,46 @@ pub fn choose_strategy(
     if let Some(m) = allowed {
         same_geometry(m.dimensions(), mask.dimensions())?;
     }
-    let mut count = 0.0;
+    Ok(uniform_color(crop.enumerate_pixels().filter_map(
+        |(x, y, p)| {
+            (mask.get_pixel(x, y)[0] == 0 && allowed.is_none_or(|m| m.get_pixel(x, y)[0] != 0))
+                .then_some(p.0)
+        },
+    )))
+}
+
+fn uniform_color(samples: impl Iterator<Item = [u8; 3]>) -> Option<Rgb<u8>> {
+    let mut count = 0u64;
     let mut sum = [0.0; 3];
     let mut squares = [0.0; 3];
-    for (x, y, p) in crop.enumerate_pixels() {
-        if mask.get_pixel(x, y)[0] != 0 || allowed.is_some_and(|m| m.get_pixel(x, y)[0] == 0) {
-            continue;
-        }
-        count += 1.0;
-        for (i, v) in p.0.into_iter().map(f64::from).enumerate() {
+    let mut histogram = [[0u64; 256]; 3];
+    for pixel in samples {
+        count += 1;
+        for (i, sample) in pixel.into_iter().enumerate() {
+            histogram[i][usize::from(sample)] += 1;
+            let v = f64::from(sample);
             sum[i] += v;
             squares[i] += v * v;
         }
     }
-    if count < 24.0 {
-        return Ok(None);
+    if count < 24
+        || (0..3).any(|i| {
+            let mean = sum[i] / count as f64;
+            squares[i] / count as f64 - mean * mean > 9.0_f64.powi(2)
+        })
+    {
+        return None;
     }
-    let mean = sum.map(|x| x / count);
-    if (0..3).any(|i| squares[i] / count - mean[i] * mean[i] > 9.0_f64.powi(2)) {
-        return Ok(None);
-    }
-    Ok(Some(Rgb(mean.map(|x| x.round() as u8))))
+    Some(Rgb(histogram.map(|channel| {
+        let mut seen = 0;
+        channel
+            .into_iter()
+            .position(|n| {
+                seen += n;
+                seen > count / 2
+            })
+            .unwrap_or_default() as u8
+    })))
 }
 
 /// Composites an external or locally inpainted result strictly within its authorization.
@@ -311,40 +333,78 @@ fn sweep_speckles(
 
 /// Erase source glyphs and isolated punctuation from the enclosed balloon interiors.
 pub fn clean_page_bubbles(original: &RgbImage, balloons: &[Balloon]) -> Result<CleanedPage> {
+    clean_page_bubbles_except(original, balloons, &[])
+}
+
+pub fn clean_page_bubbles_except(
+    original: &RgbImage,
+    balloons: &[Balloon],
+    excluded: &[Rect],
+) -> Result<CleanedPage> {
     same_geometry(original.dimensions(), original.dimensions())?;
     let mut image = original.clone();
     let mut mask = GrayImage::new(original.width(), original.height());
-    let mut strategies = Vec::new();
+    let mut strategies = Vec::with_capacity(balloons.len());
+    if balloons.is_empty() {
+        return Ok(CleanedPage {
+            image,
+            mask,
+            strategies,
+        });
+    }
+    let luma = page_luminance(original);
     for &balloon in balloons {
-        let interior = balloon_interior(original, balloon, 2)?;
-        if !interior.pixels.pixels().any(|p| p[0] != 0) {
+        let (paper, open) = balloon_paper(original, balloon)?;
+        let mut interior = inset_balloon(&paper, 2)?;
+        if !interior.pixels.iter().any(|&p| p != 0) {
             return Err(VisionError::invalid(format!(
                 "balloon {:?} has no safe interior",
                 balloon.bounds.0
             )));
         }
-        let local = region_mask(
-            original,
+        interior.exclude(excluded);
+        let b = interior.bounds;
+        if !open && let Some(color) = flat_balloon_color(original, &interior, balloon.dark) {
+            for (x, y, _) in interior
+                .pixels
+                .enumerate_pixels()
+                .filter(|(_, _, p)| p[0] != 0)
+            {
+                image.put_pixel(b.x() + x, b.y() + y, color);
+                mask.put_pixel(b.x() + x, b.y() + y, Luma([255]));
+            }
+            strategies.push(CleanStrategy::Flat);
+            continue;
+        }
+        let mut local = region_mask_with_interior(
+            &luma,
             balloon.text_bounds,
-            Some(balloon),
+            Some(&paper),
             balloon.dark,
-            MaskOptions::default(),
+            MaskOptions {
+                full_balloon: !open,
+                pad: if open {
+                    0.3
+                } else {
+                    MaskOptions::default().pad
+                },
+                ..MaskOptions::default()
+            },
         )?;
         let allowed = GrayImage::from_fn(local.bounds.width(), local.bounds.height(), |x, y| {
             let (x, y) = (x + local.bounds.x(), y + local.bounds.y());
-            if interior.bounds.contains(x, y) {
-                *interior
-                    .pixels
-                    .get_pixel(x - interior.bounds.x(), y - interior.bounds.y())
+            if b.contains(x, y) {
+                *interior.pixels.get_pixel(x - b.x(), y - b.y())
             } else {
                 Luma([0])
             }
         });
-        let mut local = local;
         for (p, a) in local.pixels.pixels_mut().zip(allowed.pixels()) {
-            if a[0] == 0 {
-                *p = Luma([0]);
-            }
+            p[0] = p[0].min(a[0]);
+        }
+        if local.pixels.iter().all(|&p| p != 0) {
+            strategies.push(CleanStrategy::NoInk);
+            continue;
         }
         let (next, strategy) = clean_region(&image, &local, Some(&allowed), None)?;
         image = next;
@@ -357,6 +417,27 @@ pub fn clean_page_bubbles(original: &RgbImage, balloons: &[Balloon]) -> Result<C
         mask,
         strategies,
     })
+}
+
+fn flat_balloon_color(page: &RgbImage, interior: &RegionMask, dark: bool) -> Option<Rgb<u8>> {
+    let mut paper = 0;
+    let mut total = 0;
+    let samples = interior
+        .pixels
+        .enumerate_pixels()
+        .filter_map(|(x, y, mask)| {
+            if mask[0] == 0 {
+                return None;
+            }
+            total += 1;
+            let p = page.get_pixel(x + interior.bounds.x(), y + interior.bounds.y());
+            let luma = luminance(p);
+            let is_paper = if dark { luma < 55 } else { luma > 200 };
+            paper += u64::from(is_paper);
+            is_paper.then_some(p.0)
+        });
+    let color = uniform_color(samples);
+    (paper * 2 > total).then_some(color).flatten()
 }
 
 #[cfg(test)]

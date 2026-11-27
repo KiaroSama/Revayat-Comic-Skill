@@ -31,6 +31,17 @@ impl RegionMask {
         }
         Ok(())
     }
+
+    pub fn exclude(&mut self, regions: &[Rect]) {
+        for area in regions.iter().filter_map(|r| self.bounds.intersection(*r)) {
+            for y in area.y()..area.bottom() {
+                for x in area.x()..area.right() {
+                    self.pixels
+                        .put_pixel(x - self.bounds.x(), y - self.bounds.y(), Luma([0]));
+                }
+            }
+        }
+    }
 }
 
 pub(crate) fn from_raw(size: (u32, u32), bytes: Vec<u8>) -> Result<GrayImage> {
@@ -102,21 +113,21 @@ fn oriented_window(b: Rect, dark: bool, luma: impl Fn(u32, u32) -> u8) -> GrayIm
 
 /// The enclosed paper, including ink holes, with a wall clearance in page pixels.
 pub fn balloon_interior(page: &RgbImage, balloon: Balloon, inset: u32) -> Result<RegionMask> {
+    let (paper, _) = balloon_paper(page, balloon)?;
+    inset_balloon(&paper, inset)
+}
+
+pub(crate) fn balloon_paper(page: &RgbImage, balloon: Balloon) -> Result<(RegionMask, bool)> {
     balloon.bounds.checked(page.dimensions())?;
     balloon.text_bounds.checked(page.dimensions())?;
-    let paper = seeded_interior(balloon, None, |x, y| luminance(page.get_pixel(x, y)))?;
-    if inset == 0 {
-        Ok(paper)
-    } else {
-        inset_balloon(&paper, inset)
-    }
+    seeded_interior(balloon, None, |x, y| luminance(page.get_pixel(x, y)))
 }
 
 fn seeded_interior(
     balloon: Balloon,
     clip: Option<Rect>,
     luma: impl Fn(u32, u32) -> u8,
-) -> Result<RegionMask> {
+) -> Result<(RegionMask, bool)> {
     let b = balloon.bounds;
     let empty = || RegionMask {
         bounds: b,
@@ -127,7 +138,7 @@ fn seeded_interior(
         .intersection(b)
         .filter(|_| b.width().min(b.height()) >= 6)
     else {
-        return Ok(empty());
+        return Ok((empty(), false));
     };
     let oriented = oriented_window(b, balloon.dark, luma);
     let paper = |threshold| {
@@ -185,7 +196,7 @@ fn seeded_interior(
             tight.right() == b.width(),
         ];
         let edge_count = edges.into_iter().filter(|&edge| edge).count();
-        if edge_count > 2
+        if edge_count == 4
             || (narrow_tail && edge_count != 0)
             || clip.is_some_and(|clip| {
                 edges
@@ -208,7 +219,8 @@ fn seeded_interior(
         };
         if (clip.is_some() || narrow_tail)
             && (count * 2 < tight.area()
-                || count > balloon.text_bounds.area().saturating_mul(area_factor))
+                || (edge_count == 0
+                    && count > balloon.text_bounds.area().saturating_mul(area_factor)))
         {
             continue;
         }
@@ -235,15 +247,18 @@ fn seeded_interior(
         } else {
             fill_enclosed(&mut candidate);
         }
-        return Ok(RegionMask {
-            bounds: b,
-            pixels: candidate,
-        });
+        return Ok((
+            RegionMask {
+                bounds: b,
+                pixels: candidate,
+            },
+            edge_count != 0,
+        ));
     }
-    Ok(empty())
+    Ok((empty(), false))
 }
 
-fn inset_balloon(interior: &RegionMask, inset: u32) -> Result<RegionMask> {
+pub(crate) fn inset_balloon(interior: &RegionMask, inset: u32) -> Result<RegionMask> {
     let b = interior.bounds;
     let mut paper = interior.pixels.clone();
     if inset == 0 {
@@ -324,18 +339,23 @@ fn resolve_balloon_paper(
             text_bounds: seed,
             dark,
         };
-        let paper = seeded_interior(candidate, Some(clip), &luma)?;
-        if inset_balloon(&paper, 1)?.pixels.iter().any(|&p| p != 0) {
+        let (paper, open) = seeded_interior(candidate, Some(clip), &luma)?;
+        if (!open
+            || paper.pixels.iter().filter(|&&p| p != 0).count() as u64 * 10 <= clip.area() * 8)
+            && inset_balloon(&paper, 2)?.pixels.iter().any(|&p| p != 0)
+        {
             return Ok(Some((candidate, paper)));
         }
         used = Some(bounds);
     }
     let pad = seed.width().max(seed.height()).max(32);
-    for pad in [pad, pad.saturating_mul(2)] {
-        let bounds = seed
-            .expand(pad, size.0, size.1)
+    let window = |pad| {
+        seed.expand(pad, size.0, size.1)
             .intersection(clip)
-            .unwrap_or(clip);
+            .unwrap_or(clip)
+    };
+    let nearby = window(pad);
+    for bounds in [nearby, window(pad.saturating_mul(2)), clip] {
         if used.replace(bounds) == Some(bounds) {
             continue;
         }
@@ -344,7 +364,10 @@ fn resolve_balloon_paper(
             text_bounds: seed,
             dark,
         };
-        let inside = seeded_interior(probe, Some(clip), &luma)?;
+        let (inside, open) = seeded_interior(probe, Some(clip), &luma)?;
+        if open && panel.is_none() {
+            continue;
+        }
         let Some(tight) = mask_bounds(&inside.pixels) else {
             continue;
         };

@@ -5,14 +5,17 @@ use serde::{Deserialize, Serialize};
 use std::{borrow::Cow, sync::LazyLock};
 
 const FA: &str = "ء-غف-يٮ-ۓۺ-ۿ";
-const STRUCTURED: &str = r"(?:https?://|www\.)\S+|[\w.+-]+@[\w-]+\.[\w.-]+|(?<![\w.,٫٬])[+\-−]?(?:\d+(?:[.,٫٬:/-]\d+)+(?:[eE][+\-−]?\d+)?|\d+[eE][+\-−]?\d+|[.,٫]\d+(?:[eE][+\-−]?\d+)?)(?!\d)";
+const LINKS: &str = r"(?:https?://|www\.)\S+|[\w.+-]+@[\w-]+\.[\w.-]+";
+const NUMBER: &str = r"(?<![\w.,٫٬])[+\-−]?(?:\d+(?:[.,٫٬:/-]\d+)+(?:[eE][+\-−]?\d+)?|\d+[eE][+\-−]?\d+|[.,٫]\d+(?:[eE][+\-−]?\d+)?)(?!\d)";
 static PROTECTED: LazyLock<std::result::Result<Fancy, fancy_regex::Error>> =
-    LazyLock::new(|| Fancy::new(&format!(r"(?i){STRUCTURED}|\b[A-Za-z][\w.'’-]*\b")));
+    LazyLock::new(|| Fancy::new(&format!(r"(?i){LINKS}|{NUMBER}|\b[A-Za-z][\w.'’-]*\b")));
 static ADDRESSES: LazyLock<std::result::Result<Fancy, fancy_regex::Error>> =
-    LazyLock::new(|| Fancy::new(&format!(r"(?i){STRUCTURED}")));
+    LazyLock::new(|| Fancy::new(&format!(r"(?i){LINKS}|{NUMBER}")));
+static LINK: LazyLock<std::result::Result<Fancy, fancy_regex::Error>> =
+    LazyLock::new(|| Fancy::new(&format!(r"(?i){LINKS}")));
 static RULES: LazyLock<std::result::Result<Vec<Fancy>, fancy_regex::Error>> = LazyLock::new(|| {
     [
-    format!(r"(?<=[{FA}۰-۹]) *,"),format!(r"(?<=[{FA}۰-۹]) *;"),format!(r"(?<=[{FA}۰-۹]) *\?"),
+    format!(r"(?<=[{FA}0-9۰-۹]) *,"),format!(r"(?<=[{FA}0-9۰-۹]) *;"),format!(r"(?<=[{FA}0-9۰-۹]) *\?"),
     format!(r"[ \t]+(?!…[{FA}])([،؛؟!:.»…])"),format!(r"([،؛؟!:])(?=[{FA}])"),r"«\s+|\s+»".into(),r"([!؟])\1{2,}".into(),
     format!(r"([{FA}]{{2,}}) +(های|ها)(?= +(?:را|ی)\b)"),
     format!(r"([{FA}]{{2,}}) +(هایشان|هایتان|هایمان|هایی|هایم|هایت|هایش)\b"),r"(?<![\w.:/-])[0-9]+(?![\w.:/-])".into(),
@@ -31,6 +34,7 @@ static LATIN: LazyLock<std::result::Result<Regex, regex::Error>> =
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Digits {
     #[default]
+    Latin,
     Persian,
     Keep,
 }
@@ -46,7 +50,7 @@ pub struct Options {
 impl Default for Options {
     fn default() -> Self {
         Self {
-            digits: Digits::Persian,
+            digits: Digits::default(),
             quotes: true,
             ellipsis: true,
             zwnj: true,
@@ -124,6 +128,40 @@ fn pair_quotes(text: &str) -> Result<String> {
     Ok(out.into_iter().collect())
 }
 
+fn normalize_digits(text: &str, digits: Digits) -> Result<Cow<'_, str>> {
+    let convert = |c| match (digits, c) {
+        (Digits::Latin, '٠'..='٩') => {
+            char::from_u32(c as u32 - '٠' as u32 + '0' as u32).unwrap_or(c)
+        }
+        (Digits::Latin, '۰'..='۹') => {
+            char::from_u32(c as u32 - '۰' as u32 + '0' as u32).unwrap_or(c)
+        }
+        (Digits::Persian, '٠'..='٩') => {
+            char::from_u32(c as u32 - '٠' as u32 + '۰' as u32).unwrap_or(c)
+        }
+        _ => c,
+    };
+    if !text.chars().any(|c| convert(c) != c) {
+        return Ok(Cow::Borrowed(text));
+    }
+    Ok(Cow::Owned(
+        parts(text, regex(&*LINK)?)?
+            .into_iter()
+            .flat_map(|(guard, span)| {
+                span.chars()
+                    .map(move |c| if guard { c } else { convert(c) })
+            })
+            .collect(),
+    ))
+}
+
+fn digits_changed(text: &str, fixed: &str) -> bool {
+    let is_digit = |c: &char| matches!(c, '0'..='9' | '٠'..='٩' | '۰'..='۹');
+    text.chars()
+        .filter(is_digit)
+        .ne(fixed.chars().filter(is_digit))
+}
+
 fn fix_segment(text: &str, o: Options, persian_line: bool) -> Result<String> {
     let mut t = text
         .chars()
@@ -133,7 +171,6 @@ fn fix_segment(text: &str, o: Options, persian_line: bool) -> Result<String> {
                 'ك' => 'ک',
                 '\u{a0}' => ' ',
                 'ـ' | '\u{200b}' | '\u{feff}' => return None,
-                '٠'..='٩' => char::from_u32(c as u32 - 0x660 + 0x6f0).unwrap_or(c),
                 _ => c,
             })
         })
@@ -152,9 +189,13 @@ fn fix_segment(text: &str, o: Options, persian_line: bool) -> Result<String> {
             .into_owned();
     }
     if o.punctuation {
-        for (r, repl) in rules.iter().zip(["،", "؛", "؟", "$1", "$1 "]) {
-            t = r.replace_all(&t, repl).into_owned();
+        if persian_line {
+            for (r, repl) in rules[..3].iter().zip(["،", "؛", "؟"]) {
+                t = r.replace_all(&t, repl).into_owned();
+            }
         }
+        t = rules[3].replace_all(&t, "$1").into_owned();
+        t = rules[4].replace_all(&t, "$1 ").into_owned();
         t = rules[5]
             .replace_all(&t, |c: &fancy_regex::Captures<'_, str>| {
                 c[0].trim().to_owned()
@@ -171,7 +212,7 @@ fn fix_segment(text: &str, o: Options, persian_line: bool) -> Result<String> {
 }
 
 pub fn fix_line(text: &str, options: Options) -> Result<String> {
-    let mut text = text
+    let mut text = normalize_digits(text, options.digits)?
         .chars()
         .filter(|c| !matches!(c,'\x00'..='\x08'|'\x0b'..='\x1f'|'\x7f'))
         .collect::<String>();
@@ -235,6 +276,24 @@ pub fn lint_acknowledged(
     acknowledged: &[&str],
     spans: Option<&[&str]>,
 ) -> Result<Vec<Issue>> {
+    lint_inner(text, acknowledged, spans, None)
+}
+
+pub fn lint_with_digits(
+    text: &str,
+    acknowledged: &[&str],
+    spans: Option<&[&str]>,
+    digits: Digits,
+) -> Result<Vec<Issue>> {
+    lint_inner(text, acknowledged, spans, Some(digits))
+}
+
+fn lint_inner(
+    text: &str,
+    acknowledged: &[&str],
+    spans: Option<&[&str]>,
+    digits: Option<Digits>,
+) -> Result<Vec<Issue>> {
     if text.trim().is_empty() {
         return Ok(Vec::new());
     }
@@ -254,11 +313,25 @@ pub fn lint_acknowledged(
         );
     }
     let visible = unprotected(text)?;
-    if visible.contains(['ي', 'ك', 'ى', 'ـ']) || visible.chars().any(|c| matches!(c, '٠'..='٩'))
-    {
+    let wrong_digits = match digits {
+        Some(Digits::Keep) => false,
+        Some(Digits::Latin) => normalize_digits(text, Digits::Latin)? != text,
+        Some(Digits::Persian) => digits_changed(
+            text,
+            &fix_text(
+                text,
+                Options {
+                    digits: Digits::Persian,
+                    ..Options::default()
+                },
+            )?,
+        ),
+        None => visible.chars().any(|c| matches!(c, '٠'..='٩')),
+    };
+    if visible.contains(['ي', 'ك', 'ى', 'ـ']) || wrong_digits {
         note(
             "arabic-forms",
-            "Arabic yeh/kaf/tatweel or Arabic-Indic digits remain",
+            "Arabic letter variants or digits outside the selected style remain",
         );
     }
     let (opens, closes) = (visible.matches('«').count(), visible.matches('»').count());

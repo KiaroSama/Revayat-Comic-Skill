@@ -6,16 +6,16 @@
 
 **ترجمهٔ مانگا، مانهوا، مانهوای چینی و کمیک به فارسی، و تحویل CBZ یا PDF بی‌افت با اثبات دست‌نخوردگی نقاشی صفحه.**
 
-[![وضعیت گردش‌کار CI در GitHub Actions](https://img.shields.io/github/actions/workflow/status/KiaroSama/Revayat-Comic-Skill/ci.yml?branch=main&style=flat-square&label=CI&color=16a34a)](.github/workflows/ci.yml)
-[![مجوز GPL نسخهٔ ۳ یا بالاتر](https://img.shields.io/github/license/KiaroSama/Revayat-Comic-Skill?style=flat-square&color=2563eb)](LICENSE)
-[![آخرین برچسب نسخه در گیت‌هاب](https://img.shields.io/github/v/tag/KiaroSama/Revayat-Comic-Skill?style=flat-square&label=version&color=ea580c)](#releases-and-tags)
-[![آخرین انتشار گیت‌هاب](https://img.shields.io/github/v/release/KiaroSama/Revayat-Comic-Skill?style=flat-square&label=release&color=dc2626)](https://github.com/KiaroSama/Revayat-Comic-Skill/releases)
+[![وضعیت گردش‌کار CI در GitHub Actions](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/ci.yml/badge.svg?branch=main)](.github/workflows/ci.yml)
+[![مجوز GPL نسخهٔ ۳ یا بالاتر](https://img.shields.io/badge/license-GPL--3.0-2563eb?style=flat-square)](LICENSE)
+[![آخرین برچسب نسخه در گیت‌هاب](https://img.shields.io/badge/version-v2.0.2-ea580c?style=flat-square)](#releases-and-tags)
+[![آخرین انتشار گیت‌هاب](https://img.shields.io/badge/release-v2.0.2-dc2626?style=flat-square)](https://github.com/KiaroSama/Revayat-Comic-Skill/releases)
 [![آزمون‌های خودکار ورک‌اسپیس Cargo](https://img.shields.io/badge/tests-Cargo%20workspace-0d9488?style=flat-square)](#توسعه)
 [![نسخهٔ ثابت Rust 1.100.0](https://img.shields.io/badge/Rust-1.100.0-8b5cf6?style=flat-square)](rust-toolchain.toml)
 [![پلتفرم‌های پشتیبانی‌شده: لینوکس و ویندوز ۶۴ بیتی](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%28x64%20%7C%20arm64%29-0891b2?style=flat-square)](.github/workflows/ci.yml)
 [![نصب از پنج قالب افزونه یا باینری مستقل CLI](https://img.shields.io/badge/install-5%20plugins%20%7C%20CLI%20binary-4f46e5?style=flat-square)](#نصب)
 [![مستندات به انگلیسی و فارسی](https://img.shields.io/badge/docs-English%20%7C%20Persian-0284c7?style=flat-square)](README.md)
-[![حجم مخزن در گیت‌هاب](https://img.shields.io/github/repo-size/KiaroSama/Revayat-Comic-Skill?style=flat-square&color=ca8a04)](#توسعه)
+[![حجم مخزن در گیت‌هاب](https://img.shields.io/badge/repo%20size-2.5%20MiB-ca8a04?style=flat-square)](#توسعه)
 [![اجرا با Rust خالص بدون هیچ وابستگی پایتونی](https://img.shields.io/badge/runtime-pure%20Rust%20%7C%20zero%20Python-059669?style=flat-square)](#معماری)
 [![گردش‌کار شش‌مرحله‌ای چندعاملی و ویرایش برش‌ها](https://img.shields.io/badge/workflow-6%20agents%20%7C%20crop%20edits-7c3aed?style=flat-square)](skills/revayat-comic/references/multi-agent-workflow.md)
 [![راهنماهای لحن Humanizer ۴.۰ و فارسی همراه بسته](https://img.shields.io/badge/voice-Humanizer%204.0%20%7C%20Persian-b45309?style=flat-square)](skills/revayat-comic/references/voice/index.md)
@@ -33,7 +33,7 @@
 - خواندن، بررسی، رندر و ساخت PDF بی‌افت در Rust خالص با `lopdf`، `pdf-writer` و `hayro` به همراه کنترل بودجهٔ پیکسلی ماسک‌های شابلونی و Form XObject پیش از تخصیص حافظهٔ تصویر.
 - پشتیبانی بومی و خالص Rust از آرشیو CBR (`rars`)، CBZ (`zip`) و فایل بازبینی DOCX راست‌به‌چپ (`quick-xml`).
 - شکل‌دهی و راست‌به‌چپ‌سازی اصولی فارسی روی همهٔ سیستم‌عامل‌ها با `cosmic-text` (شکل‌دهی با HarfRust، ترتیب دوسویه با `unicode-bidi` و رندر با Swash) و قلم‌های وزیر همراه مخزن (`Regular`، `Medium` و `Bold`)، با حداقل فاصلهٔ سطر `1.38x`، پاک‌سازی کامل نقطه‌های جا‌مانده درون حباب و محافظ ضدتداخل متن.
-- برای ویرایش نوشته‌های روی جلد، عنوان فصل و افکت‌های صوتی (`fullpage-prompt`)، اول حباب‌های گفت‌وگو را خالی کنید. برش کوچکی از دور نوشته را با متن اصلیِ بررسی‌شده و متن دقیق فارسی به مدل بدهید. نوشتهٔ تأییدشده را در همان جای قبلی روی صفحه بنشانید.
+- برای ویرایش نوشته‌های روی جلد، عنوان فصل و افکت‌های صوتی (`fullpage-prompt`)، اول حباب‌های گفت‌وگو را خالی کنید. نوشته را با تمام سایه‌ها و دورخط‌هایش ببرید و دور آن `120-240` پیکسل از تصویر را نگه دارید. برش را با متن اصلیِ بررسی‌شده و متن دقیق فارسی به مدل بدهید و نتیجهٔ تأییدشده را سر جای خودش برگردانید.
 - گردش‌کار شش‌مرحله‌ای چندعاملی با قالب پرامپت آماده برای ترجمهٔ اولیه، صفحه‌آرایی، بازبینی، اعمال ترجمه، چک مجدد فایل و رفع اشکال، و بازبینی نهایی و تحویل، همراه با جست‌وجوی نام‌های رسمی شخصیت‌ها و اصطلاحات مجموعه پیش از شروع ترجمه.
 
 ## معماری
@@ -78,7 +78,7 @@
 
 فایل ZIP انتشار، برنامهٔ خط فرمان را در خود دارد. مهارت را از تعریف‌های افزونه در مخزن یا با [نصب‌کنندهٔ مهارت](install/README.md) نصب کنید و `revayat-comic` را در `PATH` نگه دارید.
 
-مخزن برای پنج نوع افزونه فایل تعریف نسخهٔ `2.0.1` دارد: Agent Plugins (`plugin.json` و `.agents/plugins/marketplace.json`)، Claude Code (`.claude-plugin/`)، Codex (`.codex-plugin/`)، Cursor (`.cursor-plugin/`) و Antigravity (`.antigravity-plugin/`).
+مخزن برای پنج نوع افزونه فایل تعریف نسخهٔ `2.0.2` دارد: Agent Plugins (`plugin.json` و `.agents/plugins/marketplace.json`)، Claude Code (`.claude-plugin/`)، Codex (`.codex-plugin/`)، Cursor (`.cursor-plugin/`) و Antigravity (`.antigravity-plugin/`).
 
 در Claude Code:
 
@@ -174,7 +174,7 @@ cp target/release/revayat-comic bin/revayat-comic
 - `review-docx --doc <comic.json> --out <review.docx>`: خروجی فایل Word دوزبانهٔ بازبینی با جهت راست‌به‌چپ.
 - `watermark --doc <comic.json> ...`: مشخص‌کردن کادر دقیق واترمارک مجاز برای حذف.
 - `batch plan|merge|status`: تقسیم فصل‌های بلند به بخش‌های موازی و ادغام امن.
-- `voice lint <file> --check --style` نگارش فارسی را بررسی می‌کند و `voice lookup <text>` واژه‌نامه را جست‌وجو می‌کند.
+- `voice lint <file> --check --style` نگارش فارسی را بررسی می‌کند و `voice lookup <text>` واژه‌نامه را جست‌وجو می‌کند. `falint` و `voice lint` به‌طور پیش‌فرض ارقام انگلیسی را به کار می‌برند. برای انتخاب ارقام فارسی، `--digits persian` را اضافه کنید.
 - `serve --stdio` سرور MCP را راه می‌اندازد. برای HTTP محلی، `REVAYAT_HTTP_TOKEN` را تنظیم کنید و `serve --http 127.0.0.1:8765` را اجرا کنید.
 - `ocr` و `translate`: کمک‌ابزار اختیاری مدل‌های میزبانی‌شده (نیازمند نشانی HTTPS و توکن Bearer).
 - `install` و `eval`: نصب تراکنشی مهارت و ارزیابی با نمونه‌های ساختگی.

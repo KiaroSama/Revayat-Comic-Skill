@@ -66,7 +66,7 @@ fn voice_keeps_latin_literals_and_ambiguous_comparatives() -> Result<(), Box<dyn
             .iter()
             .any(|item| item.kind == "maybe_comparative_tar")
     );
-    let latin = voice::lint_persian(&fixed.fixed, voice::Digits::Latin, false)?;
+    let latin = voice::lint_persian(&fixed.fixed, voice::Digits::default(), false)?;
     assert!(latin.fixed.contains("عدد 05 و 12"));
     assert_eq!(
         voice::lint_persian("۱۲ و ٠٥", voice::Digits::Keep, false)?.fixed,

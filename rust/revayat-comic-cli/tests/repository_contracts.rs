@@ -75,6 +75,115 @@ fn tracked_text_and_packaged_skill_have_valid_utf8() {
 }
 
 #[test]
+fn readme_badges_and_plugin_versions_match_the_cli_release() {
+    let repo = root();
+    let version = env!("CARGO_PKG_VERSION");
+    let ci = "https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/ci.yml/badge.svg?branch=main";
+    let shields = "https://img.shields.io/badge/";
+    for (path, size_anchor, tail) in [
+        (
+            "README.md",
+            "#development",
+            ["## Author", "## License", "## Donate"],
+        ),
+        (
+            "README.fa.md",
+            "#توسعه",
+            ["## نویسنده", "## مجوز", "## حمایت مالی"],
+        ),
+    ] {
+        let text = fs::read_to_string(repo.join(path)).unwrap();
+        assert!(!text.contains("https://img.shields.io/github/"), "{path}");
+        let badges: Vec<_> = text
+            .lines()
+            .filter(|line| line.starts_with("[!["))
+            .map(|line| line.split_once("](").unwrap().1.split_once(")](").unwrap())
+            .map(|(image, target)| (image, target.strip_suffix(')').unwrap()))
+            .collect();
+        assert_eq!(badges.len(), 14, "{path}");
+        assert_eq!(badges[0], (ci, ".github/workflows/ci.yml"), "{path}");
+        assert_eq!(
+            badges[1],
+            (
+                "https://img.shields.io/badge/license-GPL--3.0-2563eb?style=flat-square",
+                "LICENSE"
+            ),
+            "{path}"
+        );
+        assert_eq!(
+            badges[2],
+            (
+                format!("{shields}version-v{version}-ea580c?style=flat-square").as_str(),
+                "#releases-and-tags"
+            ),
+            "{path}"
+        );
+        assert_eq!(
+            badges[3],
+            (
+                format!("{shields}release-v{version}-dc2626?style=flat-square").as_str(),
+                "https://github.com/KiaroSama/Revayat-Comic-Skill/releases"
+            ),
+            "{path}"
+        );
+        assert_eq!(
+            badges[9],
+            (
+                "https://img.shields.io/badge/repo%20size-2.5%20MiB-ca8a04?style=flat-square",
+                size_anchor
+            ),
+            "{path}"
+        );
+        assert_eq!(
+            badges[13],
+            (
+                "https://img.shields.io/badge/Support-donations-d04a9a?style=flat-square",
+                "#donate"
+            ),
+            "{path}"
+        );
+        let colors: BTreeSet<_> = badges[1..]
+            .iter()
+            .map(|(image, _)| {
+                let label = image.strip_prefix(shields).unwrap();
+                let payload = label.strip_suffix("?style=flat-square").unwrap();
+                let (_, color) = payload.rsplit_once('-').unwrap();
+                assert_eq!(color.len(), 6, "{path}: {image}");
+                assert!(
+                    color.bytes().all(|b| b.is_ascii_hexdigit()),
+                    "{path}: {image}"
+                );
+                color
+            })
+            .collect();
+        assert_eq!(colors.len(), 13, "{path}: duplicate badge colors");
+        let headings: Vec<_> = text
+            .lines()
+            .filter(|line| line.starts_with("## "))
+            .collect();
+        assert!(headings.ends_with(&tail), "{path}: README ending order");
+    }
+    for (path, pointer) in [
+        ("plugin.json", "/version"),
+        (".claude-plugin/plugin.json", "/version"),
+        (".claude-plugin/marketplace.json", "/plugins/0/version"),
+        (".cursor-plugin/plugin.json", "/version"),
+        (".codex-plugin/plugin.json", "/version"),
+        (".antigravity-plugin/plugin.json", "/version"),
+    ] {
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(repo.join(path)).unwrap()).unwrap();
+        assert_eq!(
+            manifest
+                .pointer(pointer)
+                .and_then(serde_json::Value::as_str),
+            Some(version),
+            "{path}"
+        );
+    }
+}
+
+#[test]
 fn every_qa_registry_code_has_a_documented_recovery_action() {
     let guide = fs::read_to_string(root().join("skills/revayat-comic/SKILL.md")).unwrap();
     for codes in [
