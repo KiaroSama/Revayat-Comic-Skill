@@ -264,8 +264,10 @@ enum Stage {
     Clean {
         #[command(flatten)]
         doc: Doc,
-        #[arg(long, conflicts_with = "external_dir")]
+        /// Clean only balloon regions, including approved external repairs when needed.
+        #[arg(long)]
         bubbles_only: bool,
+        /// Approved page repairs for solid balloon masks and editable on-art regions.
         #[arg(long, alias = "external")]
         external_dir: Option<PathBuf>,
     },

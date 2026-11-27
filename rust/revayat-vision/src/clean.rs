@@ -1,8 +1,8 @@
 use crate::{
     Rect, Result, VisionError, gray, luminance,
     masks::{
-        Balloon, MaskOptions, RegionMask, balloon_paper, inset_balloon, page_luminance,
-        region_mask_with_interior,
+        Balloon, MaskOptions, OPEN_BALLOON_PAD, RegionMask, balloon_paper, inset_balloon,
+        open_balloon_cleanup_window, page_luminance, region_mask_with_interior,
     },
     same_geometry,
 };
@@ -341,7 +341,20 @@ pub fn clean_page_bubbles_except(
     balloons: &[Balloon],
     excluded: &[Rect],
 ) -> Result<CleanedPage> {
+    clean_page_bubbles_with_external(original, balloons, excluded, None)
+}
+
+/// Use approved repair pixels when a balloon's local erase mask has no sampling area.
+pub fn clean_page_bubbles_with_external(
+    original: &RgbImage,
+    balloons: &[Balloon],
+    excluded: &[Rect],
+    external: Option<&RgbImage>,
+) -> Result<CleanedPage> {
     same_geometry(original.dimensions(), original.dimensions())?;
+    if let Some(repair) = external {
+        same_geometry(original.dimensions(), repair.dimensions())?;
+    }
     let mut image = original.clone();
     let mut mask = GrayImage::new(original.width(), original.height());
     let mut strategies = Vec::with_capacity(balloons.len());
@@ -384,7 +397,7 @@ pub fn clean_page_bubbles_except(
             MaskOptions {
                 full_balloon: !open,
                 pad: if open {
-                    0.3
+                    OPEN_BALLOON_PAD
                 } else {
                     MaskOptions::default().pad
                 },
@@ -402,14 +415,20 @@ pub fn clean_page_bubbles_except(
         for (p, a) in local.pixels.pixels_mut().zip(allowed.pixels()) {
             p[0] = p[0].min(a[0]);
         }
-        if local.pixels.iter().all(|&p| p != 0) {
-            strategies.push(CleanStrategy::NoInk);
-            continue;
-        }
-        let (next, strategy) = clean_region(&image, &local, Some(&allowed), None)?;
+        let repair = external.filter(|_| local.pixels.iter().all(|&p| p != 0));
+        let (next, strategy) = clean_region(&image, &local, Some(&allowed), repair)?;
         image = next;
         strategies.push(strategy);
         local.apply_to(&mut mask)?;
+        if open {
+            let window = open_balloon_cleanup_window(balloon, original.dimensions());
+            // Keep the balloon-scale speckle limit, but never authorize distant panel art.
+            for (x, y, pixel) in interior.pixels.enumerate_pixels_mut() {
+                if !window.contains(b.x() + x, b.y() + y) {
+                    pixel[0] = 0;
+                }
+            }
+        }
         sweep_speckles(original, &mut image, &mut mask, &interior, balloon.dark)?;
     }
     Ok(CleanedPage {

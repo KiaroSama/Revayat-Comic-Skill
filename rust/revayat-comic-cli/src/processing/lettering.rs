@@ -100,8 +100,13 @@ pub fn clean(path: &Path, bubbles_only: bool, external: Option<&Path>) -> Result
                     balloon_regions.push(index);
                 }
             }
-            let mut cleaned =
-                clean::clean_page_bubbles_except(&image, &balloons, &excluded).map_err(failed)?;
+            let mut cleaned = clean::clean_page_bubbles_with_external(
+                &image,
+                &balloons,
+                &excluded,
+                external.as_ref(),
+            )
+            .map_err(failed)?;
             for (index, strategy) in balloon_regions.into_iter().zip(&cleaned.strategies) {
                 let region = &mut page.regions[index];
                 if region.erase || region.state == Some(regions::RegionState::Erased) {
@@ -626,8 +631,8 @@ pub fn qa(path: &Path, strict: bool) -> Result<Value> {
             else {
                 continue;
             };
-            let mut interior =
-                revayat_vision::qachecks::balloon_text_interior(&image, balloon).map_err(failed)?;
+            let mut interior = revayat_vision::qachecks::balloon_cleanup_interior(&image, balloon)
+                .map_err(failed)?;
             interior.exclude(&excluded);
             let b = interior.bounds;
             let paper =

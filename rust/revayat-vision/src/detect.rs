@@ -1,6 +1,6 @@
 use crate::{
     Rect, Result, VisionError, gray, mask_bounds,
-    masks::{Balloon, balloon_interior},
+    masks::{Balloon, balloon_interior, masked_otsu_threshold},
 };
 use image::{GrayImage, Luma, RgbImage};
 use rayon::prelude::*;
@@ -321,7 +321,7 @@ fn free_lettering(
 ) -> Result<Vec<DetectedRegion>> {
     let (w, h) = oriented.dimensions();
     let side = f64::from(w.min(h));
-    let threshold = imageproc::contrast::otsu_level(oriented);
+    let threshold = masked_otsu_threshold(oriented, |_, _| true);
     let ink = GrayImage::from_fn(w, h, |x, y| {
         Luma([if oriented.get_pixel(x, y)[0] <= threshold {
             255
