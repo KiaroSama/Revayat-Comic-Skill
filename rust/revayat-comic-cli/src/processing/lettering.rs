@@ -267,9 +267,10 @@ pub fn typeset(path: &Path, external: Option<&Path>) -> Result<Value> {
                     && !bubble_kind(region)
                     && let Some(ext_img) = edited.as_ref()
                 {
+                    let region_box = bounds(region)?;
                     let base_bounds = match local_mask(&root, region)? {
-                        Some(m) => m.bounds,
-                        None => bounds(region)?,
+                        Some(m) => region_box.union(m.bounds),
+                        None => region_box,
                     };
                     let mut patch = masks::solid_region_patch(source.dimensions(), base_bounds, 6)
                         .map_err(failed)?;

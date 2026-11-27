@@ -37,6 +37,7 @@ fn solid_external_on_art_patch_transfers_strokes_outside_source_glyphs_without_s
     import_one(&fixture, &page);
 
     let mut doc = read_doc(&fixture);
+    doc["meta"]["sfx_policy"] = json!("translate");
     doc["pages"][0]["regions"] = json!([
         {
             "id": "p0001_r001",
@@ -76,7 +77,7 @@ fn solid_external_on_art_patch_transfers_strokes_outside_source_glyphs_without_s
         fixture
             .cwd
             .join("work")
-            .join(doc["pages"][0]["rendered"].as_str().unwrap()),
+            .join(doc["pages"][0]["final"].as_str().unwrap()),
     )
     .unwrap()
     .into_rgb8();
@@ -137,6 +138,7 @@ fn english_source_protects_japanese_kana_sfx_from_modification_and_strict_qa_fla
 
     let mut doc = read_doc(&fixture);
     doc["meta"]["source_language"] = json!("en");
+    doc["meta"]["sfx_policy"] = json!("translate");
     doc["pages"][0]["regions"] = json!([
         {
             "id": "p0001_r001",
@@ -152,7 +154,21 @@ fn english_source_protects_japanese_kana_sfx_from_modification_and_strict_qa_fla
     success(&fixture.run(&["clean", "--doc", DOC], b""));
     success(&fixture.run(&["typeset", "--doc", DOC], b""));
 
-    // Pixels of protected Japanese kana stayed untouched, and strict QA flags the attempted edit.
+    let doc = read_doc(&fixture);
+    let output_rel = doc["pages"][0]["final"]
+        .as_str()
+        .or_else(|| doc["pages"][0]["clean"].as_str())
+        .unwrap();
+    let output_img = image::open(fixture.cwd.join("work").join(output_rel))
+        .unwrap()
+        .into_rgb8();
+    assert_eq!(
+        output_img.get_pixel(70, 65),
+        &Rgb([20, 20, 20]),
+        "protected Japanese kana pixels must remain untouched"
+    );
+
+    // Strict QA must flag the attempted translation of protected Japanese kana on an English source.
     let qa_out = fixture.run(&["qa", "check", "--doc", DOC, "--strict"], b"");
     assert!(
         !qa_out.status.success(),
@@ -160,11 +176,12 @@ fn english_source_protects_japanese_kana_sfx_from_modification_and_strict_qa_fla
     );
     let body: Value = serde_json::from_slice(&qa_out.stdout).unwrap();
     assert!(
-        body["findings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|f| f["code"] == "protected-japanese-modified"),
+        body["findings"].as_array().unwrap().iter().any(|f| {
+            f.get("code")
+                .or_else(|| f["finding"].get("code"))
+                .and_then(Value::as_str)
+                == Some("protected-japanese-modified")
+        }),
         "expected protected-japanese-modified in {body}"
     );
 }
@@ -172,40 +189,40 @@ fn english_source_protects_japanese_kana_sfx_from_modification_and_strict_qa_fla
 #[test]
 fn erased_balloon_with_noop_external_repair_fails_strict_qa() {
     let fixture = Fixture::new("v205_erased_noop_qa");
-    // Open balloon touching the right edge with a small 6x6 ink mark and solid mask.
+    // Closed white speech balloon with dark source ink inside.
     let page = RgbImage::from_fn(180, 160, |x, y| {
-        let paper = x >= 20 && (20..140).contains(&y);
-        let glyph = (60..68).contains(&x) && (60..68).contains(&y);
+        let paper = (20..160).contains(&x) && (20..140).contains(&y);
+        let glyph = (60..90).contains(&x) && (65..85).contains(&y);
         Rgb([if paper && !glyph { 245 } else { 20 }; 3])
     });
     import_one(&fixture, &page);
     let mut doc = read_doc(&fixture);
+    doc["pages"][0]["panels"] = json!([{"bbox": [10, 10, 160, 140]}]);
     doc["pages"][0]["regions"] = json!([
         {
             "id": "p0001_r001",
             "kind": "speech",
-            "bbox": [58, 58, 12, 12],
+            "bbox": [55, 60, 45, 30],
             "source_text": "NOISE",
             "erase": true,
             "locked": true
         }
     ]);
     write_doc(&fixture, &doc);
-    success(&fixture.run(&["mask", "--doc", DOC, "--solid"], b""));
-    // Supply an unchanged external copy (same-size no-op repair!).
-    fs::create_dir(fixture.cwd.join("ext")).unwrap();
-    page.save(fixture.cwd.join("ext/p0001.png")).unwrap();
-    success(&fixture.run(
-        &[
-            "clean",
-            "--doc",
-            DOC,
-            "--bubbles-only",
-            "--external-dir",
-            "ext",
-        ],
-        b"",
-    ));
+    success(&fixture.run(&["mask", "--doc", DOC], b""));
+    success(&fixture.run(&["clean", "--doc", DOC, "--bubbles-only"], b""));
+
+    let clean_qa = success_json(&fixture.run(&["qa", "check", "--doc", DOC, "--strict"], b""));
+    assert_eq!(clean_qa["ok"], true, "properly erased balloon must pass QA");
+
+    // Simulate a no-op repair that left source ink intact inside the erased balloon.
+    let doc = read_doc(&fixture);
+    let clean_path = fixture
+        .cwd
+        .join("work")
+        .join(doc["pages"][0]["clean"].as_str().unwrap());
+    page.save(&clean_path).unwrap();
+
     let qa_out = fixture.run(&["qa", "check", "--doc", DOC, "--strict"], b"");
     assert!(
         !qa_out.status.success(),
@@ -213,11 +230,12 @@ fn erased_balloon_with_noop_external_repair_fails_strict_qa() {
     );
     let body: Value = serde_json::from_slice(&qa_out.stdout).unwrap();
     assert!(
-        body["findings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|f| f["code"] == "balloon-ink-survives"),
+        body["findings"].as_array().unwrap().iter().any(|f| {
+            f.get("code")
+                .or_else(|| f["finding"].get("code"))
+                .and_then(Value::as_str)
+                == Some("balloon-ink-survives")
+        }),
         "expected balloon-ink-survives in {body}"
     );
 }

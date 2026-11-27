@@ -76,6 +76,7 @@ pub fn qa(path: &Path, strict: bool) -> Result<Value> {
         for region in &page.regions {
             if protected_japanese(source_lang, region) {
                 let tampered = editable(region, document.policy())
+                    || !region.target_text.trim().is_empty()
                     || region.erase
                     || region.state == Some(regions::RegionState::Erased)
                     || rendered.as_ref().is_some_and(|final_page| {
