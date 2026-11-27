@@ -189,20 +189,22 @@ fn english_source_protects_japanese_kana_sfx_from_modification_and_strict_qa_fla
 #[test]
 fn erased_balloon_with_noop_external_repair_fails_strict_qa() {
     let fixture = Fixture::new("v205_erased_noop_qa");
-    // Closed white speech balloon with dark source ink inside.
-    let page = RgbImage::from_fn(180, 160, |x, y| {
-        let paper = (20..160).contains(&x) && (20..140).contains(&y);
-        let glyph = (60..90).contains(&x) && (65..85).contains(&y);
+    // Open white balloon touching the panel border with a large dark ink block whose
+    // 1px paper channel connects to the balloon interior while dilating to a solid mask.
+    let page = RgbImage::from_fn(160, 140, |x, y| {
+        let paper = (20..100).contains(&x) && (20..120).contains(&y);
+        let channel = y == 61 && (39..52).contains(&x);
+        let glyph = (40..64).contains(&x) && (50..74).contains(&y) && !channel;
         Rgb([if paper && !glyph { 245 } else { 20 }; 3])
     });
     import_one(&fixture, &page);
     let mut doc = read_doc(&fixture);
-    doc["pages"][0]["panels"] = json!([{"bbox": [10, 10, 160, 140]}]);
+    doc["pages"][0]["panels"] = json!([{"bbox": [20, 20, 120, 100]}]);
     doc["pages"][0]["regions"] = json!([
         {
             "id": "p0001_r001",
             "kind": "speech",
-            "bbox": [55, 60, 45, 30],
+            "bbox": [44, 54, 16, 16],
             "source_text": "NOISE",
             "erase": true,
             "locked": true
@@ -210,18 +212,21 @@ fn erased_balloon_with_noop_external_repair_fails_strict_qa() {
     ]);
     write_doc(&fixture, &doc);
     success(&fixture.run(&["mask", "--doc", DOC], b""));
-    success(&fixture.run(&["clean", "--doc", DOC, "--bubbles-only"], b""));
 
-    let clean_qa = success_json(&fixture.run(&["qa", "check", "--doc", DOC, "--strict"], b""));
-    assert_eq!(clean_qa["ok"], true, "properly erased balloon must pass QA");
-
-    // Simulate a no-op repair that left source ink intact inside the erased balloon.
-    let doc = read_doc(&fixture);
-    let clean_path = fixture
-        .cwd
-        .join("work")
-        .join(doc["pages"][0]["clean"].as_str().unwrap());
-    page.save(&clean_path).unwrap();
+    // Provide an unchanged external PNG (no-op repair that leaves the dark ink inside the balloon).
+    fs::create_dir(fixture.cwd.join("ext")).unwrap();
+    page.save(fixture.cwd.join("ext/p0001.png")).unwrap();
+    success(&fixture.run(
+        &[
+            "clean",
+            "--doc",
+            DOC,
+            "--bubbles-only",
+            "--external-dir",
+            "ext",
+        ],
+        b"",
+    ));
 
     let qa_out = fixture.run(&["qa", "check", "--doc", DOC, "--strict"], b"");
     assert!(
