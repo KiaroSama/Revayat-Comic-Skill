@@ -16,6 +16,7 @@ pub const STYLE_TOKENS: [&str; 6] = [
 #[serde(default)]
 pub struct TextStyle {
     pub bold: bool,
+    pub medium: bool,
     pub italic: bool,
     pub outline: bool,
     pub shadow: bool,
@@ -27,6 +28,8 @@ impl TextStyle {
     pub fn weight(&self) -> Weight {
         if self.bold || self.shout {
             Weight::BOLD
+        } else if self.medium {
+            Weight::MEDIUM
         } else {
             Weight::NORMAL
         }

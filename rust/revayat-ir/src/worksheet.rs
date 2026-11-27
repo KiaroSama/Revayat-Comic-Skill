@@ -407,6 +407,11 @@ pub fn merge_document(
         .collect();
     let folder = worksheet_folder(doc_path, doc, worksheets);
     let policy = doc.policy().to_owned();
+    let source_lang = doc
+        .meta
+        .get("source_language")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
     let direction = doc
         .meta
         .get("reading_direction")
@@ -481,6 +486,22 @@ pub fn merge_document(
             ));
         }
         merge(page, &reply, &policy, &direction, Some(&stamp), force)?;
+        for region in &page.regions {
+            if ir::foreign_script_guard(source_lang.as_deref(), &region.source_text)
+                == ir::ForeignScriptGuard::ProtectedJapanese
+                && (regions::translatable(region, &policy)
+                    || region.erase
+                    || region.state == Some(regions::RegionState::Erased))
+            {
+                return Err(IrError::refused(
+                    "protected_japanese_artwork",
+                    format!(
+                        "{}: Japanese kana/SFX on an English-source edition must be kept untouched",
+                        region.id
+                    ),
+                ));
+            }
+        }
         let after = ir::page_fingerprint(page);
         let content_after = content_fingerprint(page);
         page.extra.insert(

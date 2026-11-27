@@ -1,5 +1,9 @@
 mod lettering;
-pub use lettering::{clean, fullpage, qa, typeset};
+mod qa;
+mod review;
+pub use lettering::{clean, fullpage, typeset};
+pub use qa::qa;
+pub use review::{ReviewPackOptions, review_pack};
 
 use std::{
     fs,
@@ -382,7 +386,13 @@ fn region_mask(
     .map_err(failed)
 }
 
-fn mask_page(root: &Path, page: &mut PageRecord, policy: &str, solid: bool) -> Result<usize> {
+fn mask_page(
+    root: &Path,
+    page: &mut PageRecord,
+    policy: &str,
+    source_language: Option<&str>,
+    solid: bool,
+) -> Result<usize> {
     let image = original(root, page)?;
     let luma = masks::page_luminance(&image);
     drop(image);
@@ -391,7 +401,10 @@ fn mask_page(root: &Path, page: &mut PageRecord, policy: &str, solid: bool) -> R
     let neighbors = on_art_bounds(page)?;
     let mut count = 0;
     for region in &mut page.regions {
-        if !editable(region, policy) {
+        if !editable(region, policy)
+            || ir::foreign_script_guard(source_language, &region.source_text)
+                == ir::ForeignScriptGuard::ProtectedJapanese
+        {
             region.mask = None;
             region.extra.remove("mask_bounds");
             continue;
@@ -447,14 +460,20 @@ pub fn mask(path: &Path, solid: bool) -> Result<Value> {
         let capacity = thread::available_parallelism()
             .map_or(1, usize::from)
             .min(memory_cap);
+        let source_language = loaded
+            .document
+            .meta
+            .get("source_language")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
         let chunk_size = loaded.document.pages.len().div_ceil(capacity).max(1);
         let total = thread::scope(|scope| {
             let mut workers = Vec::new();
             for pages in loaded.document.pages.chunks_mut(chunk_size) {
-                let (root, policy) = (&root, &policy);
+                let (root, policy, source_language) = (&root, &policy, source_language.as_deref());
                 workers.push(scope.spawn(move || {
                     pages.iter_mut().try_fold(0, |sum, page| {
-                        Ok(sum + mask_page(root, page, policy, solid)?)
+                        Ok(sum + mask_page(root, page, policy, source_language, solid)?)
                     })
                 }));
             }

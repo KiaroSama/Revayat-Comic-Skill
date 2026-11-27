@@ -5,6 +5,7 @@ mod logging;
 mod processing;
 mod providers;
 mod stage;
+mod stage_args;
 
 use revayat_tools::server::{StageDispatcher, StageError};
 

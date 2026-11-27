@@ -12,6 +12,9 @@ mod state_actions;
 #[path = "cli/recheck27.rs"]
 mod recheck27;
 
+#[path = "cli/v205_quality.rs"]
+mod v205_quality;
+
 use std::{
     fs::{self, File},
     path::PathBuf,
@@ -157,7 +160,7 @@ fn help_and_version_report_supported_commands() {
     let fixture = Fixture::staged();
     let output = fixture.run(&["--version"], b"");
     success(&output);
-    assert_eq!(output.stdout, b"revayat-comic 2.0.4\n");
+    assert_eq!(output.stdout, b"revayat-comic 2.0.5\n");
     let output = fixture.run(&["--help"], b"");
     success(&output);
     let help = std::str::from_utf8(&output.stdout).unwrap();
@@ -319,7 +322,7 @@ fn doctor_reports_all_nine_kernels_without_path_tools() {
     let output = fixture.run(&["doctor", "--json"], b"");
     success(&output);
     let report = json_stdout(&output);
-    assert_eq!(report["version"], "2.0.4");
+    assert_eq!(report["version"], "2.0.5");
     assert_eq!(report["ok"], true);
     assert_eq!(report["kernels"].as_object().unwrap().len(), KERNELS.len());
     for name in KERNELS {
@@ -328,7 +331,7 @@ fn doctor_reports_all_nine_kernels_without_path_tools() {
     let human = fixture.run(&["doctor"], b"");
     success(&human);
     let text = std::str::from_utf8(&human.stdout).unwrap();
-    assert!(text.contains("2.0.4"));
+    assert!(text.contains("2.0.5"));
     assert!(KERNELS.iter().all(|name| text.contains(name)));
 }
 
@@ -540,7 +543,7 @@ fn run_logs_have_utc_names_and_do_not_leak_input_or_paths() {
         }
         for key in [
             "command=",
-            "version=2.0.4",
+            "version=2.0.5",
             "run_id=",
             "exit=",
             "duration_ms=",

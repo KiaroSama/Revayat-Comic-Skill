@@ -23,25 +23,16 @@ For multiple small SFX or labels, a `2×2` grid can save requests. Use equal squ
 
 Send the crop as the only reference to `Numera-Gen-mcp` `edit_image` with the selected model and `target_language` set to `Persian`. Submit at most 2–3 `edit_image` requests concurrently on the `default` gateway to avoid transient upstream HTTP 502 timeouts. Use the documented pixel size for the ratio and tier if the connection supports it. Check the returned image's actual dimensions and keep the source crop and candidates separate.
 
-Use this prompt structure, with crop-local coordinates or a clear position cue:
+Use the empirically verified 4-part Variant C prompt blueprint (or Variant D clean-only restoration paired with Rust Vazir) from `references/gemini-flash-prompting.md`:
 
-```text
-Edit only the listed English lettering at <crop-local position>.
-Source text: <verified source text>
-Exact Persian, with the line breaks shown:
-<approved Persian>
+1. **Context and framing lock**: state the medium (`full-color` or `monochrome` manga crop), lock exact `1:1` framing, and name how many English elements are replaced.
+2. **Named protected freeze zones**: list every nearby landmark that must stay pixel-identical, especially adjacent Japanese hiragana/katakana/kanji (`うわあああ`, `ゴゴゴ`), standalone volume badges (`15`), map pins (`1-8`), character faces/hands, and panel or balloon borders.
+3. **Step 1, erase and restore texture**: remove the exact English text plus its full drop shadow, outline, and glow, and name the exact surface texture to reconstruct (uniform black-dot halftone grid, sharp radial ink speedlines, flat `#000000` ink, or painted fabric/skin) with zero gray blur.
+4. **Step 2, positive Persian lettering and glyph anatomy**: give verbatim Persian with line breaks, exact ink color and outer outline/halo color + pixel width, angle, scale, and positive Persian glyph descriptions (final/standalone `ی` has a smooth open tail with empty space and zero dots underneath; medial `ـیـ` keeps two small dots; `ک` keeps a clean diagonal top stroke; keep ASCII digits `0-9`; never write forbidden Arabic glyphs inside the prompt).
 
-Erase ALL source letters (explicitly including edge letters touching hair, speedlines, or borders) and their entire drop shadow, glow, and outline.
-Reconstruct the artwork beneath them before writing the Persian. Leave no ghost ink.
-Match the source lettering's weight, scale, angle, and alignment. If it is handwritten
-or tilted, keep that look and leave any hand-drawn frame untouched.
-Copy the Persian spelling, joins, dots (use dotless Persian ی, never dotted Arabic ي), spacing, and ASCII digits (0-9) exactly.
-Leave standalone numeric artwork and nearby linework pixel-for-pixel unchanged.
-For a title beside a volume badge, keep the badge at its original position and leave a gap.
-Return the crop with the same framing. Add no unlisted marks or text.
-```
+Flat solid-color pages and multi-line lists (such as a table of contents) skip the image model and use deterministic Rust cleaning and Vazir typesetting. Ordinary speech balloons always use deterministic Rust Vazir (`Vazir-Medium` / `Vazir-Bold`) and never fall back to external image pixels.
 
-Open the returned crop with `Read`. Check the Persian lettering and compare against the original at full resolution. Follow the outer edge of each old effect and check for ghost ink. Reject missing or unlisted text and damage in the area you would paste. Revise the prompt and retry only the affected zone if lettering or shadow erasure fails.
+Open the returned crop with `Read`. Check the Persian lettering and compare against the original at full 1024x1024 resolution. Follow the outer edge of each old effect and check for ghost ink, missing outlines, dotted final `ی`, altered Japanese kana, or framing drift. Reject any defect immediately; revise the prompt once or switch horizontal titles/credits to clean-only restoration plus Rust Vazir.
 
 ## Paste back and review
 
@@ -55,4 +46,4 @@ revayat-comic typeset --doc "$WORK/comic.json" --external-dir "$EDITED"
 revayat-comic qa check --doc "$WORK/comic.json" --strict
 ```
 
-Set `$EDITED` to the approved PNG directory. The CLI composites only authorized on-art areas and sets speech balloon text with the bundled Vazir fonts. Make sure those authorized areas cover the complete old and new lettering effects without including standalone numeric art. Pages without a matching PNG use deterministic typesetting. Open every rendered page to check mask edges, lettering, and adjacent artwork before exporting.
+Set `$EDITED` to the approved PNG directory. Never copy rendered output pages back into `$EDITED`. The CLI composites approved on-art regions using a solid padded mask clipped against kept regions, standalone numeric art, protected Japanese kana, and closed balloons, reserves that external footprint so speech bubbles cannot collide with it, and sets every speech balloon deterministically with the bundled Vazir fonts. Open the `qa review-pack` zoomed side-by-side crops before exporting.

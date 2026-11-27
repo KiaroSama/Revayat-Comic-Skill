@@ -22,6 +22,7 @@ pub const CODES: &[&str] = &[
     "package-page-count",
     "package-page-dimensions",
     "page-dimensions",
+    "protected-japanese-modified",
     "script-collision",
     "source-script-left",
     "text-crosses-outline",
@@ -331,6 +332,19 @@ pub fn missing_clusters(
     clean: &RgbImage,
     rendered: &RgbImage,
 ) -> Result<usize> {
+    missing_clusters_in_direction(shaper, target, lines, size, style, clean, rendered, false)
+}
+
+pub fn missing_clusters_in_direction(
+    shaper: &mut crate::typefont::Shaper,
+    target: &str,
+    lines: &[crate::typefit::PlacedLine],
+    size: f32,
+    style: &crate::typestyle::TextStyle,
+    clean: &RgbImage,
+    rendered: &RgbImage,
+    rtl_target: bool,
+) -> Result<usize> {
     same_geometry(clean.dimensions(), rendered.dimensions())?;
     let logical = |s: &str| {
         let text = s
@@ -348,23 +362,27 @@ pub fn missing_clusters(
             .join(" ")
     };
     let expected = logical(target);
-    let placed = lines
-        .iter()
-        .map(|line| line.text.as_str())
-        .collect::<Vec<_>>()
-        .join(" ");
+    let mut placed = String::new();
+    for line in lines {
+        let part = line.text.trim();
+        if !placed.is_empty() {
+            let hyphen_join = placed.ends_with('-')
+                && part.chars().next().is_some_and(bidi::is_rtl_char)
+                && !expected.contains("- ");
+            if !hyphen_join {
+                placed.push(' ');
+            }
+        }
+        placed.push_str(part);
+    }
     if logical(&placed) != expected {
         return Ok(expected.chars().count().max(1));
     }
+    let rtl = bidi::should_shape_rtl(target, rtl_target);
     let mut missing = 0;
     for line in lines {
         line.bbox.checked(clean.dimensions())?;
-        let shaped = shaper.draw_in_direction(
-            &line.text,
-            size,
-            style.weight(),
-            bidi::is_rtl_text(target),
-        )?;
+        let shaped = shaper.draw_in_direction(&line.text, size, style.weight(), rtl)?;
         let expected_width = shaped.pixels.width()
             + if style.italic {
                 (shaped.pixels.height() as f32 * 0.16).ceil() as u32

@@ -12,6 +12,7 @@ pub mod falint;
 pub mod fullpage_edit;
 pub mod lettering;
 pub mod masks;
+pub(crate) mod otsu;
 pub mod qa;
 pub mod qachecks;
 pub mod sheet;
@@ -154,7 +155,7 @@ pub(crate) fn gray(page: &RgbImage, dark: bool) -> GrayImage {
     })
 }
 
-pub(crate) fn mask_bounds(mask: &GrayImage) -> Option<Rect> {
+pub fn mask_bounds(mask: &GrayImage) -> Option<Rect> {
     let mut bounds: Option<Rect> = None;
     for (x, y, pixel) in mask.enumerate_pixels().filter(|(_, _, p)| p[0] != 0) {
         let _ = pixel;

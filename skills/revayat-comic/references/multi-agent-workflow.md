@@ -21,8 +21,9 @@ that needs an unresolved handoff waits for the prior shard's update.
 | **2** | صفحه آرایی | Layout & Typesetting Planner Agent | Draft worksheets + full page images + bubble/region geometry | Line-broken, spaced worksheets + routing tag (`typeset` vs `fullpage_edit`) per region |
 | **3** | بازبینی | Bilingual & Tone Review Agent | Original full pages + draft/planned worksheets + Persian voice guide | Reviewed, natural spoken-Persian worksheets with zero AI tells and verified meaning |
 | **4** | اعمال ترجمه | Apply Translation Agent | Approved worksheets + `comic.json` | Emptied clean speech bubbles + approved crop edits pasted back in place + Vazir RTL typeset pages |
-| **5** | چک مجدد فایل و اصلاح مشکلات | Visual Recheck & Defect Repair Agent | Every page's recorded `rendered` artifact + strict QA output for `comic.json` | Defect ledger + targeted repairs until zero leftover dots, overlaps, halos, or spacing bugs remain |
-| **6** | بازبینی نهایی و تحویل | Final Review & Delivery Agent | Verified final pages + strict QA report | `qa package`, lossless CBZ + lossless PDF export, translation & QA log |
+| **5a** | بازبینی خصمانهٔ تصویر | Adversarial Visual Recheck Agent (read-only) | `revayat-comic qa review-pack` (`flags.json` + 2x side-by-side crops) + full rendered pages + `qa check --strict` | Signed `work/review/ledger.tsv` with per-crop `PASS` or `FAIL` + exact defect codes |
+| **5b** | اصلاح هدفمند مشکلات | Defect Repair Agent | `work/review/ledger.tsv` `FAIL` rows only | Targeted code/worksheet/crop fixes + regenerated `review-pack` handed back to Stage 5a until 0 `FAIL` rows remain |
+| **6** | بازبینی نهایی و تحویل | Final Review & Delivery Agent | Verified final pages + `qa check --strict` + `qa review-pack --verify-ledger` | `qa package`, lossless CBZ + lossless PDF export, translation & QA log |
 
 ---
 
@@ -107,7 +108,8 @@ Instructions:
    - Rewrite any stiff, robotic, overly formal, or translationese line into natural spoken Persian that fits the character's voice and emotional beat.
    - Check comedic timing, shouts, whispers, and hesitation markers so dialogue feels like a real Persian manga edition.
 3. Run `revayat-comic voice lint <draft.md> --check --style` on each Persian draft; after merging accepted worksheets, run `revayat-comic falint check --doc <workdir>/comic.json`. Resolve mechanical and style findings against the source.
-4. Confirm every region has an explicit terminal decision and zero unresolved glossary conflicts.
+4. On English-source editions (`source_language: en`), confirm every Japanese kana/kanji-only SFX (`ゴゴゴ`, `うわあああ`) is marked `keep` and never translated or erased.
+5. Confirm every region has an explicit terminal decision, natural spoken Persian tone, and zero unresolved glossary conflicts.
 
 Output: Approved, review-signed worksheets ready for Stage 4 execution.
 ```
@@ -116,7 +118,7 @@ Output: Approved, review-signed worksheets ready for Stage 4 execution.
 
 ## Stage 4 — Apply Translation (`اعمال ترجمه`)
 
-**Objective:** Clean only uniform speech balloons first. Edit on-art lettering in wide context crops, paste only the approved, feathered edit back at its original coordinates, then typeset the balloons with the bundled Vazir fonts.
+**Objective:** Clean only uniform speech balloons first. Edit on-art lettering in wide context crops using `references/gemini-flash-prompting.md` (Variant C for stylized art/SFX, Variant D clean-only + Rust Vazir for horizontal titles/credits, pure Rust Vazir for flat multi-line pages such as tables of contents), paste approved edits into an isolated external PNG folder, then typeset every speech balloon deterministically in bundled Vazir (`Vazir-Medium` / `Vazir-Bold`).
 
 ### Prompt Template (Stage 4)
 
@@ -125,52 +127,77 @@ Role: Stage 4 — Apply Translation Agent (اعمال ترجمه) for Revayat Co
 Input files:
 - Approved Stage 3 worksheets and `comic.json`
 - Page-level edit manifests (`revayat-comic fullpage-prompt`)
+- Gemini 3.1 Flash prompting guide (`references/gemini-flash-prompting.md`)
 
 Instructions:
 1. Merge approved worksheets (`revayat-comic worksheet merge`) and run `revayat-comic falint fix`.
-2. Empty ONLY clean speech bubbles first (`revayat-comic clean --bubbles-only`) with interior speckle sweep so zero residual ink dots remain inside emptied bubbles while speedlines, screentones, and on-art lettering stay 100% untouched.
+2. Empty ONLY clean speech bubbles first (`revayat-comic clean --bubbles-only`) so zero residual ink dots remain inside emptied bubbles while speedlines, screentones, and on-art lettering stay untouched.
 3. For every page containing `fullpage_edit` regions (on-art SFX, speedline shouts, map labels, covers, spines, chapter titles):
-   - Follow `references/fullpage-image-edit.md` for crop sizing, the exact-text prompt, and paste-back. Give `antigravity/gemini-3.1-flash-image` 120-240 px of context beyond the full lettering effects. Ask it to remove the letters and their entire shadow, glow, and outline before drawing Persian at the source angle and weight.
-   - Include the whole old and new lettering footprint in the paste mask and feather outside those effects. Keep standalone digits and sketch frames untouched. If a reviewer spots a seam, repair only that strip. Save each approved composite as `<page_id>.png` at the original page dimensions.
-4. Run `revayat-comic typeset --external-dir <approved-png-directory>` to apply the approved on-art edits and set the speech balloons in Vazir. If there are no external edits, omit `--external-dir`.
+   - Follow `references/gemini-flash-prompting.md` and `references/fullpage-image-edit.md`. Use Variant C (4-part narrative prompt with explicit freeze zones, texture vocabulary, ink + outline/halo color and pixel width, and positive Persian glyph anatomy) for stylized/tilted art; use Variant D (clean-only artwork restoration + Rust Vazir) for straight horizontal titles/credits; use pure Rust Vazir with 0 model calls for flat solid-color lists (such as a table of contents).
+   - Never overwrite the external PNG folder with rendered output pages; keep `$EDITED` strictly separate from `work/rendered/`.
+4. Run `revayat-comic typeset --external-dir <approved-png-directory>` to composite approved on-art edits via solid clipped masks and set every speech balloon deterministically in Vazir. If there are no external edits, omit `--external-dir`.
 
-Output: Rendered full pages at the paths recorded in each page's `rendered` field in `<workdir>/comic.json`, ready for visual inspection.
+Output: Rendered full pages at the paths recorded in each page's `rendered` field in `<workdir>/comic.json`, ready for adversarial visual inspection.
 ```
 
 ---
 
-## Stage 5 — File Recheck & Defect Repair (`چک مجدد فایل و اصلاح مشکلات`)
+## Stage 5a — Adversarial Visual Recheck (`بازبینی خصمانهٔ تصویر`, read-only)
 
-**Objective:** Inspect EVERY single rendered page with your own eyes alongside strict automated QA, list every visual or textual defect, and fix them immediately before delivery.
+**Objective:** Separate inspection from repair so confirmation bias cannot hide defects. Generate 2x pixel-doubled `[SOURCE | RENDERED]` crops with `revayat-comic qa review-pack`, inspect EVERY flagged crop and spot-check at full crispness, and record an explicit fail-closed verdict in `work/review/ledger.tsv`. Stage 5a is strictly read-only on pages and worksheets.
 
-### Prompt Template (Stage 5)
+### Prompt Template (Stage 5a)
 
 ```text
-Role: Stage 5 — Visual Recheck & Defect Repair Agent (چک مجدد فایل و اصلاح مشکلات) for Revayat Comic.
+Role: Stage 5a — Adversarial Visual Recheck Agent (read-only) for Revayat Comic.
+You are FORBIDDEN from editing pages, masks, or worksheets. Your job is to find every defect that would embarrass a published print edition.
+
 Input files:
-- Rendered pages: each page's `rendered` path from <workdir>/comic.json
-- Original pages: <workdir>/pages/pNNNN.*
-- Strict QA output: `revayat-comic qa check --strict --doc <workdir>/comic.json`
+- Run first: `revayat-comic qa check --strict --doc <workdir>/comic.json`
+- Run second: `revayat-comic qa review-pack --doc <workdir>/comic.json`
+- Manifest: `<workdir>/review/flags.json`
+- 2x zoomed side-by-side `[SOURCE | RENDERED]` crops: `<workdir>/review/crops/*.png`
+- Full rendered pages (for page-wide weight/tone consistency): `<workdir>/rendered/p*.png`
+
+Mandatory 9-point inspection checklist on EVERY crop in `flags.json` (open each PNG with Read):
+1. `SPECKLE_OR_NOISE`: any salt-and-pepper dots, ghost English strokes, or flat blurry gray patches over halftone/speedlines.
+2. `MISSING_OUTLINE`: missing white/black outer halo or inverted ink polarity compared to the left (SOURCE) half.
+3. `PERSIAN_GLYPH`: any dotted Arabic `ي` at word end, broken letter join, malformed `ک`/`گ`/`پ`/`ی`, or Persian digits where ASCII digits are required.
+4. `TINY_OR_CRAMPED`: spacious speech bubble filled with tiny text (< 15 px), awkward unbroken hyphenated name, or severe centering/alignment drift (especially TOC/credits).
+5. `BIDI_PUNCT`: wrong-side punctuation on numeric or mixed bubbles (e.g., `3.` instead of `.3` in Persian RTL, flipped `?!`, or detached `…`).
+6. `OVERLAP_OR_CLIP`: text colliding with another bubble/on-art region, volume badge (`15`), or balloon outline.
+7. `JAPANESE_DAMAGED`: on English-source editions, any erased, smudged, or modified Japanese hiragana/katakana/kanji SFX (`ゴゴゴ`, `うわあああ`).
+8. `WEIGHT_OR_FONT_DRIFT`: sudden font family, thin/gray stroke, or weight jump between consecutive pages or inside speech bubbles.
+9. `ERASED_RESIDUAL`: leftover dots or unchanged source ink inside an erased balloon.
+
+Output: Write `<workdir>/review/ledger.tsv` (`page_id\tregion_id\tstage\tverdict\tdefect_codes\tnotes`) with an explicit `PASS` or `FAIL` row for EVERY item in `flags.json` and every page. Never mark `PASS` without opening the zoomed crop image.
+```
+
+---
+
+## Stage 5b — Targeted Defect Repair (`اصلاح هدفمند مشکلات`)
+
+**Objective:** Fix ONLY the `FAIL` items recorded by Stage 5a in `work/review/ledger.tsv`, re-run `clean`/`typeset`/`qa check --strict`/`qa review-pack`, and return the updated crops to Stage 5a for independent verification.
+
+### Prompt Template (Stage 5b)
+
+```text
+Role: Stage 5b — Targeted Defect Repair Agent for Revayat Comic.
+Input files:
+- `<workdir>/review/ledger.tsv` (`FAIL` rows only)
+- `<workdir>/comic.json` and `references/gemini-flash-prompting.md`
 
 Instructions:
-1. Run `revayat-comic qa check --strict --doc <workdir>/comic.json` and inspect EVERY rendered page visually with the Read tool (side-by-side with the original whenever anything looks suspicious).
-2. Actively hunt for these specific failure modes:
-   - Leftover black dots, punctuation specks, or slivers inside cleaned bubbles.
-   - Noisy black/white rectangular patches or dirty white halos over speedlines/screentones.
-   - Broken line spacing (cramped or overlapping lines in maps/captions/bubbles).
-   - Overlapping elements (e.g., volume circle colliding with title letters).
-   - Misspelled Persian glyphs from image editing (e.g., extra maddas `آآآآ`, `آه` instead of `اِه`, disconnected letters, Persian digits instead of ASCII digits).
-   - Unintended artwork distortion, missing panel edges, or untranslated English remnants.
-3. Fix every defect immediately (revise the crop prompt and rerun only the affected zone or strip, adjust bubble line breaks/font size, or expand bubble interior sweep) and re-verify the repaired page visually until ZERO defects remain.
-
-Output: Zero-defect verified final pages and a clean `qa check --strict` report (`errors: 0`).
+1. For each `FAIL` row, apply the root fix (regenerate the single on-art crop with Variant C/D, switch flat multi-line layouts to pure Rust Vazir, adjust worksheet wording/breaks, or fix masking/keep flags) without touching passing regions.
+2. Re-run `revayat-comic typeset --doc <workdir>/comic.json [--external-dir ...]` and `revayat-comic qa check --strict --doc <workdir>/comic.json`.
+3. Regenerate `<workdir>/review/` with `revayat-comic qa review-pack --doc <workdir>/comic.json` and hand every repaired crop back to Stage 5a to record `FIXED` / `PASS` in `ledger.tsv`.
 ```
 
 ---
 
 ## Stage 6 — Final Review & Delivery (`بازبینی نهایی و تحویل`)
 
-**Objective:** Perform final chapter-wide editorial & package verification and deliver lossless CBZ, lossless PDF, and the translation/QA report.
+**Objective:** Enforce both automated strict QA and the fail-closed Stage 5a review ledger, verify consecutive-page visual consistency, and deliver lossless CBZ, lossless PDF, and the translation/QA report.
 
 ### Prompt Template (Stage 6)
 
@@ -178,13 +205,14 @@ Output: Zero-defect verified final pages and a clean `qa check --strict` report 
 Role: Stage 6 — Final Review & Delivery Agent (بازبینی نهایی و تحویل) for Revayat Comic.
 Input files:
 - Stage 5 verified pages at the `rendered` paths recorded in `<workdir>/comic.json`
-- `<workdir>/comic.json`
+- `<workdir>/comic.json` and `<workdir>/review/ledger.tsv`
 
 Instructions:
-1. Spot-check reading flow across consecutive pages (cover -> title/spine -> TOC -> chapter opener -> dialogue pages -> spreads) to confirm tone continuity, consistent names, and clean typography.
-2. Export lossless CBZ and lossless PDF (`revayat-comic export --doc <workdir>/comic.json --out ...`).
-3. Verify each finished archive with `revayat-comic qa package --doc <workdir>/comic.json --package <output>` and inspect its actual integrity findings for page count, page order, native dimensions, and changed or corrupt page data.
-4. Write the final delivery log (`*.log.md`) recording source SHA-256, page count, region counts, QA status, and any honest notes on visual checks.
+1. Run `revayat-comic qa check --strict --doc <workdir>/comic.json` and `revayat-comic qa review-pack --doc <workdir>/comic.json --verify-ledger`. Do NOT export if either command exits non-zero.
+2. Spot-check consecutive pages (cover -> title/spine -> TOC -> chapter opener -> early/mid/late dialogue pages) to confirm uniform Vazir-Medium speech weight, natural Persian tone, and zero leftover defects.
+3. Export lossless CBZ and lossless PDF (`revayat-comic export --doc <workdir>/comic.json --out ...`).
+4. Verify each finished archive with `revayat-comic qa package --doc <workdir>/comic.json --package <output>` and inspect page count, page order, native dimensions, and integrity findings.
+5. Write the final delivery log (`*.log.md`) recording source SHA-256, page count, region counts, `qa check --strict`, `qa review-pack --verify-ledger`, and `qa package` results.
 
 Output: Verified lossless CBZ, lossless PDF, and delivery report ready for the user.
 ```

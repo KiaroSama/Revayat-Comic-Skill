@@ -7,6 +7,7 @@ references/artwork-preservation.md
 references/detection.md
 references/evaluation.md
 references/fullpage-image-edit.md
+references/gemini-flash-prompting.md
 references/multi-agent-workflow.md
 references/native-documents.md
 references/ocr.md

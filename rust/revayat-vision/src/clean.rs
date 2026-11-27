@@ -389,10 +389,12 @@ pub fn clean_page_bubbles_with_external(
             strategies.push(CleanStrategy::Flat);
             continue;
         }
+        let mut permitted_paper = paper.clone();
+        permitted_paper.exclude(excluded);
         let mut local = region_mask_with_interior(
             &luma,
             balloon.text_bounds,
-            Some(&paper),
+            Some(&permitted_paper),
             balloon.dark,
             MaskOptions {
                 full_balloon: !open,

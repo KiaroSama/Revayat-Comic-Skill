@@ -56,11 +56,96 @@ pub fn tokens(text: &str) -> Vec<Vec<String>> {
         .collect()
 }
 
+fn split_persian_hyphen_tokens(words: &[String]) -> Option<Vec<(String, bool)>> {
+    let mut expanded = Vec::with_capacity(words.len() + 2);
+    let mut changed = false;
+    for word in words {
+        if word.contains('-')
+            && !word.contains("://")
+            && !word.contains("www.")
+            && word.chars().any(bidi::is_rtl_char)
+        {
+            let parts: Vec<&str> = word.split('-').collect();
+            let valid_parts = parts.len() >= 2
+                && parts
+                    .iter()
+                    .all(|p| !p.is_empty() && p.chars().any(bidi::is_rtl_char));
+            if valid_parts {
+                changed = true;
+                for (idx, part) in parts.iter().enumerate() {
+                    if idx + 1 < parts.len() {
+                        expanded.push((format!("{part}-"), true));
+                    } else {
+                        expanded.push(((*part).to_owned(), false));
+                    }
+                }
+                continue;
+            }
+        }
+        expanded.push((word.clone(), false));
+    }
+    changed.then_some(expanded)
+}
+
+fn wrap_pieces(
+    shaper: &mut Shaper,
+    pieces: &[(String, bool)],
+    size: f32,
+    style: &TextStyle,
+    rtl: bool,
+    width: u32,
+    rows: usize,
+) -> Result<Option<Vec<String>>> {
+    let unit = |v: f32| ((v * 64.0).ceil() as u64).into();
+    let advances = pieces
+        .iter()
+        .map(|(w, _)| {
+            shaper
+                .width_in_direction(w, size, style.weight(), rtl)
+                .map(unit)
+        })
+        .collect::<Result<Vec<BigInt>>>()?;
+    if advances
+        .iter()
+        .any(|w| w > &BigInt::from(u64::from(width) * 64))
+    {
+        return Ok(None);
+    }
+    let space = unit(shaper.width_in_direction(" ", size, style.weight(), rtl)?);
+    let bands = vec![BigInt::from(u64::from(width) * 64); rows.min(pieces.len())];
+    let wrapped = textcore_rs::port::balanced_wrap_lines(advances, space, bands)
+        .map_err(VisionError::kernel)?;
+    if wrapped.is_empty() {
+        return Ok(None);
+    }
+    let mut lines = Vec::with_capacity(wrapped.len());
+    for line in wrapped {
+        let [start, end] = <[usize; 2]>::try_from(line)
+            .map_err(|_| VisionError::invalid("invalid line range from the wrap kernel"))?;
+        let slice = pieces
+            .get(start..end)
+            .filter(|line| !line.is_empty())
+            .ok_or_else(|| VisionError::invalid("invalid line range from the wrap kernel"))?;
+        let mut joined = String::new();
+        let mut prev_no_space = false;
+        for (token, no_space_after) in slice {
+            if !joined.is_empty() && !prev_no_space {
+                joined.push(' ');
+            }
+            joined.push_str(token);
+            prev_no_space = *no_space_after;
+        }
+        lines.push(joined);
+    }
+    Ok(Some(lines))
+}
+
 fn wrap(
     shaper: &mut Shaper,
     paragraphs: &[Vec<String>],
     size: f32,
     style: &TextStyle,
+    rtl: bool,
     width: u32,
     max_rows: usize,
 ) -> Result<Option<Vec<String>>> {
@@ -74,33 +159,18 @@ fn wrap(
         if rows == 0 {
             return Ok(None);
         }
-        let unit = |v: f32| ((v * 64.0).ceil() as u64).into();
-        let advances = words
-            .iter()
-            .map(|w| shaper.width(w, size, style.weight()).map(unit))
-            .collect::<Result<Vec<BigInt>>>()?;
-        if advances
-            .iter()
-            .any(|w| w > &BigInt::from(u64::from(width) * 64))
-        {
+        let plain: Vec<(String, bool)> = words.iter().map(|w| (w.clone(), false)).collect();
+        let fitted = match wrap_pieces(shaper, &plain, size, style, rtl, width, rows)? {
+            Some(lines) => Some(lines),
+            None => match split_persian_hyphen_tokens(words) {
+                Some(split) => wrap_pieces(shaper, &split, size, style, rtl, width, rows)?,
+                None => None,
+            },
+        };
+        let Some(lines) = fitted else {
             return Ok(None);
-        }
-        let space = unit(shaper.width(" ", size, style.weight())?);
-        let bands = vec![BigInt::from(u64::from(width) * 64); rows.min(words.len())];
-        let wrapped = textcore_rs::port::balanced_wrap_lines(advances, space, bands)
-            .map_err(VisionError::kernel)?;
-        if wrapped.is_empty() {
-            return Ok(None);
-        }
-        for line in wrapped {
-            let [start, end] = <[usize; 2]>::try_from(line)
-                .map_err(|_| VisionError::invalid("invalid line range from the wrap kernel"))?;
-            let words = words
-                .get(start..end)
-                .filter(|line| !line.is_empty())
-                .ok_or_else(|| VisionError::invalid("invalid line range from the wrap kernel"))?;
-            result.push(words.join(" "));
-        }
+        };
+        result.extend(lines);
     }
     Ok((result.len() <= max_rows).then_some(result))
 }
@@ -115,6 +185,7 @@ pub(crate) struct FitOptions<'a> {
     pub spacing: f32,
     pub compact: bool,
     pub align: Alignment,
+    pub rtl_target: bool,
 }
 
 pub(crate) fn fit_region(
@@ -132,8 +203,10 @@ pub(crate) fn fit_region(
         spacing,
         compact,
         align,
+        rtl_target,
     } = opts;
     let source = text;
+    let base_rtl = bidi::should_shape_rtl(source, rtl_target);
     let paragraphs = tokens(text);
     if paragraphs.iter().all(Vec::is_empty) {
         return Ok(None);
@@ -185,12 +258,21 @@ pub(crate) fn fit_region(
             if available == 0 {
                 continue;
             }
-            let Some(lines) = wrap(shaper, &paragraphs, size as f32, style, available, max_rows)?
+            let Some(lines) = wrap(
+                shaper,
+                &paragraphs,
+                size as f32,
+                style,
+                base_rtl,
+                available,
+                max_rows,
+            )?
             else {
                 continue;
             };
+            let line_count = lines.len();
             let centered = (paper_center.unwrap_or(bounds.height() as f32 / 2.0)
-                - line_height * lines.len() as f32 / 2.0)
+                - line_height * line_count as f32 / 2.0)
                 .floor() as i32;
             let mut shaped_lines = Vec::new();
             let mut isolates = Vec::new();
@@ -212,12 +294,8 @@ pub(crate) fn fit_region(
                 }
                 balanced.extend(std::iter::repeat_n(bidi::PDI, isolates.len()));
                 let text = bidi::ensure_rli_pdi(&balanced)?;
-                let shaped = shaper.draw_in_direction(
-                    &text,
-                    size as f32,
-                    style.weight(),
-                    bidi::is_rtl_text(source),
-                )?;
+                let shaped =
+                    shaper.draw_in_direction(&text, size as f32, style.weight(), base_rtl)?;
                 if shaped.pixels.width() == 0 {
                     continue;
                 }
@@ -235,13 +313,32 @@ pub(crate) fn fit_region(
                 shaped_lines.push((i, text, shaped.top, shaped.rtl, ink, brush, border));
             }
             let shift = (size as i32 / 4).max(1);
-            for line_top in [
+            let mut candidates = vec![
                 centered,
                 centered - shift,
                 centered + shift,
                 centered - 2 * shift,
                 centered + 2 * shift,
-            ] {
+            ];
+            let block_h = (line_height * line_count as f32).ceil() as i32;
+            let max_top = bounds.height() as i32 - block_h - pad as i32;
+            if max_top > pad as i32 {
+                let step = (size as i32 / 3).max(4);
+                let mut extras = Vec::new();
+                let mut y = pad as i32;
+                while y <= max_top {
+                    if !candidates.contains(&y) {
+                        extras.push(y);
+                    }
+                    y += step;
+                }
+                if !candidates.contains(&max_top) && !extras.contains(&max_top) {
+                    extras.push(max_top);
+                }
+                extras.sort_by_key(|&y| (y - centered).abs());
+                candidates.extend(extras);
+            }
+            for line_top in candidates {
                 let mut fitted = Vec::new();
                 let mut extent: Option<Rect> = None;
                 let mut failed = false;

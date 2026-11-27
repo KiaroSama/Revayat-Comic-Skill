@@ -5,8 +5,31 @@ pub const RLM: char = '\u{200f}';
 pub const RLI: char = '\u{2067}';
 pub const PDI: char = '\u{2069}';
 
+pub(crate) fn is_rtl_char(c: char) -> bool {
+    matches!(
+        c,
+        RLM | RLI | '\u{0600}'..='\u{08ff}' | '\u{fb50}'..='\u{fdff}' | '\u{fe70}'..='\u{fefc}'
+    )
+}
+
 pub(crate) fn is_rtl_text(text: &str) -> bool {
-    text.chars().any(|c| matches!(c, RLM | RLI | '\u{0600}'..='\u{08ff}' | '\u{fb50}'..='\u{fdff}' | '\u{fe70}'..='\u{fefc}'))
+    text.chars().any(is_rtl_char)
+}
+
+/// Choose RTL shaping direction when text contains RTL letters, or when rendering
+/// digits+punctuation in an RTL target edition (so e.g. `"3."` places `.` on the left).
+pub(crate) fn should_shape_rtl(text: &str, rtl_target: bool) -> bool {
+    if is_rtl_text(text) {
+        return true;
+    }
+    if !rtl_target {
+        return false;
+    }
+    let has_digit = text.chars().any(|c| {
+        c.is_ascii_digit() || matches!(c, '\u{0660}'..='\u{0669}' | '\u{06f0}'..='\u{06f9}')
+    });
+    let has_other_letter = text.chars().any(char::is_alphabetic);
+    has_digit && !has_other_letter
 }
 
 pub(crate) fn visible(c: char) -> bool {

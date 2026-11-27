@@ -88,7 +88,17 @@ impl Shaper {
     }
 
     pub fn width(&mut self, text: &str, size: f32, weight: Weight) -> Result<f32> {
-        let text = shaping_text(text, crate::bidi::is_rtl_text(text));
+        self.width_in_direction(text, size, weight, crate::bidi::is_rtl_text(text))
+    }
+
+    pub(crate) fn width_in_direction(
+        &mut self,
+        text: &str,
+        size: f32,
+        weight: Weight,
+        rtl: bool,
+    ) -> Result<f32> {
+        let text = shaping_text(text, rtl);
         Ok(self
             .buffer(&text, size, weight)?
             .layout_runs()

@@ -72,15 +72,10 @@ pub fn balloon_text_interior(original: &RgbImage, b: Balloon) -> Result<RegionMa
     balloon_interior(original, b, crate::masks::text_inset(b.bounds))
 }
 
-/// Check open-balloon cleanup only where its source text could authorize cleaning.
+/// Check balloon cleanup using the same 2 px inset as cleanup itself (and source window for open balloons).
 pub fn balloon_cleanup_interior(original: &RgbImage, b: Balloon) -> Result<RegionMask> {
     let (paper, open) = balloon_paper(original, b)?;
-    let inset = if open {
-        2
-    } else {
-        crate::masks::text_inset(b.bounds)
-    };
-    let mut safe = inset_balloon(&paper, inset)?;
+    let mut safe = inset_balloon(&paper, 2)?;
     if open {
         let window = open_balloon_cleanup_window(b, original.dimensions());
         for (x, y, pixel) in safe.pixels.enumerate_pixels_mut() {

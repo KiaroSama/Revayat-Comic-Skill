@@ -1,10 +1,6 @@
 use super::*;
 use revayat_vision::{clean, fullpage_edit, qa, typeset};
 
-const MISSING_GLYPH_COVERAGE: &str = "missing-glyph-coverage";
-const MISSING_TYPESET_PROOF: &str = "missing-typeset-proof";
-const PENDING_REGION: &str = "pending-region";
-
 fn local_mask(root: &Path, region: &RegionRecord) -> Result<Option<masks::RegionMask>> {
     let Some(path) = &region.mask else {
         return Ok(None);
@@ -45,7 +41,7 @@ fn external_page(directory: &Path, page: &PageRecord) -> Result<Option<RgbImage>
     }
 }
 
-fn read_mask(root: &Path, page: &PageRecord, field: &str) -> Result<GrayImage> {
+pub(super) fn read_mask(root: &Path, page: &PageRecord, field: &str) -> Result<GrayImage> {
     if let Some(path) = page.extra.get(field).and_then(Value::as_str) {
         Ok(images::load_image(&asset(root, path)?, MAX_PAGE_PIXELS)
             .map_err(failed)?
@@ -55,20 +51,30 @@ fn read_mask(root: &Path, page: &PageRecord, field: &str) -> Result<GrayImage> {
     }
 }
 
-fn clears_balloon(region: &RegionRecord, policy: &str) -> bool {
-    editable(region, policy)
+pub(super) fn protected_japanese(source_language: Option<&str>, region: &RegionRecord) -> bool {
+    ir::foreign_script_guard(source_language, &region.source_text)
+        == ir::ForeignScriptGuard::ProtectedJapanese
+}
+
+fn clears_balloon(region: &RegionRecord, policy: &str, source_language: Option<&str>) -> bool {
+    !protected_japanese(source_language, region)
+        && editable(region, policy)
         && (region.erase
             || region.state == Some(revayat_ir::RegionState::Erased)
             || !region.target_text.trim().is_empty())
 }
 
-fn excluded_balloon_regions(page: &PageRecord, policy: &str) -> Result<Vec<Rect>> {
+pub(super) fn excluded_balloon_regions(
+    page: &PageRecord,
+    policy: &str,
+    source_language: Option<&str>,
+) -> Result<Vec<Rect>> {
     page.regions
         .iter()
         .filter(|region| {
             !region.dropped
                 && region.state != Some(revayat_ir::RegionState::Dropped)
-                && !clears_balloon(region, policy)
+                && !clears_balloon(region, policy, source_language)
         })
         .map(bounds)
         .collect()
@@ -78,6 +84,12 @@ pub fn clean(path: &Path, bubbles_only: bool, external: Option<&Path>) -> Result
     write_doc(path, "clean", |loaded| {
         let root = ir::doc_dir(loaded.path()).to_owned();
         let policy = loaded.document.policy().to_owned();
+        let source_lang = loaded
+            .document
+            .meta
+            .get("source_language")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
         for page in &mut loaded.document.pages {
             let native = original_native(&root, page)?;
             images::validate_preservation_image(&native).map_err(failed)?;
@@ -89,9 +101,9 @@ pub fn clean(path: &Path, bubbles_only: bool, external: Option<&Path>) -> Result
             let mut balloon_regions = Vec::new();
             let panels = page_panels(page)?;
             let neighbors = on_art_bounds(page)?;
-            let excluded = excluded_balloon_regions(page, &policy)?;
+            let excluded = excluded_balloon_regions(page, &policy, source_lang.as_deref())?;
             for (index, region) in page.regions.iter_mut().enumerate() {
-                if clears_balloon(region, &policy)
+                if clears_balloon(region, &policy, source_lang.as_deref())
                     && let Some(balloon) =
                         resolve_balloon(&image, region, &panels, &neighbors, None)?
                 {
@@ -120,8 +132,10 @@ pub fn clean(path: &Path, bubbles_only: bool, external: Option<&Path>) -> Result
             if !bubbles_only {
                 for region in &mut page.regions {
                     if !editable(region, &policy)
+                        || protected_japanese(source_lang.as_deref(), region)
                         || (bubble_kind(region)
-                            && (!clears_balloon(region, &policy) || balloon(region)?.is_some()))
+                            && (!clears_balloon(region, &policy, source_lang.as_deref())
+                                || balloon(region)?.is_some()))
                     {
                         continue;
                     }
@@ -171,7 +185,7 @@ pub fn clean(path: &Path, bubbles_only: bool, external: Option<&Path>) -> Result
     })
 }
 
-fn reading_clean(root: &Path, page: &PageRecord) -> Result<RgbImage> {
+pub(super) fn reading_clean(root: &Path, page: &PageRecord) -> Result<RgbImage> {
     let path = page
         .cleaned
         .as_deref()
@@ -185,6 +199,19 @@ pub fn typeset(path: &Path, external: Option<&Path>) -> Result<Value> {
     write_doc(path, "typeset", |loaded| {
         let root = ir::doc_dir(loaded.path()).to_owned();
         let policy = loaded.document.policy().to_owned();
+        let source_lang = loaded
+            .document
+            .meta
+            .get("source_language")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let rtl_target = ir::is_rtl_language(
+            loaded
+                .document
+                .meta
+                .get("target_language")
+                .and_then(Value::as_str),
+        );
         let mut count = 0;
         for page in &mut loaded.document.pages {
             let cleaned = reading_clean(&root, page)?;
@@ -192,6 +219,7 @@ pub fn typeset(path: &Path, external: Option<&Path>) -> Result<Value> {
             images::validate_preservation_image(&native).map_err(failed)?;
             let source = native.to_rgb8();
             let mut text = Vec::new();
+            let mut medium_ids = std::collections::BTreeSet::new();
             let mut glosses = Vec::new();
             let mut allowed = read_mask(&root, page, "clean_mask")?;
             let mut external_mask = GrayImage::new(page.width, page.height);
@@ -213,10 +241,18 @@ pub fn typeset(path: &Path, external: Option<&Path>) -> Result<Value> {
             }
             let panels = page_panels(page)?;
             let neighbors = on_art_bounds(page)?;
-            let excluded = excluded_balloon_regions(page, &policy)?;
+            let excluded = excluded_balloon_regions(page, &policy, source_lang.as_deref())?;
+            let mut balloon_rects = Vec::new();
+            for region in &page.regions {
+                if let Some(b) = resolve_balloon(&source, region, &panels, &neighbors, None)? {
+                    balloon_rects.push(b.bounds);
+                }
+            }
             for region in &mut page.regions {
                 region.typeset.clear();
-                if region.target_text.trim().is_empty() {
+                if region.target_text.trim().is_empty()
+                    || protected_japanese(source_lang.as_deref(), region)
+                {
                     continue;
                 }
                 if regions::uses_gloss(region, &policy) {
@@ -227,17 +263,67 @@ pub fn typeset(path: &Path, external: Option<&Path>) -> Result<Value> {
                     continue;
                 }
                 let resolved = resolve_balloon(&source, region, &panels, &neighbors, None)?;
-                if resolved.is_none() && edited.is_some() {
-                    let local = on_art_mask(&root, &source, region)?;
-                    local.apply_to(&mut external_mask).map_err(failed)?;
+                if resolved.is_none()
+                    && !bubble_kind(region)
+                    && let Some(ext_img) = edited.as_ref()
+                {
+                    let base_bounds = local_mask(&root, region)?
+                        .map(|m| m.bounds)
+                        .unwrap_or(bounds(region)?);
+                    let mut patch = masks::solid_region_patch(source.dimensions(), base_bounds, 6)
+                        .map_err(failed)?;
+                    patch.exclude(&excluded);
+                    patch.exclude(&balloon_rects);
+                    let Some(tight) = revayat_vision::mask_bounds(&patch.pixels) else {
+                        region.typeset.insert("status".into(), json!("unreliable"));
+                        region.typeset.insert(
+                            "reason".into(),
+                            json!("external patch empty after clipping"),
+                        );
+                        continue;
+                    };
+                    let changed = patch.pixels.enumerate_pixels().any(|(x, y, p)| {
+                        p[0] != 0
+                            && revayat_vision::qachecks::pixel_changed(
+                                source.get_pixel(patch.bounds.x() + x, patch.bounds.y() + y),
+                                ext_img.get_pixel(patch.bounds.x() + x, patch.bounds.y() + y),
+                            )
+                    });
+                    if !changed {
+                        region.typeset.insert("status".into(), json!("unreliable"));
+                        region.typeset.insert(
+                            "reason".into(),
+                            json!("external patch unchanged from source"),
+                        );
+                        continue;
+                    }
+                    let effective_box = Rect([
+                        patch.bounds.x() + tight.x(),
+                        patch.bounds.y() + tight.y(),
+                        tight.width(),
+                        tight.height(),
+                    ]);
+                    patch.apply_to(&mut external_mask).map_err(failed)?;
+                    patch.apply_to(&mut allowed).map_err(failed)?;
                     region.typeset.insert("status".into(), json!("external"));
-                    region.typeset.insert("ink_box".into(), json!(local.bounds));
+                    region
+                        .typeset
+                        .insert("ink_box".into(), json!(effective_box));
+                    region.typeset.insert(
+                        "mask_sha256".into(),
+                        json!(ir::sha256_bytes(patch.pixels.as_raw())),
+                    );
                     continue;
                 }
                 let mut entry =
                     typeset::TextRegion::new(&region.id, bounds(region)?, &region.target_text);
+                entry.rtl_target = rtl_target;
                 if let Some(style) = region.extra.get("style").and_then(Value::as_str) {
                     entry.style = revayat_vision::typestyle::style_flags(style).map_err(failed)?;
+                }
+                if bubble_kind(region) && !entry.style.bold && !entry.style.shout {
+                    entry.style.medium = true;
+                    medium_ids.insert(region.id.clone());
                 }
                 if let Some(balloon) = resolved {
                     let interior =
@@ -262,8 +348,10 @@ pub fn typeset(path: &Path, external: Option<&Path>) -> Result<Value> {
                         .min_by_key(|panel| panel.area())
                         .and_then(|panel| panel.intersection(anchor))
                         .unwrap_or(anchor);
-                    let interior = masks::elliptical_lettering_area(&cleaned, area, dark(region))
-                        .map_err(failed)?;
+                    let mut interior =
+                        masks::elliptical_lettering_area(&cleaned, area, dark(region))
+                            .map_err(failed)?;
+                    interior.exclude(&excluded);
                     if !interior.pixels.iter().any(|&p| p != 0) {
                         region.typeset.insert("status".into(), json!("unreliable"));
                         region
@@ -305,31 +393,13 @@ pub fn typeset(path: &Path, external: Option<&Path>) -> Result<Value> {
             } else {
                 page.extra.insert("sfx_notes".into(), json!(glosses));
             }
-            // Even an overlapping on-art box may not grant access to a closed balloon.
-            if edited.is_some() {
-                for region in &page.regions {
-                    if let Some(balloon) =
-                        resolve_balloon(&source, region, &panels, &neighbors, None)?
-                    {
-                        let b = balloon.bounds;
-                        for y in b.y()..b.bottom() {
-                            for x in b.x()..b.right() {
-                                external_mask.put_pixel(x, y, Luma([0]));
-                            }
-                        }
-                    }
-                }
-                external_mask
-                    .enumerate_pixels()
-                    .filter(|(_, _, p)| p[0] != 0)
-                    .for_each(|(x, y, _)| allowed.put_pixel(x, y, Luma([255])));
-            }
             let base = if let Some(edited) = edited {
-                clean::composite_external(&cleaned, &edited, &external_mask, 2).map_err(failed)?
+                clean::composite_external(&cleaned, &edited, &external_mask, 1).map_err(failed)?
             } else {
                 cleaned.clone()
             };
-            let output = typeset::typeset_page(&base, &text).map_err(failed)?;
+            let output = typeset::typeset_page_with_occupied(&base, &text, Some(&external_mask))
+                .map_err(failed)?;
             if qa::compare_outside_mask(&cleaned, &output.image, &allowed)
                 .map_err(failed)?
                 .changed
@@ -340,11 +410,15 @@ pub fn typeset(path: &Path, external: Option<&Path>) -> Result<Value> {
                 ));
             }
             for decision in output.regions {
+                let is_medium = medium_ids.contains(&decision.id);
                 if let Some(region) = page.regions.iter_mut().find(|r| r.id == decision.id) {
                     region.typeset =
                         serde_json::from_value(serde_json::to_value(decision).map_err(failed)?)
                             .map_err(failed)?;
                     region.typeset.insert("status".into(), json!("fit"));
+                    if is_medium {
+                        region.typeset.insert("weight".into(), json!("medium"));
+                    }
                     count += 1;
                 }
             }
@@ -386,36 +460,44 @@ pub fn fullpage(path: &Path, id: &str, model: String, all_regions: bool) -> Resu
     let source = original(&root, page)?;
     let panels = page_panels(page)?;
     let neighbors = on_art_bounds(page)?;
+    let source_lang = document.meta.get("source_language").and_then(Value::as_str);
     let replacements = page
         .regions
         .iter()
         .filter(|r| {
-            regions::translatable(r, document.policy())
+            !protected_japanese(source_lang, r)
+                && regions::translatable(r, document.policy())
                 && !regions::uses_gloss(r, document.policy())
                 && !r.target_text.trim().is_empty()
         })
         .map(|r| {
             let enclosed = resolve_balloon(&source, r, &panels, &neighbors, None)?.is_some();
             let bbox = bounds(r)?;
-            Ok((all_regions || !enclosed).then(|| FullPageReplacement {
-                id: r.id.clone(),
-                source_text: r.source_text.clone(),
-                target_persian: r.target_text.clone(),
-                bbox,
-                location_cue: format!("Region {}, reading position {}", r.id, r.reading_order + 1),
-                style_cue: r
-                    .extra
-                    .get("style")
-                    .and_then(Value::as_str)
-                    .unwrap_or("Match the weight and emphasis of the source lettering")
-                    .to_owned(),
-                kind: match r.kind.as_str() {
-                    "sfx" => RegionKind::Sfx,
-                    "title" => RegionKind::Title,
-                    _ if enclosed => RegionKind::Balloon,
-                    _ => RegionKind::OnArt,
-                },
-            }))
+            Ok(
+                (all_regions || (!enclosed && !bubble_kind(r))).then(|| FullPageReplacement {
+                    id: r.id.clone(),
+                    source_text: r.source_text.clone(),
+                    target_persian: r.target_text.clone(),
+                    bbox,
+                    location_cue: format!(
+                        "Region {}, reading position {}",
+                        r.id,
+                        r.reading_order + 1
+                    ),
+                    style_cue: r
+                        .extra
+                        .get("style")
+                        .and_then(Value::as_str)
+                        .unwrap_or("Match the weight and emphasis of the source lettering")
+                        .to_owned(),
+                    kind: match r.kind.as_str() {
+                        "sfx" => RegionKind::Sfx,
+                        "title" => RegionKind::Title,
+                        _ if enclosed => RegionKind::Balloon,
+                        _ => RegionKind::OnArt,
+                    },
+                }),
+            )
         })
         .collect::<Result<Vec<_>>>()?
         .into_iter()
@@ -432,274 +514,4 @@ pub fn fullpage(path: &Path, id: &str, model: String, all_regions: bool) -> Resu
     Ok(json!(
         fullpage_edit::build_fullpage_prompt(&request).map_err(failed)?
     ))
-}
-
-pub fn qa(path: &Path, strict: bool) -> Result<Value> {
-    let document = ir::load_doc(path).map_err(failed)?;
-    let root = ir::doc_dir(path);
-    let mut findings = Vec::new();
-    let mut changed = 0;
-    let mut errors = 0;
-    let mut warnings = 0;
-    let mut shaper = revayat_vision::typefont::Shaper::new().map_err(failed)?;
-    for finding in revayat_ir::certify::certify_publication(&root, &document).map_err(failed)? {
-        findings.push(json!(finding));
-        if strict {
-            errors += 1;
-        } else {
-            warnings += 1;
-        }
-    }
-    for page in &document.pages {
-        let native = original_native(&root, page)?;
-        let image = native.to_rgb8();
-        let native_clean = page
-            .cleaned
-            .as_deref()
-            .map(|path| -> Result<DynamicImage> {
-                images::load_image(&asset(&root, path)?, MAX_PAGE_PIXELS).map_err(failed)
-            })
-            .transpose()?;
-        let clean = native_clean.as_ref().unwrap_or(&native).to_rgb8();
-        let native_rendered = page
-            .rendered
-            .as_deref()
-            .map(|path| -> Result<DynamicImage> {
-                images::load_image(&asset(&root, path)?, MAX_PAGE_PIXELS).map_err(failed)
-            })
-            .transpose()?;
-        let rendered = native_rendered.as_ref().map(DynamicImage::to_rgb8);
-        let mask = read_mask(
-            &root,
-            page,
-            if rendered.is_some() {
-                "authorized_mask"
-            } else {
-                "clean_mask"
-            },
-        )?;
-        let native_changed = images::count_changed_outside_mask(
-            &native,
-            native_rendered
-                .as_ref()
-                .or(native_clean.as_ref())
-                .unwrap_or(&native),
-            &mask,
-        )
-        .map_err(failed)?
-        .max(
-            images::count_changed_outside_mask(
-                &native,
-                native_clean.as_ref().unwrap_or(&native),
-                &mask,
-            )
-            .map_err(failed)?,
-        );
-        let mut regions = Vec::new();
-        let panels = page_panels(page)?;
-        let neighbors = on_art_bounds(page)?;
-        for region in &page.regions {
-            if !editable(region, document.policy()) {
-                continue;
-            }
-            if regions::region_state(region, document.policy()).map_err(failed)?
-                == revayat_ir::RegionState::Pending
-            {
-                findings.push(json!({"code":PENDING_REGION,"page":page.id,"region":region.id}));
-                if strict {
-                    errors += 1;
-                } else {
-                    warnings += 1;
-                }
-            }
-            if region.target_text.is_empty() {
-                continue;
-            }
-            if rendered.is_none()
-                || !matches!(
-                    region.typeset.get("status").and_then(Value::as_str),
-                    Some("fit" | "external")
-                )
-            {
-                findings
-                    .push(json!({"code":MISSING_TYPESET_PROOF,"page":page.id,"region":region.id}));
-                if strict {
-                    errors += 1;
-                } else {
-                    warnings += 1;
-                }
-            }
-            if let Some(final_page) = &rendered
-                && region.typeset.get("status").and_then(Value::as_str) == Some("fit")
-            {
-                let lines = region
-                    .typeset
-                    .get("lines")
-                    .cloned()
-                    .map_or_else(|| Ok(Vec::new()), serde_json::from_value)
-                    .map_err(failed)?;
-                let style = region
-                    .extra
-                    .get("style")
-                    .and_then(Value::as_str)
-                    .map_or_else(
-                        || Ok(Default::default()),
-                        revayat_vision::typestyle::style_flags,
-                    )
-                    .map_err(failed)?;
-                let size = region
-                    .typeset
-                    .get("font_size")
-                    .and_then(Value::as_f64)
-                    .unwrap_or_default() as f32;
-                let missing = qa::missing_clusters(
-                    &mut shaper,
-                    &region.target_text,
-                    &lines,
-                    size,
-                    &style,
-                    &clean,
-                    final_page,
-                );
-                if !matches!(missing, Ok(0)) {
-                    errors += 1;
-                    findings.push(json!({"code":MISSING_GLYPH_COVERAGE, "page":page.id, "region":region.id, "detail":missing.map_or_else(|err| err.to_string(), |count| format!("{count} shaped clusters have no matching ink"))}));
-                }
-            }
-            regions.push(qa::QaRegion {
-                id: &region.id,
-                target: &region.target_text,
-                balloon: resolve_balloon(&image, region, &panels, &neighbors, None)?,
-                ink_box: region
-                    .typeset
-                    .get("ink_box")
-                    .map(|b| serde_json::from_value(b.clone()))
-                    .transpose()
-                    .map_err(failed)?,
-                font_size: region
-                    .typeset
-                    .get("font_size")
-                    .and_then(Value::as_f64)
-                    .map(|n| n as f32),
-                line_height: region
-                    .typeset
-                    .get("line_height")
-                    .and_then(Value::as_f64)
-                    .map(|n| n as f32),
-            });
-        }
-        let acknowledged = page
-            .regions
-            .iter()
-            .map(review::acknowledged)
-            .collect::<Vec<_>>();
-        let spans = page
-            .regions
-            .iter()
-            .map(review::acknowledged_spans)
-            .collect::<Vec<_>>();
-        let reviews = page
-            .regions
-            .iter()
-            .enumerate()
-            .map(|(index, region)| qa::QaTextReview {
-                region: &region.id,
-                acknowledged: &acknowledged[index],
-                spans: spans[index].as_deref(),
-            })
-            .collect::<Vec<_>>();
-        let mut result = qa::run_strict_qa_with_reviews(
-            qa::QaPage {
-                original: &image,
-                cleaned: &clean,
-                final_image: rendered.as_ref().unwrap_or(&clean),
-                authorized: &mask,
-                regions: &regions,
-            },
-            &reviews,
-        )
-        .map_err(failed)?;
-        let excluded = excluded_balloon_regions(page, document.policy())?;
-        for finding in &mut result.findings {
-            if finding.code != "balloon-ink-survives" {
-                continue;
-            }
-            let Some(balloon) = regions
-                .iter()
-                .find(|region| finding.region.as_deref() == Some(region.id))
-                .and_then(|region| region.balloon)
-            else {
-                continue;
-            };
-            let mut interior = revayat_vision::qachecks::balloon_cleanup_interior(&image, balloon)
-                .map_err(failed)?;
-            interior.exclude(&excluded);
-            let b = interior.bounds;
-            let paper =
-                image::imageops::crop_imm(&clean, b.x(), b.y(), b.width(), b.height()).to_image();
-            let gray = masks::page_luminance(&paper);
-            let samples = gray
-                .iter()
-                .zip(interior.pixels.iter())
-                .filter_map(|(&p, &m)| {
-                    let luma = if balloon.dark { 255 - p } else { p };
-                    (m != 0 && luma > 185).then_some(u64::from(luma))
-                });
-            let (sum, count) = samples.fold((0u64, 0u64), |(sum, count), v| (sum + v, count + 1));
-            let Some(paper_luma) = sum.checked_div(count) else {
-                continue;
-            };
-            let ink = gray
-                .iter()
-                .zip(interior.pixels.iter())
-                .filter(|&(&p, &m)| {
-                    let luma = if balloon.dark { 255 - p } else { p };
-                    m != 0 && paper_luma.abs_diff(u64::from(luma)) >= 38
-                })
-                .count();
-            if ink == 0 {
-                finding.code.clear();
-                result.errors -= 1;
-            } else {
-                finding.detail = format!("{ink} ink pixels remain in the cleared balloon");
-            }
-        }
-        result.findings.retain(|finding| !finding.code.is_empty());
-        if native_changed > result.artwork_pixels_changed {
-            errors += 1;
-            findings.push(json!({"code":"artwork-changed","page":page.id,"detail":format!("{native_changed} pixels changed outside authorized masks, including native precision and alpha")}));
-        }
-        errors += result.errors;
-        warnings += result.warnings;
-        changed += native_changed;
-        findings.extend(
-            result
-                .findings
-                .into_iter()
-                .map(|finding| json!({"page":page.id,"finding":finding})),
-        );
-    }
-    Ok(
-        json!({"ok":errors == 0 && (!strict || warnings == 0),"errors":errors,"warnings":warnings,"artwork_pixels_changed":changed,"findings":findings}),
-    )
-}
-
-#[cfg(test)]
-mod contract_tests {
-    use super::*;
-
-    #[test]
-    fn cli_qa_findings_have_documented_recovery_actions() {
-        let guide = include_str!("../../../../skills/revayat-comic/SKILL.md");
-        for code in [
-            MISSING_GLYPH_COVERAGE,
-            MISSING_TYPESET_PROOF,
-            PENDING_REGION,
-        ] {
-            assert!(
-                guide.contains(&format!("| `{code}` |")),
-                "undocumented QA code: {code}"
-            );
-        }
-    }
 }

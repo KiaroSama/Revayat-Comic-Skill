@@ -3,7 +3,7 @@ name: revayat-comic
 description: Translate manga, manhwa, manhua and Western comics into Persian and produce a finished CBZ, PDF or folder of pages. Detects panels, speech balloons and sound effects, reads them with your own eyes from rendered crops, removes the original lettering without altering the artwork, and typesets real right-to-left Persian into each balloon. Use for translating a manga chapter, a webtoon, a comic, a CBZ/CBR archive or a comic PDF into Persian (فارسی).
 license: GPL-3.0-or-later
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, Agent, AskUserQuestion
-metadata: {"homepage":"https://github.com/KiaroSama/Revayat-Comic-Skill","version":"2.0.4","requires":{"bins":["revayat-comic"]}}
+metadata: {"homepage":"https://github.com/KiaroSama/Revayat-Comic-Skill","version":"2.0.5","requires":{"bins":["revayat-comic"]}}
 ---
 
 # Revayat Comic: comics into Persian
@@ -457,9 +457,16 @@ The CLI uses the bundled Vazir fonts. Inspect each rendered page for missing dot
 
 ```bash
 revayat-comic qa check --doc "$WORK/comic.json" --strict
+revayat-comic qa review-pack --doc "$WORK/comic.json"
 ```
 
-Stop if `ok` is false. Review the page and region in each finding, fix the worksheet or mask as needed, and rerun the affected stages. If the artwork changed outside the approved edit areas, compare the original with the cleaned and rendered pages before trying again. Check `artwork_pixels_changed` and reopen the rendered pages after every repair.
+Stop if `ok` is false. Review the page and region in each finding, fix the worksheet or mask as needed, and rerun the affected stages. Then hand `<WORK>/review/flags.json` and the 2x zoomed `[SOURCE | RENDERED]` crops under `<WORK>/review/crops/` to the read-only Stage 5a adversarial reviewer (`references/multi-agent-workflow.md`) to sign `<WORK>/review/ledger.tsv`, repair any `FAIL` rows in Stage 5b, and gate export with:
+
+```bash
+revayat-comic qa review-pack --doc "$WORK/comic.json" --verify-ledger
+```
+
+If the artwork changed outside the approved edit areas, compare the original with the cleaned and rendered pages before trying again. Check `artwork_pixels_changed` and reopen the rendered pages after every repair.
 
 QA checks original integer color samples and alpha, including 16-bit precision,
 as well as the RGB lettering proof. Normal export also requires current cleaning,
@@ -488,6 +495,7 @@ it cannot waive pixel, glyph, geometry, freshness or package integrity failures.
 | `compressed-variant` | Displayed Persian differs from full wording without a current review. | Compare `fa_full` and `fa` against the source and layout, then record `reviewed: compressed-variant`; changed wording or layout reopens it. |
 | `artwork-changed` | Native color or alpha samples changed outside authorized masks. | Restore the source, correct edit boundaries, regenerate output and confirm zero outside-mask changes. |
 | `page-dimensions` | Original, cleaned and rendered page dimensions differ. | Restore native dimensions and regenerate the affected artifact. |
+| `protected-japanese-modified` | Japanese kana/SFX on an English-source edition was translated, erased or altered. | Mark the Japanese region `keep`, restore original pixels, and rerun clean/typeset. |
 | `mask-dimensions` | A page mask has the wrong dimensions. | Regenerate the mask from the current page; do not resize artwork. |
 | `balloon-ink-survives` | Source lettering remains in an approved balloon interior. | Inspect the mask and polarity, clean the actual glyphs, then typeset again. |
 | `halo-artifact` | Cleaning leaves visible edge or color residue. | Correct the cleaning region or approved external edit and inspect its boundary. |
@@ -593,6 +601,9 @@ Read these only when the step points at them:
 - `references/persian-typesetting.md` — RTL, shaping, fonts, fitting a balloon
 - `references/detection.md` — thresholds, difficult pages, correcting a region
 - `references/artwork-preservation.md` — masks, cleaning tiers, what QA proves
+- `references/fullpage-image-edit.md` — cropped on-art editing, paste-back, and external compositing
+- `references/gemini-flash-prompting.md` — empirically tested Gemini 3.1 Flash Image prompt templates and Persian glyph rules
+- `references/multi-agent-workflow.md` — six-stage pipeline including Stage 5a/5b adversarial review and `ledger.tsv`
 - `references/sound-effects.md` — the four policies and how to choose
 - `references/sfx-glossary.md`: Japanese and English effects, Persian equivalents, and lookup rules
 - `references/watermarks.md` — erasing a mark, and whether it is yours to erase

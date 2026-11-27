@@ -49,120 +49,7 @@ struct StageCli {
     stage: Stage,
 }
 
-#[derive(Args)]
-struct Doc {
-    #[arg(long)]
-    doc: PathBuf,
-}
-
-#[derive(Args)]
-struct DetectionArgs {
-    #[command(flatten)]
-    doc: Doc,
-    #[arg(long)]
-    pages: Option<String>,
-    #[arg(long)]
-    no_sfx: bool,
-    #[arg(long, default_value_t = revayat_vision::detect::DetectionOptions::default().balloon_min_area)]
-    balloon_min_area: f64,
-    #[arg(long, default_value_t = revayat_vision::detect::DetectionOptions::default().balloon_max_area)]
-    balloon_max_area: f64,
-    #[arg(long, default_value_t = revayat_vision::detect::DetectionOptions::default().balloon_min_side)]
-    balloon_min_side: f64,
-    #[arg(long, default_value_t = revayat_vision::detect::DetectionOptions::default().balloon_min_solidity)]
-    balloon_min_solidity: f64,
-    #[arg(long, default_value_t = revayat_vision::detect::DetectionOptions::default().ink_min)]
-    ink_min: f64,
-    #[arg(long, default_value_t = revayat_vision::detect::DetectionOptions::default().ink_max)]
-    ink_max: f64,
-    #[arg(long, default_value_t = revayat_vision::detect::DetectionOptions::default().glyph_min)]
-    glyph_min: f64,
-    #[arg(long, default_value_t = revayat_vision::detect::DetectionOptions::default().glyph_max)]
-    glyph_max: f64,
-    #[arg(long, default_value_t = revayat_vision::detect::DetectionOptions::default().gutter_max_ink)]
-    gutter_max_ink: f64,
-    #[arg(long, default_value_t = revayat_vision::detect::DetectionOptions::default().gutter_min_span)]
-    gutter_min_span: f64,
-    #[arg(long, default_value_t = revayat_vision::detect::DetectionOptions::default().panel_min_area)]
-    panel_min_area: f64,
-    #[arg(long, default_value_t = revayat_vision::detect::DetectionOptions::default().sfx_min_side)]
-    sfx_min_side: f64,
-    #[arg(long, default_value_t = revayat_vision::detect::DetectionOptions::default().sfx_min_glyphs)]
-    sfx_min_glyphs: u32,
-    #[arg(long, default_value_t = revayat_vision::detect::DetectionOptions::default().sfx_size_uniformity)]
-    sfx_size_uniformity: f64,
-    #[arg(long, default_value_t = revayat_vision::detect::DetectionOptions::default().sfx_max_spread)]
-    sfx_max_spread: f64,
-}
-
-impl DetectionArgs {
-    fn options(&self) -> revayat_vision::detect::DetectionOptions {
-        revayat_vision::detect::DetectionOptions {
-            balloon_min_area: self.balloon_min_area,
-            balloon_max_area: self.balloon_max_area,
-            balloon_min_side: self.balloon_min_side,
-            balloon_min_solidity: self.balloon_min_solidity,
-            ink_min: self.ink_min,
-            ink_max: self.ink_max,
-            glyph_min: self.glyph_min,
-            glyph_max: self.glyph_max,
-            gutter_max_ink: self.gutter_max_ink,
-            gutter_min_span: self.gutter_min_span,
-            panel_min_area: self.panel_min_area,
-            sfx_min_side: self.sfx_min_side,
-            sfx_min_glyphs: self.sfx_min_glyphs,
-            sfx_size_uniformity: self.sfx_size_uniformity,
-            sfx_max_spread: self.sfx_max_spread,
-            find_sfx: !self.no_sfx,
-            rtl: true,
-        }
-    }
-}
-
-#[derive(Clone, Copy, ValueEnum)]
-enum Direction {
-    Rtl,
-    Ltr,
-}
-
-#[derive(Clone, Copy, ValueEnum)]
-enum WorksheetAction {
-    Build,
-    Merge,
-    Status,
-}
-
-#[derive(Clone, Copy, ValueEnum)]
-enum GlossaryAction {
-    Scan,
-    Check,
-}
-
-#[derive(Clone, Copy, ValueEnum)]
-enum FalintAction {
-    Check,
-    Fix,
-}
-
-#[derive(Clone, Copy, ValueEnum)]
-enum DigitMode {
-    Latin,
-    Persian,
-    Keep,
-}
-
-#[derive(Clone, Copy, ValueEnum)]
-enum QaAction {
-    Check,
-    Package,
-}
-
-#[derive(Clone, Copy, ValueEnum)]
-enum BatchAction {
-    Plan,
-    Merge,
-    Status,
-}
+use crate::stage_args::*;
 
 #[derive(Subcommand)]
 enum VoiceAction {
@@ -298,7 +185,7 @@ enum Stage {
         #[arg(long)]
         from_overview: bool,
     },
-    /// Check pages or an exported package.
+    /// Check pages, an exported package, or build/verify a zoomed review pack.
     Qa {
         mode: QaAction,
         #[command(flatten)]
@@ -307,6 +194,12 @@ enum Stage {
         strict: bool,
         #[arg(long)]
         package: Option<PathBuf>,
+        #[arg(long)]
+        out: Option<PathBuf>,
+        #[arg(long, default_value_t = 2)]
+        scale: u32,
+        #[arg(long)]
+        verify_ledger: bool,
     },
     /// Export the rendered comic.
     Export {
@@ -630,6 +523,9 @@ fn stage_output(stage: Stage, output: &mut dyn Write) -> Result<i32, StageError>
             doc,
             strict,
             package: path,
+            out,
+            scale,
+            verify_ledger,
         } => {
             let value = match mode {
                 QaAction::Check => processing::qa(&doc.doc, strict)?,
@@ -640,6 +536,14 @@ fn stage_output(stage: Stage, output: &mut dyn Write) -> Result<i32, StageError>
                     )
                     .map_err(failed)?
                 ),
+                QaAction::ReviewPack => processing::review_pack(
+                    &doc.doc,
+                    processing::ReviewPackOptions {
+                        out,
+                        scale,
+                        verify_ledger,
+                    },
+                )?,
             };
             let code = i32::from(value["ok"] != true);
             return report(output, value, code);

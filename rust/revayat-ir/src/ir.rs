@@ -485,6 +485,49 @@ pub fn is_persian(text: &str) -> bool {
     text.contains(['گ', 'چ', 'پ', 'ژ', 'ک', 'ی']) && looks_like(text, "fa")
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForeignScriptGuard {
+    ProtectedJapanese,
+    ReviewAmbiguousCjk,
+    Translatable,
+}
+
+/// Protect Japanese kana (or kana+Han) artwork/SFX when localizing an English-source edition.
+pub fn foreign_script_guard(
+    source_language: Option<&str>,
+    source_text: &str,
+) -> ForeignScriptGuard {
+    let english = source_language.is_some_and(|lang| {
+        matches!(
+            lang.trim().to_ascii_lowercase().as_str(),
+            "en" | "eng" | "english"
+        )
+    });
+    if !english {
+        return ForeignScriptGuard::Translatable;
+    }
+    let c = script_counts(source_text);
+    let kana = c["hiragana"] + c["katakana"];
+    let han = c["han"];
+    let other = c["latin"] + c["arabic"] + c["hangul"] + c["cyrillic"];
+    if other == 0 && kana > 0 {
+        ForeignScriptGuard::ProtectedJapanese
+    } else if other == 0 && han > 0 {
+        ForeignScriptGuard::ReviewAmbiguousCjk
+    } else {
+        ForeignScriptGuard::Translatable
+    }
+}
+
+pub fn is_rtl_language(language: Option<&str>) -> bool {
+    language.map_or(true, |lang| {
+        matches!(
+            lang.trim().to_ascii_lowercase().as_str(),
+            "" | "fa" | "fas" | "per" | "persian" | "ar" | "ara" | "arabic" | "he" | "ur"
+        )
+    })
+}
+
 fn order_boxes(boxes: &[BBox], rtl: bool, tolerance: f64) -> Vec<usize> {
     let mut positions: Vec<_> = (0..boxes.len()).collect();
     positions.sort_by_key(|i| boxes[*i][1]);

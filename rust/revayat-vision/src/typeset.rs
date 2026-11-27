@@ -24,6 +24,7 @@ pub struct TextRegion {
     pub compact: bool,
     pub align: Alignment,
     pub style: TextStyle,
+    pub rtl_target: bool,
 }
 
 impl TextRegion {
@@ -39,6 +40,7 @@ impl TextRegion {
             compact: false,
             align: Alignment::Center,
             style: TextStyle::default(),
+            rtl_target: false,
         }
     }
 }
@@ -119,10 +121,25 @@ fn render(
 
 /// Returns a page only after every region fits.
 pub fn typeset_page(page: &RgbImage, regions: &[TextRegion]) -> Result<TypesetPage> {
+    typeset_page_with_occupied(page, regions, None)
+}
+
+/// Returns a page only after every region fits, avoiding externally occupied pixels.
+pub fn typeset_page_with_occupied(
+    page: &RgbImage,
+    regions: &[TextRegion],
+    occupied_external: Option<&GrayImage>,
+) -> Result<TypesetPage> {
     crate::same_geometry(page.dimensions(), page.dimensions())?;
+    if let Some(ext) = occupied_external {
+        crate::same_geometry(page.dimensions(), ext.dimensions())?;
+    }
     let mut shaper = Shaper::new()?;
     let mut ids = BTreeSet::new();
     let mut mask = GrayImage::new(page.width(), page.height());
+    let mut occupied = occupied_external
+        .cloned()
+        .unwrap_or_else(|| GrayImage::new(page.width(), page.height()));
     let mut image = page.clone();
     let mut output = Vec::new();
     let cap = page_font_cap(regions);
@@ -133,7 +150,18 @@ pub fn typeset_page(page: &RgbImage, regions: &[TextRegion]) -> Result<TypesetPa
             crate::same_geometry((b.width(), b.height()), mask.pixels.dimensions())?;
         }
     }
-    let interiors = split_shared_interiors(regions)?;
+    let mut interiors = split_shared_interiors(regions)?;
+    if let Some(ext) = occupied_external {
+        for interior in interiors.iter_mut().flatten() {
+            let b = interior.bounds;
+            for (x, y, p) in interior.pixels.enumerate_pixels_mut() {
+                if ext.get_pixel(b.x() + x, b.y() + y)[0] != 0 {
+                    p[0] = 0;
+                }
+            }
+            *interior = trim_interior(interior.clone());
+        }
+    }
     for (region, interior) in regions.iter().zip(&interiors) {
         let bounds = interior
             .as_ref()
@@ -166,12 +194,13 @@ pub fn typeset_page(page: &RgbImage, regions: &[TextRegion]) -> Result<TypesetPa
             FitOptions {
                 bounds,
                 mask: interior.as_ref().map(|m| &m.pixels),
-                occupied: &mask,
+                occupied: &occupied,
                 min_size: region.min_size,
                 max_size: region.max_size.min(cap.max(region.min_size)),
                 spacing: region.line_spacing,
                 compact: region.compact,
                 align: region.align,
+                rtl_target: region.rtl_target,
             },
         )?
         .ok_or_else(|| VisionError::Overflow {
@@ -192,6 +221,13 @@ pub fn typeset_page(page: &RgbImage, regions: &[TextRegion]) -> Result<TypesetPa
         }
         let fill = region.style.color.unwrap_or_else(|| color(page, bounds));
         let lines = render(&mut image, &mut mask, fit, &region.style, fill);
+        for y in ink_box.y()..ink_box.bottom() {
+            for x in ink_box.x()..ink_box.right() {
+                if mask.get_pixel(x, y)[0] != 0 {
+                    occupied.put_pixel(x, y, Luma([255]));
+                }
+            }
+        }
         output.push(TypesetRegion {
             id: region.id.clone(),
             logical_text: logical,
@@ -329,7 +365,19 @@ fn split_shared_interiors(regions: &[TextRegion]) -> Result<Vec<Option<RegionMas
             } else {
                 continue;
             };
-            if overlap.area() < 4 {
+            let mut overlap_paper = 0u64;
+            for y in overlap.y()..overlap.bottom() {
+                for x in overlap.x()..overlap.right() {
+                    if mask
+                        .pixels
+                        .get_pixel(x - mask.bounds.x(), y - mask.bounds.y())[0]
+                        != 0
+                    {
+                        overlap_paper += 1;
+                    }
+                }
+            }
+            if overlap_paper < 4 {
                 continue;
             }
             for (x, y, p) in mask.pixels.enumerate_pixels_mut() {
