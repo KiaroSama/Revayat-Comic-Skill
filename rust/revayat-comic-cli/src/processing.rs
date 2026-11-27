@@ -1,9 +1,9 @@
 mod lettering;
 mod qa;
-mod review;
+mod review_pack;
 pub use lettering::{clean, fullpage, typeset};
 pub use qa::qa;
-pub use review::{ReviewPackOptions, review_pack};
+pub use review_pack::{ReviewPackOptions, review_pack};
 
 use std::{
     fs,

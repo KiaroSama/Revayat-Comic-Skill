@@ -11,6 +11,11 @@ fn write_doc(fixture: &Fixture, doc: &Value) {
     fs::write(fixture.cwd.join(DOC), serde_json::to_vec(doc).unwrap()).unwrap();
 }
 
+fn success_json(out: &Output) -> Value {
+    success(out);
+    serde_json::from_slice(&out.stdout).unwrap()
+}
+
 fn import_one(fixture: &Fixture, page: &RgbImage) {
     fs::create_dir(fixture.cwd.join("source")).unwrap();
     page.save(fixture.cwd.join("source/0.png")).unwrap();
@@ -117,7 +122,7 @@ fn unresolved_speech_balloon_stays_deterministic_medium_even_with_external_dir()
     );
     assert_eq!(ts["weight"], "medium");
 
-    let qa = success(&fixture.run(&["qa", "check", "--doc", DOC, "--strict"], b""));
+    let qa = success_json(&fixture.run(&["qa", "check", "--doc", DOC, "--strict"], b""));
     assert_eq!(qa["ok"], true, "strict QA failed: {qa}");
 }
 
@@ -241,7 +246,7 @@ fn qa_review_pack_generates_zoomed_crops_and_enforces_ledger_verification() {
     success(&fixture.run(&["clean", "--doc", DOC, "--bubbles-only"], b""));
     success(&fixture.run(&["typeset", "--doc", DOC], b""));
 
-    let pack = success(&fixture.run(&["qa", "review-pack", "--doc", DOC], b""));
+    let pack = success_json(&fixture.run(&["qa", "review-pack", "--doc", DOC], b""));
     assert_eq!(pack["ok"], true);
     assert!(pack["crops"].as_u64().unwrap() >= 1);
     let crop_file = fixture.cwd.join("work/review/crops/p0001_r001.png");
@@ -259,6 +264,7 @@ fn qa_review_pack_generates_zoomed_crops_and_enforces_ledger_verification() {
         "page_id\tregion_id\tstage\tverdict\tdefect_codes\tnotes\np0001\tp0001_r001\t5a\tPASS\t\tverified\n",
     )
     .unwrap();
-    let pass = success(&fixture.run(&["qa", "review-pack", "--doc", DOC, "--verify-ledger"], b""));
+    let pass =
+        success_json(&fixture.run(&["qa", "review-pack", "--doc", DOC, "--verify-ledger"], b""));
     assert_eq!(pass["ok"], true);
 }

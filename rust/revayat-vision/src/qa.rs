@@ -335,6 +335,7 @@ pub fn missing_clusters(
     missing_clusters_in_direction(shaper, target, lines, size, style, clean, rendered, false)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn missing_clusters_in_direction(
     shaper: &mut crate::typefont::Shaper,
     target: &str,
