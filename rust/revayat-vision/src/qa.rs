@@ -61,7 +61,35 @@ pub fn rgb_contrast(a: [u8; 3], b: [u8; 3]) -> f64 {
     (hi + 0.05) / (lo + 0.05)
 }
 
-/// Internal p5-vs-p95 WCAG contrast inside a solid external patch that includes both art and lettering.
+/// Core-stroke WCAG contrast against unchanged surround, avoiding false failures from anti-aliased glyph edges.
+fn core_stroke_contrast(after: &RgbImage, changed: &GrayImage) -> f64 {
+    let mut bg = Vec::new();
+    let mut fg = Vec::new();
+    for (p, m) in after.pixels().zip(changed.pixels()) {
+        let l = srgb_luminance(p.0);
+        if m[0] == 0 {
+            bg.push(l);
+        } else {
+            fg.push(l);
+        }
+    }
+    if bg.is_empty() || fg.len() < 4 {
+        return 0.0;
+    }
+    bg.sort_by(f64::total_cmp);
+    let bg_luma = bg[bg.len() / 2];
+    fg.sort_by(|a, b| (b - bg_luma).abs().total_cmp(&(a - bg_luma).abs()));
+    let core_len = (fg.len() * 3 / 10).max(1);
+    let fg_luma = fg[core_len / 2];
+    let (hi, lo) = if fg_luma >= bg_luma {
+        (fg_luma, bg_luma)
+    } else {
+        (bg_luma, fg_luma)
+    };
+    (hi + 0.05) / (lo + 0.05)
+}
+
+/// Internal p1-vs-p99 WCAG contrast inside a solid external patch that includes both art and lettering.
 fn patch_internal_contrast(after: &RgbImage, changed: &GrayImage) -> f64 {
     let mut lumas: Vec<f64> = after
         .pixels()
@@ -339,8 +367,12 @@ pub fn run_strict_qa_with_reviews(
         )
         .map_err(VisionError::kernel)?;
         let mut has_contrast = contrast.first().is_some_and(|&x| x >= 3.0);
-        if !has_contrast && region.font_size.is_none() && region.balloon.is_none() {
-            has_contrast = patch_internal_contrast(&after, &changed) >= 3.0;
+        if !has_contrast {
+            has_contrast = if region.font_size.is_none() && region.balloon.is_none() {
+                patch_internal_contrast(&after, &changed) >= 3.0
+            } else {
+                core_stroke_contrast(&after, &changed) >= 3.0
+            };
         }
         if !has_contrast {
             report.add(
