@@ -439,7 +439,7 @@ fn script(ch: char) -> Option<&'static str> {
         0x0600..=0x06ff | 0x0750..=0x077f | 0xfb50..=0xfdff | 0xfe70..=0xfeff => "arabic",
         0x0041..=0x005a | 0x0061..=0x007a | 0x00c0..=0x024f => "latin",
         0x3040..=0x309f => "hiragana",
-        0x30a0..=0x30ff | 0x31f0..=0x31ff => "katakana",
+        0x30a0..=0x30ff | 0x31f0..=0x31ff | 0xff66..=0xff9f => "katakana",
         0x3400..=0x4dbf | 0x4e00..=0x9fff | 0xf900..=0xfaff => "han",
         0xac00..=0xd7af | 0x1100..=0x11ff | 0x3130..=0x318f => "hangul",
         0x0400..=0x04ff => "cyrillic",
@@ -499,7 +499,7 @@ pub fn foreign_script_guard(
 ) -> ForeignScriptGuard {
     let english = source_language.is_some_and(|lang| {
         matches!(
-            lang.trim().to_ascii_lowercase().as_str(),
+            crate::languages::primary_language(lang).as_str(),
             "en" | "eng" | "english"
         )
     });
@@ -522,7 +522,7 @@ pub fn foreign_script_guard(
 pub fn is_rtl_language(language: Option<&str>) -> bool {
     language.is_none_or(|lang| {
         matches!(
-            lang.trim().to_ascii_lowercase().as_str(),
+            crate::languages::primary_language(lang).as_str(),
             "" | "fa" | "fas" | "per" | "persian" | "ar" | "ara" | "arabic" | "he" | "ur"
         )
     })

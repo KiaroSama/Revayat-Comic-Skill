@@ -98,6 +98,8 @@ fn synthetic_cbz_round_trip_preserves_artwork_and_exports_all_formats() {
             .unwrap()
             .contains("خوبی")
     );
+    // The merged source text changes mask inputs; rebuild before cleaning and publication.
+    run(&["mask", "--doc", DOC]);
     run(&["clean", "--doc", DOC, "--bubbles-only"]);
     let default = run(&["fullpage-prompt", "--doc", DOC, "--page", id]);
     assert_eq!(default["model_id"], "antigravity/gemini-3.1-flash-image");

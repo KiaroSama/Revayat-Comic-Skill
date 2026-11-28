@@ -4,9 +4,10 @@ Use this workflow for translated text over artwork, such as map labels, speedlin
 
 ## Prepare the crop
 
-Merge and review the worksheets, then clean the speech balloons. Take the page's actual ID from `comic.json`:
+Merge and review the worksheets, refresh masks for the current source and decisions, then clean the speech balloons. Retain any approved free-lettering mask option. Take the page's actual ID from `comic.json`:
 
 ```bash
+revayat-comic mask --doc "$WORK/comic.json"
 revayat-comic clean --doc "$WORK/comic.json" --bubbles-only
 revayat-comic fullpage-prompt --doc "$WORK/comic.json" --page p0009 > "$WORK/p0009-edit.json"
 ```

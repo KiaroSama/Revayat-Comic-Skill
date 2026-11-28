@@ -15,6 +15,12 @@ mod recheck27;
 #[path = "cli/v205_quality.rs"]
 mod v205_quality;
 
+#[path = "cli/recheck28_preservation.rs"]
+mod recheck28_preservation;
+
+#[path = "cli/recheck28_review.rs"]
+mod recheck28_review;
+
 use std::{
     fs::{self, File},
     path::PathBuf,

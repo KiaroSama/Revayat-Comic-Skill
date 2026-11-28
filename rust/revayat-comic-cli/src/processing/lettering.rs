@@ -5,7 +5,7 @@ fn local_mask(root: &Path, region: &RegionRecord) -> Result<Option<masks::Region
     let Some(path) = &region.mask else {
         return Ok(None);
     };
-    let bounds = region
+    let bounds: Rect = region
         .extra
         .get("mask_bounds")
         .ok_or_else(|| failed("missing region mask bounds"))
@@ -13,6 +13,11 @@ fn local_mask(root: &Path, region: &RegionRecord) -> Result<Option<masks::Region
     let pixels = images::load_image(&asset(root, path)?, MAX_PAGE_PIXELS)
         .map_err(failed)?
         .into_luma8();
+    if pixels.dimensions() != (bounds.width(), bounds.height()) {
+        return Err(failed(
+            "region mask dimensions do not match mask_bounds; run mask again",
+        ));
+    }
     Ok(Some(masks::RegionMask { bounds, pixels }))
 }
 
@@ -54,6 +59,31 @@ pub(super) fn read_mask(root: &Path, page: &PageRecord, field: &str) -> Result<G
 pub(super) fn protected_japanese(source_language: Option<&str>, region: &RegionRecord) -> bool {
     ir::foreign_script_guard(source_language, &region.source_text)
         == ir::ForeignScriptGuard::ProtectedJapanese
+}
+
+pub(super) fn preserved_region_bounds(
+    page: &PageRecord,
+    policy: &str,
+    source_language: Option<&str>,
+) -> Result<Vec<Rect>> {
+    page.regions
+        .iter()
+        .filter(|region| {
+            !region.dropped
+                && region.state != Some(regions::RegionState::Dropped)
+                && (!editable(region, policy) || protected_japanese(source_language, region))
+        })
+        .map(bounds)
+        .collect()
+}
+
+pub(super) fn exclude_page_regions(mask: GrayImage, regions: &[Rect]) -> GrayImage {
+    let mut local = masks::RegionMask {
+        bounds: Rect([0, 0, mask.width(), mask.height()]),
+        pixels: mask,
+    };
+    local.exclude(regions);
+    local.pixels
 }
 
 fn clears_balloon(region: &RegionRecord, policy: &str, source_language: Option<&str>) -> bool {
@@ -103,6 +133,7 @@ pub fn clean(path: &Path, bubbles_only: bool, external: Option<&Path>) -> Result
             let panels = page_panels(page)?;
             let neighbors = on_art_bounds(page)?;
             let excluded = excluded_balloon_regions(page, &policy, source_lang.as_deref())?;
+            let preserved = preserved_region_bounds(page, &policy, source_lang.as_deref())?;
             for (index, region) in page.regions.iter_mut().enumerate() {
                 if clears_balloon(region, &policy, source_lang.as_deref())
                     && let Some(balloon) =
@@ -140,8 +171,10 @@ pub fn clean(path: &Path, bubbles_only: bool, external: Option<&Path>) -> Result
                     {
                         continue;
                     }
-                    let mask = local_mask(&root, region)?
+                    let mut mask = local_mask(&root, region)?
                         .ok_or_else(|| failed("missing region mask; run mask first"))?;
+                    // Saved masks must never override a current keep decision.
+                    mask.exclude(&preserved);
                     mask.apply_to(&mut cleaned.mask).map_err(failed)?;
                     let (image, strategy) =
                         clean::clean_region(&cleaned.image, &mask, None, external.as_ref())
@@ -222,7 +255,9 @@ pub fn typeset(path: &Path, external: Option<&Path>) -> Result<Value> {
             let mut text = Vec::new();
             let mut medium_ids = std::collections::BTreeSet::new();
             let mut glosses = Vec::new();
-            let mut allowed = read_mask(&root, page, "clean_mask")?;
+            let preserved = preserved_region_bounds(page, &policy, source_lang.as_deref())?;
+            let mut allowed =
+                exclude_page_regions(read_mask(&root, page, "clean_mask")?, &preserved);
             let mut external_mask = GrayImage::new(page.width, page.height);
             let edited = external
                 .map(|dir| external_page(dir, page))
@@ -380,7 +415,7 @@ pub fn typeset(path: &Path, external: Option<&Path>) -> Result<Value> {
                     let anchor = entry.bounds;
                     entry.compact =
                         region.kind == "title" && anchor.width().max(anchor.height()) < 48;
-                    let interior = if entry.compact {
+                    let mut interior = if entry.compact {
                         clean::compact_lettering_area(&cleaned, anchor).map_err(failed)?
                     } else {
                         let area = on_art_mask(&root, &source, region)?.bounds;
@@ -391,6 +426,7 @@ pub fn typeset(path: &Path, external: Option<&Path>) -> Result<Value> {
                         clean::clear_lettering_area(&cleaned, interior, dark(region))
                             .map_err(failed)?
                     };
+                    interior.exclude(&excluded);
                     if !interior.pixels.pixels().any(|p| p[0] != 0) {
                         region.typeset.insert("status".into(), json!("unreliable"));
                         continue;

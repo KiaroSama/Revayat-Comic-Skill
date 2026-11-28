@@ -157,6 +157,7 @@ cp target/release/revayat-comic bin/revayat-comic
 .\bin\revayat-comic.exe worksheet merge --doc .\work\comic.json --worksheets .\work\worksheets
 .\bin\revayat-comic.exe glossary check --doc .\work\comic.json
 .\bin\revayat-comic.exe falint check --doc .\work\comic.json
+.\bin\revayat-comic.exe mask --doc .\work\comic.json
 .\bin\revayat-comic.exe clean --doc .\work\comic.json
 .\bin\revayat-comic.exe typeset --doc .\work\comic.json
 .\bin\revayat-comic.exe qa check --doc .\work\comic.json --strict

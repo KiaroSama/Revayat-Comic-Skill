@@ -7,6 +7,16 @@ pub struct Guidance {
     pub priority: String,
     pub rules: Vec<String>,
 }
+
+pub(crate) fn primary_language(language: &str) -> String {
+    language
+        .trim()
+        .split(['-', '_'])
+        .next()
+        .unwrap_or_default()
+        .to_lowercase()
+}
+
 fn canonical(tag: &str) -> Option<&'static str> {
     Some(match tag {
         "ja" | "jp" | "jpn" | "japan" | "japanese" => "ja",
@@ -41,7 +51,7 @@ pub fn guidance(language: Option<&str>) -> Guidance {
         .to_lowercase()
         .replace('_', "-");
     let profile = canonical(&tag)
-        .or_else(|| tag.split_once('-').and_then(|(head, _)| canonical(head)))
+        .or_else(|| canonical(&primary_language(&tag)))
         .unwrap_or("generic");
     let extra: &[&str] = match profile {
         "ja" => &[

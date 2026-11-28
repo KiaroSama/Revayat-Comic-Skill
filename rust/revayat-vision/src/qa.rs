@@ -439,18 +439,26 @@ pub fn missing_clusters_in_direction(
     let expected = logical(target);
     let mut placed = String::new();
     for line in lines {
-        let part = line.text.trim();
-        if !placed.is_empty() {
-            let hyphen_join = placed.ends_with('-')
-                && part.chars().next().is_some_and(bidi::is_rtl_char)
-                && !expected.contains("- ");
-            if !hyphen_join {
-                placed.push(' ');
+        let part = logical(&line.text);
+        if part.is_empty() {
+            continue;
+        }
+        let spaced = logical(&format!("{placed} {part}"));
+        if expected.starts_with(&spaced) {
+            placed = spaced;
+            continue;
+        }
+        // A wrapped hyphen keeps its authored boundary, independently of other hyphens,
+        // directional isolates, or a digit at the start of the following compound part.
+        if placed.ends_with('-') {
+            placed.push_str(&part);
+            if expected.starts_with(&placed) {
+                continue;
             }
         }
-        placed.push_str(part);
+        return Ok(expected.chars().count().max(1));
     }
-    if logical(&placed) != expected {
+    if placed != expected {
         return Ok(expected.chars().count().max(1));
     }
     let rtl = bidi::should_shape_rtl(target, rtl_target);

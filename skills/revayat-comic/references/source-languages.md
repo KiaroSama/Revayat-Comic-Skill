@@ -103,6 +103,16 @@ need the country and scene; a literal visual joke can override an idiom reading.
 
 ## English (`en`) and other sources
 
+English locale tags such as `en-US` and `en_GB` use the same Japanese-artwork
+protection as `en`. Kana-only or kana-and-Han source effects, including halfwidth
+katakana such as `ｺﾞｺﾞｺﾞ`, must keep their original pixels: use `keep: yes` and
+an empty `fa:` field. The worksheet merge rejects a target or erase action even
+under `sfx_policy=keep` and when replaying a previously merged worksheet. Han-only
+regions still require individual review; mixed-language regions are not silently
+classified as Japanese. Preserve the source transcription without Unicode
+normalization merely to trigger this protection. Target language locales such as
+`fa-IR` retain their primary language's RTL direction.
+
 Preserve modal force, sarcasm, phrasal-verb meaning, ambiguous referents and
 split-balloon continuity. English `you` does not determine Persian تو/شما;
 the relationship does. Contractions alone do not license extra slang. For any

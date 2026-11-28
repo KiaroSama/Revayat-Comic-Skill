@@ -332,6 +332,31 @@ fn already_applied(page: &PageRecord, reply: &Reply, digest: &str) -> bool {
             )
 }
 
+fn check_protected_japanese(
+    page: &PageRecord,
+    source_language: Option<&str>,
+    policy: &str,
+) -> Result<(), IrError> {
+    for region in &page.regions {
+        if ir::foreign_script_guard(source_language, &region.source_text)
+            == ir::ForeignScriptGuard::ProtectedJapanese
+            && (regions::translatable(region, policy)
+                || !region.target_text.trim().is_empty()
+                || region.erase
+                || region.state == Some(regions::RegionState::Erased))
+        {
+            return Err(IrError::refused(
+                "protected_japanese_artwork",
+                format!(
+                    "{}: Japanese kana/SFX on an English-source edition must be kept untouched",
+                    region.id
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub fn status(doc_path: &Path, worksheets: Option<&Path>) -> Result<WorksheetStatus, IrError> {
     let doc = ir::load_doc(doc_path)?;
     let folder = worksheet_folder(doc_path, &doc, worksheets);
@@ -441,6 +466,7 @@ pub fn merge_document(
         let before = ir::page_fingerprint(page);
         let content_before = content_fingerprint(page);
         if already_applied(page, &reply, &digest) {
+            check_protected_japanese(page, source_lang.as_deref(), &policy)?;
             if check_stamp(&reply, page, Some(&stamp)).is_err() {
                 let receipt = page
                     .extra
@@ -486,22 +512,7 @@ pub fn merge_document(
             ));
         }
         merge(page, &reply, &policy, &direction, Some(&stamp), force)?;
-        for region in &page.regions {
-            if ir::foreign_script_guard(source_lang.as_deref(), &region.source_text)
-                == ir::ForeignScriptGuard::ProtectedJapanese
-                && (regions::translatable(region, &policy)
-                    || region.erase
-                    || region.state == Some(regions::RegionState::Erased))
-            {
-                return Err(IrError::refused(
-                    "protected_japanese_artwork",
-                    format!(
-                        "{}: Japanese kana/SFX on an English-source edition must be kept untouched",
-                        region.id
-                    ),
-                ));
-            }
-        }
+        check_protected_japanese(page, source_lang.as_deref(), &policy)?;
         let after = ir::page_fingerprint(page);
         let content_after = content_fingerprint(page);
         page.extra.insert(

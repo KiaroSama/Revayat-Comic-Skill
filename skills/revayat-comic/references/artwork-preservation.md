@@ -1,5 +1,7 @@
 # Artwork preservation
 
+After merging worksheets or changing source text, source language, geometry, or keep/erase decisions, rebuild masks before cleaning. Retain any approved free-lettering mask option; target-text or target-language-only edits require typesetting again, without rebuilding masks or cleaning.
+
 The guarantee this project is built around, how it is enforced, and what it does
 not cover.
 
