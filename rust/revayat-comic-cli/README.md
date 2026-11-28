@@ -41,6 +41,7 @@ Keep each worksheet's fingerprint and region IDs. Fill in the source text and th
 ```sh
 revayat-comic worksheet merge --doc work/comic.json
 revayat-comic falint fix --doc work/comic.json
+revayat-comic mask --doc work/comic.json
 revayat-comic clean --doc work/comic.json --bubbles-only
 revayat-comic typeset --doc work/comic.json
 revayat-comic qa check --strict --doc work/comic.json
