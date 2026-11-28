@@ -128,7 +128,7 @@ impl Rect {
         ])
         .clip(width, height)
     }
-    pub(crate) fn checked(self, size: (u32, u32)) -> Result<Self> {
+    pub fn checked(self, size: (u32, u32)) -> Result<Self> {
         if self.area() == 0
             || self.x().checked_add(self.width()).is_none()
             || self.y().checked_add(self.height()).is_none()

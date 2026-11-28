@@ -465,10 +465,11 @@ pub fn verify_rotated_ink(
     let tight = mask_bounds(&rotated)
         .ok_or_else(|| VisionError::invalid("missing expected rotated ink"))?;
     let border = region.outline_px;
-    let [dx, dy] = style
-        .shadow
-        .then(|| typestyle::shadow_offset(angle))
-        .unwrap_or_default();
+    let [dx, dy] = if style.shadow {
+        typestyle::shadow_offset(angle)
+    } else {
+        [0, 0]
+    };
     if border > 6
         || b.width() != tight.width() + 2 * border + dx.unsigned_abs() as u32
         || b.height() != tight.height() + 2 * border + dy.unsigned_abs() as u32
