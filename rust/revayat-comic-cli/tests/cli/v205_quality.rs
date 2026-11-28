@@ -345,7 +345,19 @@ fn qa_review_pack_generates_zoomed_crops_and_enforces_ledger_verification() {
     let pack = success_json(&fixture.run(&["qa", "review-pack", "--doc", DOC], b""));
     assert_eq!(pack["ok"], true);
     assert!(pack["crops"].as_u64().unwrap() >= 1);
-    let crop_file = fixture.cwd.join("work/review/crops/p0001_r001.png");
+    let flags: Value =
+        serde_json::from_slice(&fs::read(fixture.cwd.join("work/review/flags.json")).unwrap())
+            .unwrap();
+    let item = flags["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["region_id"] == "p0001_r001")
+        .unwrap();
+    let crop_file = fixture
+        .cwd
+        .join("work/review")
+        .join(item["crop_path"].as_str().unwrap());
     assert!(crop_file.is_file(), "missing 2x side-by-side crop");
     let crop_img = image::open(&crop_file).unwrap();
     assert!(crop_img.width() <= 1500);
@@ -354,12 +366,11 @@ fn qa_review_pack_generates_zoomed_crops_and_enforces_ledger_verification() {
     let fail = fixture.run(&["qa", "review-pack", "--doc", DOC, "--verify-ledger"], b"");
     assert!(!fail.status.success());
 
-    // Write PASS row for p0001_r001 -> --verify-ledger passes.
-    fs::write(
-        fixture.cwd.join("work/review/ledger.tsv"),
-        "page_id\tregion_id\tstage\tverdict\tdefect_codes\tnotes\np0001\tp0001_r001\t5a\tPASS\t\tverified\n",
-    )
-    .unwrap();
+    // Approve every current crop and full-page row with its unchanged review identity.
+    let ledger = fs::read_to_string(fixture.cwd.join("work/review/ledger.template.tsv"))
+        .unwrap()
+        .replace("\tPENDING\t", "\tPASS\t");
+    fs::write(fixture.cwd.join("work/review/ledger.tsv"), ledger).unwrap();
     let pass =
         success_json(&fixture.run(&["qa", "review-pack", "--doc", DOC, "--verify-ledger"], b""));
     assert_eq!(pass["ok"], true);

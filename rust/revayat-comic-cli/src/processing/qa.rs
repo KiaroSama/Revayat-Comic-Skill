@@ -1,4 +1,7 @@
-use super::lettering::{excluded_balloon_regions, protected_japanese, read_mask};
+use super::lettering::{
+    exclude_page_regions, excluded_balloon_regions, preserved_region_bounds, protected_japanese,
+    read_mask,
+};
 use super::*;
 use revayat_vision::qa;
 
@@ -41,15 +44,20 @@ pub fn qa(path: &Path, strict: bool) -> Result<Value> {
             })
             .transpose()?;
         let rendered = native_rendered.as_ref().map(DynamicImage::to_rgb8);
-        let mask = read_mask(
-            &root,
-            page,
-            if rendered.is_some() {
-                "authorized_mask"
-            } else {
-                "clean_mask"
-            },
-        )?;
+        let source_lang = document.meta.get("source_language").and_then(Value::as_str);
+        let preserved = preserved_region_bounds(page, document.policy(), source_lang)?;
+        let mask = exclude_page_regions(
+            read_mask(
+                &root,
+                page,
+                if rendered.is_some() {
+                    "authorized_mask"
+                } else {
+                    "clean_mask"
+                },
+            )?,
+            &preserved,
+        );
         let native_changed = images::count_changed_outside_mask(
             &native,
             native_rendered
@@ -69,7 +77,6 @@ pub fn qa(path: &Path, strict: bool) -> Result<Value> {
         );
         let mut regions = Vec::new();
         let panels = page_panels(page)?;
-        let source_lang = document.meta.get("source_language").and_then(Value::as_str);
         let rtl_target =
             ir::is_rtl_language(document.meta.get("target_language").and_then(Value::as_str));
         let neighbors = on_art_bounds(page)?;

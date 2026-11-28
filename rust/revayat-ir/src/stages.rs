@@ -13,9 +13,16 @@ fn inputs(stage: &str) -> &'static [&'static str] {
         "translate" => &["geometry", "source", "constraints"],
         "glossary" => &["source", "text"],
         "falint" => &["text"],
-        "mask" | "masks" => &["render", "policy"],
-        "clean" => &["render", "policy", "masked"],
-        "typeset" | "export" => &["render", "text", "policy"],
+        "mask" | "masks" => &["render", "policy", "source", "source_language"],
+        "clean" => &["render", "policy", "masked", "source", "source_language"],
+        "typeset" | "export" => &[
+            "render",
+            "text",
+            "policy",
+            "source",
+            "source_language",
+            "target_language",
+        ],
         _ => &[],
     }
 }
@@ -186,12 +193,13 @@ pub fn facet_revision(page: &PageRecord, facet: &str) -> Result<String, IrError>
 fn meta_revision(doc: &ComicDocument, facet: &str) -> Result<String, IrError> {
     use std::fmt::Write as _;
     let mut data = String::new();
-    let keys = if facet == "policy" {
-        ["sfx_policy", "reading_direction"]
-    } else {
-        ["target_language", "source_language"]
+    let keys: &[&str] = match facet {
+        "policy" => &["sfx_policy", "reading_direction"],
+        "source_language" => &["source_language"],
+        "target_language" => &["target_language"],
+        _ => &["target_language", "source_language"],
     };
-    for key in keys {
+    for &key in keys {
         let value = match doc.meta.get(key).and_then(Value::as_str) {
             Some(s) => format!("'{}'", s.replace('\\', "\\\\").replace('\'', "\\'")),
             None => "None".into(),
@@ -243,7 +251,10 @@ pub fn page_revision(
     use std::fmt::Write as _;
     let mut data = format!("scheme={SCHEME}|stage={stage}|");
     for facet in inputs(stage) {
-        let revision = if matches!(*facet, "policy" | "constraints") {
+        let revision = if matches!(
+            *facet,
+            "policy" | "constraints" | "source_language" | "target_language"
+        ) {
             meta_revision(doc, facet)?
         } else {
             facet_revision(page, facet)?

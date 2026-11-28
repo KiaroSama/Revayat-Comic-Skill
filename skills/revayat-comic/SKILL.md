@@ -430,7 +430,10 @@ Persian-leading sentences unwrapped.
 
 ## Step 8: Clean the artwork
 
+Refresh masks after merging worksheets: source text, language, geometry, or keep/erase decisions may have changed. Retain any approved free-lettering mask option when rebuilding.
+
 ```bash
+revayat-comic mask --doc "$WORK/comic.json"
 revayat-comic clean --doc "$WORK/comic.json"
 ```
 
@@ -466,13 +469,21 @@ Stop if `ok` is false. Review the page and region in each finding, fix the works
 revayat-comic qa review-pack --doc "$WORK/comic.json" --verify-ledger
 ```
 
+Start `ledger.tsv` from the generated `ledger.template.tsv`. Preserve its seven-column header, every row, and each `review_id`; the reviewer fills verdicts, defect codes, and notes after opening the current images. Every page has a required `region_id=*` full-page row in addition to its flagged region crops. Resolve each manifest `crop_path` relative to the directory containing `flags.json`.
+
+The review ID binds approvals to the current document context, original and rendered file hashes, and exact crop bytes. Changed evidence, omitted or duplicate rows, unknown regions, and unresolved verdicts fail verification. Regeneration retains the old ledger for reference but never carries its approvals onto changed evidence: hand the new template and images back to Stage 5a. Legacy six-column ledgers require one regeneration and fresh review. An unchanged regeneration keeps the same review ID. This ledger records visual review; `qa check --strict` remains a separate required gate.
+
 If the artwork changed outside the approved edit areas, compare the original with the cleaned and rendered pages before trying again. Check `artwork_pixels_changed` and reopen the rendered pages after every repair.
 
 QA checks original integer color samples and alpha, including 16-bit precision,
 as well as the RGB lettering proof. Normal export also requires current cleaning,
-rendering and compression-review evidence. After a geometry or action change,
-regenerate masks, clean and typeset in that order. After a text-only change,
-rerun typeset and review any newly raised linguistic or compression findings.
+rendering and compression-review evidence. After a geometry, action, source-text,
+or source-language change,
+regenerate masks, clean and typeset in that order. After a target-text or
+target-language change, rerun typeset and review any
+newly raised linguistic or compression findings. A workspace rendered by an older
+version may need one masks/clean/typeset rebuild to acquire the added language
+dependencies; detection does not need to run again.
 An export's own old stamp does not prevent producing a new edition.
 
 ### QA findings and recovery

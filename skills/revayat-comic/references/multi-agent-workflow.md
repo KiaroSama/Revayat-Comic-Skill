@@ -130,7 +130,7 @@ Input files:
 - Gemini 3.1 Flash prompting guide (`references/gemini-flash-prompting.md`)
 
 Instructions:
-1. Merge approved worksheets (`revayat-comic worksheet merge`) and run `revayat-comic falint fix`.
+1. Merge approved worksheets (`revayat-comic worksheet merge`), run `revayat-comic falint fix`, and rebuild masks (`revayat-comic mask`) for the current source, language, geometry, and keep/erase decisions. Retain approved free-lettering mask options.
 2. Empty ONLY clean speech bubbles first (`revayat-comic clean --bubbles-only`) so zero residual ink dots remain inside emptied bubbles while speedlines, screentones, and on-art lettering stay untouched.
 3. For every page containing `fullpage_edit` regions (on-art SFX, speedline shouts, map labels, covers, spines, chapter titles):
    - Follow `references/gemini-flash-prompting.md` and `references/fullpage-image-edit.md`. Use Variant C (4-part narrative prompt with explicit freeze zones, texture vocabulary, ink + outline/halo color and pixel width, and positive Persian glyph anatomy) for stylized/tilted art; use Variant D (clean-only artwork restoration + Rust Vazir) for straight horizontal titles/credits; use pure Rust Vazir with 0 model calls for flat solid-color lists (such as a table of contents).
@@ -156,6 +156,7 @@ Input files:
 - Run first: `revayat-comic qa check --strict --doc <workdir>/comic.json`
 - Run second: `revayat-comic qa review-pack --doc <workdir>/comic.json`
 - Manifest: `<workdir>/review/flags.json`
+- Fresh review template: `<workdir>/review/ledger.template.tsv`
 - 2x zoomed side-by-side `[SOURCE | RENDERED]` crops: `<workdir>/review/crops/*.png`
 - Full rendered pages (for page-wide weight/tone consistency): `<workdir>/rendered/p*.png`
 
@@ -170,7 +171,7 @@ Mandatory 9-point inspection checklist on EVERY crop in `flags.json` (open each 
 8. `WEIGHT_OR_FONT_DRIFT`: sudden font family, thin/gray stroke, or weight jump between consecutive pages or inside speech bubbles.
 9. `ERASED_RESIDUAL`: leftover dots or unchanged source ink inside an erased balloon.
 
-Output: Write `<workdir>/review/ledger.tsv` (`page_id\tregion_id\tstage\tverdict\tdefect_codes\tnotes`) with an explicit `PASS` or `FAIL` row for EVERY item in `flags.json` and every page. Never mark `PASS` without opening the zoomed crop image.
+Output: Copy the current `ledger.template.tsv` to `<workdir>/review/ledger.tsv` and fill its verdict, defect_codes and notes columns. Preserve the exact header (`page_id\tregion_id\tstage\tverdict\tdefect_codes\tnotes\treview_id`), IDs, stage=5a and review_id. Record an explicit `PASS` or `FAIL` for EVERY manifest item, including each page's `region_id=*` full-page row. Resolve crop_path relative to flags.json. Never mark PASS without opening that current image; never copy approvals from an older review_id.
 ```
 
 ---
@@ -190,7 +191,7 @@ Input files:
 Instructions:
 1. For each `FAIL` row, apply the root fix (regenerate the single on-art crop with Variant C/D, switch flat multi-line layouts to pure Rust Vazir, adjust worksheet wording/breaks, or fix masking/keep flags) without touching passing regions.
 2. Re-run `revayat-comic typeset --doc <workdir>/comic.json [--external-dir ...]` and `revayat-comic qa check --strict --doc <workdir>/comic.json`.
-3. Regenerate `<workdir>/review/` with `revayat-comic qa review-pack --doc <workdir>/comic.json` and hand every repaired crop back to Stage 5a to record `FIXED` / `PASS` in `ledger.tsv`.
+3. Regenerate `<workdir>/review/` with `revayat-comic qa review-pack --doc <workdir>/comic.json`. Changed evidence creates a new review_id; the retained old ledger is reference material, not approval of the new images. Return the new template and all current manifest images to Stage 5a for independent `FIXED` / `PASS` verdicts. Only Stage 5a writes the approval rows. Legacy six-column ledgers must be replaced from the current template and reviewed once.
 ```
 
 ---

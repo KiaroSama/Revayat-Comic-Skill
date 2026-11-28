@@ -399,6 +399,7 @@ fn mask_page(
     let mut mask = GrayImage::new(page.width, page.height);
     let panels = page_panels(page)?;
     let neighbors = on_art_bounds(page)?;
+    let preserved = lettering::preserved_region_bounds(page, policy, source_language)?;
     let mut count = 0;
     for region in &mut page.regions {
         if !editable(region, policy)
@@ -425,12 +426,13 @@ fn mask_page(
                 masks::balloon_geometry_from_interior(*balloon, paper).map_err(failed)?;
             region.extra.insert("balloon".into(), geometry);
         }
-        let local = region_mask(
+        let mut local = region_mask(
             &luma,
             region,
             resolved.as_ref().map(|(_, paper)| paper),
             solid,
         )?;
+        local.exclude(&preserved);
         local.apply_to(&mut mask).map_err(failed)?;
         region.mask = Some(save_mask(root, &region.id, &local.pixels)?);
         region
