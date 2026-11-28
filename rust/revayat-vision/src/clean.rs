@@ -187,18 +187,28 @@ pub fn clean_region(
     allowed: Option<&GrayImage>,
     external: Option<&RgbImage>,
 ) -> Result<(RgbImage, CleanStrategy)> {
+    clean_region_with_solid(page, mask, allowed, external, false)
+}
+
+pub fn clean_region_with_solid(
+    page: &RgbImage,
+    mask: &RegionMask,
+    allowed: Option<&GrayImage>,
+    external: Option<&RgbImage>,
+    require_external: bool,
+) -> Result<(RgbImage, CleanStrategy)> {
     let b = mask.bounds.checked(page.dimensions())?;
     same_geometry((b.width(), b.height()), mask.pixels.dimensions())?;
     if let Some(e) = external {
         same_geometry(page.dimensions(), e.dimensions())?;
     }
-    if !mask.pixels.pixels().any(|p| p[0] != 0) {
-        return Ok((page.clone(), CleanStrategy::NoInk));
-    }
-    if external.is_none() && mask.pixels.pixels().all(|p| p[0] != 0) {
+    if external.is_none() && (require_external || mask.pixels.pixels().all(|p| p[0] != 0)) {
         return Err(VisionError::invalid(
             "a solid erase mask needs an approved external repair",
         ));
+    }
+    if !mask.pixels.pixels().any(|p| p[0] != 0) {
+        return Ok((page.clone(), CleanStrategy::NoInk));
     }
     let crop = imageops::crop_imm(page, b.x(), b.y(), b.width(), b.height()).to_image();
     let (paint, strategy) = if let Some(external) = external {
@@ -218,6 +228,8 @@ pub fn clean_region(
             }),
             CleanStrategy::Flat,
         )
+    } else if let Some(paint) = textured_fill(page, mask, &crop, allowed.is_none())? {
+        (paint, CleanStrategy::Inpaint)
     } else {
         let pixels = cleancore_rs::port::diffuse_inpaint_rgb(
             Some(crop.as_raw()),
@@ -237,6 +249,79 @@ pub fn clean_region(
     let mut output = page.clone();
     imageops::replace(&mut output, &paint, i64::from(b.x()), i64::from(b.y()));
     Ok((output, strategy))
+}
+
+fn textured_fill(
+    page: &RgbImage,
+    mask: &RegionMask,
+    crop: &RgbImage,
+    expand: bool,
+) -> Result<Option<RgbImage>> {
+    let b = mask.bounds;
+    let outer = if expand {
+        b.expand(14, page.width(), page.height())
+    } else {
+        b
+    };
+    let (dx, dy) = (b.x() - outer.x(), b.y() - outer.y());
+    let padded;
+    let padded_mask;
+    let (rgb, erase) = if outer == b {
+        (crop, &mask.pixels)
+    } else {
+        padded = imageops::crop_imm(page, outer.x(), outer.y(), outer.width(), outer.height())
+            .to_image();
+        padded_mask = GrayImage::from_fn(outer.width(), outer.height(), |x, y| {
+            if b.contains(x + outer.x(), y + outer.y()) {
+                *mask.pixels.get_pixel(x - dx, y - dy)
+            } else {
+                Luma([0])
+            }
+        });
+        (&padded, &padded_mask)
+    };
+    let (w, h) = (i128::from(rgb.width()), i128::from(rgb.height()));
+    let ring = cleancore_rs::port::detect_textured_ring(
+        Some(rgb.as_raw()),
+        Some(erase.as_raw()),
+        w,
+        h,
+        14,
+        12.0,
+    )
+    .map_err(VisionError::kernel)?;
+    if ring[0] == 0.0 || !has_frequent_edges(rgb, erase) {
+        return Ok(None);
+    }
+    let pixels = cleancore_rs::port::inpaint_textured_ring_rgb(
+        Some(rgb.as_raw()),
+        Some(erase.as_raw()),
+        w,
+        h,
+    )
+    .map_err(VisionError::kernel)?;
+    let image = RgbImage::from_raw(rgb.width(), rgb.height(), pixels)
+        .ok_or_else(|| VisionError::invalid("invalid textured inpaint buffer"))?;
+    Ok(Some(
+        imageops::crop_imm(&image, dx, dy, b.width(), b.height()).to_image(),
+    ))
+}
+
+fn has_frequent_edges(rgb: &RgbImage, mask: &GrayImage) -> bool {
+    let mut clean = 0;
+    let mut edges = 0;
+    for (x, y, p) in rgb.enumerate_pixels() {
+        if mask.get_pixel(x, y)[0] != 0 {
+            continue;
+        }
+        for (nx, ny) in [(x + 1, y), (x, y + 1)] {
+            if nx < rgb.width() && ny < rgb.height() && mask.get_pixel(nx, ny)[0] == 0 {
+                clean += 1_u64;
+                edges += u64::from(luminance(p).abs_diff(luminance(rgb.get_pixel(nx, ny))) >= 20);
+            }
+        }
+    }
+    edges >= 8 && edges * 25 >= clean
 }
 
 fn sweep_speckles(
@@ -465,6 +550,43 @@ fn flat_balloon_color(page: &RgbImage, interior: &RegionMask, dark: bool) -> Opt
 mod tests {
     use super::*;
     use crate::Rect;
+
+    #[test]
+    fn explicit_solid_mask_still_needs_repair_after_a_keep_region_punches_a_hole() {
+        let original = RgbImage::from_pixel(18, 20, Rgb([200; 3]));
+        let mut pixels = GrayImage::from_pixel(18, 20, Luma([255]));
+        pixels.put_pixel(8, 9, Luma([0]));
+        let mask = RegionMask {
+            bounds: Rect([0, 0, 18, 20]),
+            pixels,
+        };
+        assert!(matches!(
+            clean_region_with_solid(&original, &mask, None, None, true),
+            Err(VisionError::Invalid(detail))
+                if detail == "a solid erase mask needs an approved external repair"
+        ));
+    }
+
+    #[test]
+    fn cleaning_a_halftone_region_reconstructs_the_dots() -> Result<()> {
+        let paper = RgbImage::from_fn(42, 42, |x, y| {
+            Rgb([if x % 4 == 0 && y % 5 < 2 { 70 } else { 204 }; 3])
+        });
+        let mask = RegionMask {
+            bounds: Rect([11, 11, 20, 20]),
+            pixels: GrayImage::from_fn(20, 20, |x, y| {
+                Luma([u8::from((3..17).contains(&x) && (3..17).contains(&y)) * 255])
+            }),
+        };
+        let mut lettered = paper.clone();
+        for (x, y, _) in mask.pixels.enumerate_pixels().filter(|(_, _, p)| p[0] != 0) {
+            lettered.put_pixel(mask.bounds.x() + x, mask.bounds.y() + y, Rgb([0; 3]));
+        }
+        let (cleaned, strategy) = clean_region(&lettered, &mask, None, None)?;
+        assert_eq!(strategy, CleanStrategy::Inpaint);
+        assert_eq!(cleaned, paper);
+        Ok(())
+    }
 
     #[test]
     fn a_solid_mask_does_not_turn_textured_artwork_white() {

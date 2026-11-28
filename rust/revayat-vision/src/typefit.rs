@@ -1,5 +1,5 @@
 use crate::{
-    Rect, Result, VisionError, bidi,
+    Rect, Result, VisionError, bidi, mask_bounds,
     typefont::Shaper,
     typestyle::{self, TextStyle},
 };
@@ -32,6 +32,7 @@ pub struct PlacedLine {
 #[derive(Debug, Clone)]
 pub(crate) struct Fit {
     pub lines: Vec<(PlacedLine, GrayImage)>,
+    pub rotated: Option<(Rect, GrayImage)>,
     pub size: f32,
     pub line_height: f32,
     pub bounds: Rect,
@@ -197,13 +198,13 @@ pub(crate) fn fit_region(
     let FitOptions {
         bounds,
         mask,
-        occupied,
         min_size,
         max_size,
         spacing,
         compact,
         align,
         rtl_target,
+        ..
     } = opts;
     let source = text;
     let base_rtl = bidi::should_shape_rtl(source, rtl_target);
@@ -211,7 +212,9 @@ pub(crate) fn fit_region(
     if paragraphs.iter().all(Vec::is_empty) {
         return Ok(None);
     }
+    let angle = typestyle::effective_angle_deg(style);
     let spans = mask
+        .filter(|_| angle == 0.0)
         .map(|m| {
             layoutcore_rs::port::scan_mask_spans(
                 Some(m.as_raw()),
@@ -236,8 +239,8 @@ pub(crate) fn fit_region(
     });
     for size in (min_size..=max_size).rev() {
         let line_height = (size as f32 * spacing.max(MIN_LINE_HEIGHT)).ceil();
-        let effect =
-            (if style.outline { (size / 12).max(1) } else { 0 }) + if style.shadow { 3 } else { 0 };
+        let border = typestyle::effective_outline_radius(style, size as f32);
+        let effect = border + if style.shadow { 3 } else { 0 };
         let pad = effect + if compact { 1 } else { 2 };
         let max_rows =
             (bounds.height().saturating_sub(pad * 2) as f32 / line_height).floor() as usize;
@@ -304,13 +307,8 @@ pub(crate) fn fit_region(
                 } else {
                     shaped.pixels
                 };
-                let border = if style.outline { (size / 12).max(1) } else { 0 };
-                let brush = if border > 0 {
-                    typestyle::stroke(&ink, border)
-                } else {
-                    ink.clone()
-                };
-                shaped_lines.push((i, text, shaped.top, shaped.rtl, ink, brush, border));
+                let brush = (angle == 0.0 && border > 0).then(|| typestyle::stroke(&ink, border));
+                shaped_lines.push((i, text, shaped.top, shaped.rtl, ink, brush));
             }
             let shift = (size as i32 / 4).max(1);
             let mut candidates = vec![
@@ -342,7 +340,7 @@ pub(crate) fn fit_region(
                 let mut fitted = Vec::new();
                 let mut extent: Option<Rect> = None;
                 let mut failed = false;
-                for (i, text, top, rtl, ink, brush, border) in &shaped_lines {
+                for (i, text, top, rtl, ink, brush) in &shaped_lines {
                     let offset = line_top + (*i as f32 * line_height) as i32;
                     let local_y = offset + top;
                     if local_y < pad as i32
@@ -388,16 +386,15 @@ pub(crate) fn fit_region(
                         bbox.width() + 2 * effect,
                         bbox.height() + 2 * effect,
                     ]);
-                    let blocked = |x: u32, y: u32| {
-                        occupied.get_pixel(x, y)[0] != 0
-                            || mask.is_some_and(|m| {
-                                m.get_pixel(x - bounds.x(), y - bounds.y())[0] == 0
-                            })
-                    };
-                    if brush.enumerate_pixels().any(|(x, y, p)| {
-                        let (x, y) = (bbox.x() - border + x, bbox.y() - border + y);
-                        p[0] != 0 && (blocked(x, y) || (style.shadow && blocked(x + 2, y + 2)))
-                    }) {
+                    if angle == 0.0
+                        && brush_blocked(
+                            brush.as_ref().unwrap_or(ink),
+                            bbox,
+                            border,
+                            style.shadow.then_some([2, 2]),
+                            opts,
+                        )
+                    {
                         failed = true;
                         break;
                     }
@@ -421,9 +418,20 @@ pub(crate) fn fit_region(
                         ink.clone(),
                     ));
                 }
-                if !failed && let Some(bounds) = extent {
+                if !failed && let Some(extent) = extent {
+                    let (rotated, bounds) = if angle == 0.0 {
+                        (None, extent)
+                    } else {
+                        let Some((bbox, ink, footprint)) =
+                            rotate_block(&fitted, angle, border, style.shadow, opts)
+                        else {
+                            continue;
+                        };
+                        (Some((bbox, ink)), footprint)
+                    };
                     return Ok(Some(Fit {
                         lines: fitted,
+                        rotated,
                         size: size as f32,
                         line_height,
                         bounds,
@@ -433,6 +441,94 @@ pub(crate) fn fit_region(
         }
     }
     Ok(None)
+}
+
+fn brush_blocked(
+    brush: &GrayImage,
+    bbox: Rect,
+    border: u32,
+    shadow: Option<[i64; 2]>,
+    opts: FitOptions<'_>,
+) -> bool {
+    let blocked = |x: i64, y: i64| {
+        let (Ok(x), Ok(y)) = (u32::try_from(x), u32::try_from(y)) else {
+            return true;
+        };
+        !opts.bounds.contains(x, y)
+            || opts.occupied.get_pixel(x, y)[0] != 0
+            || opts
+                .mask
+                .is_some_and(|m| m.get_pixel(x - opts.bounds.x(), y - opts.bounds.y())[0] == 0)
+    };
+    brush.enumerate_pixels().any(|(x, y, p)| {
+        let x = i64::from(bbox.x()) - i64::from(border) + i64::from(x);
+        let y = i64::from(bbox.y()) - i64::from(border) + i64::from(y);
+        p[0] != 0 && (blocked(x, y) || shadow.is_some_and(|[dx, dy]| blocked(x + dx, y + dy)))
+    })
+}
+
+pub(crate) fn rotate_line_ink(
+    lines: &[(PlacedLine, GrayImage)],
+    extent: Rect,
+    angle: f32,
+) -> GrayImage {
+    let mut block = GrayImage::new(extent.width(), extent.height());
+    for (line, ink) in lines {
+        image::imageops::replace(
+            &mut block,
+            ink,
+            i64::from(line.bbox.x() - extent.x()),
+            i64::from(line.bbox.y() - extent.y()),
+        );
+    }
+    typestyle::rotate_mask(&block, angle)
+}
+
+fn rotate_block(
+    lines: &[(PlacedLine, GrayImage)],
+    angle: f32,
+    border: u32,
+    shadow: bool,
+    opts: FitOptions<'_>,
+) -> Option<(Rect, GrayImage, Rect)> {
+    let extent = lines
+        .iter()
+        .map(|(line, _)| line.bbox)
+        .reduce(Rect::union)?;
+    let rotated = rotate_line_ink(lines, extent, angle);
+    let tight = mask_bounds(&rotated)?;
+    let ink = image::imageops::crop_imm(
+        &rotated,
+        tight.x(),
+        tight.y(),
+        tight.width(),
+        tight.height(),
+    )
+    .to_image();
+    let brush = (border > 0).then(|| typestyle::stroke(&ink, border));
+    let brush = brush.as_ref().unwrap_or(&ink);
+    let shift = shadow.then(|| typestyle::shadow_offset(angle));
+    let [dx, dy] = shift.unwrap_or_default();
+    let anchor = |start, fitted, canvas, trim| {
+        i64::from(start) + (i64::from(fitted) - i64::from(canvas)).div_euclid(2) + i64::from(trim)
+    };
+    let x = anchor(extent.x(), extent.width(), rotated.width(), tight.x());
+    let y = anchor(extent.y(), extent.height(), rotated.height(), tight.y());
+    let footprint = Rect([
+        u32::try_from(x - i64::from(border) - (-dx).max(0)).ok()?,
+        u32::try_from(y - i64::from(border) - (-dy).max(0)).ok()?,
+        brush.width() + dx.unsigned_abs() as u32,
+        brush.height() + dy.unsigned_abs() as u32,
+    ]);
+    let bbox = Rect([
+        u32::try_from(x).ok()?,
+        u32::try_from(y).ok()?,
+        ink.width(),
+        ink.height(),
+    ]);
+    (footprint.intersection(opts.bounds) == Some(footprint)
+        && !brush_blocked(brush, bbox, border, shift, opts))
+    .then_some((bbox, ink, footprint))
 }
 
 pub fn partition_shared_interiors(
@@ -532,4 +628,51 @@ pub fn partition_shared_interiors(
             .pixels)
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::Luma;
+
+    #[test]
+    fn rotated_fit_keeps_alignment_and_tries_other_vertical_positions() -> Result<()> {
+        let bounds = Rect([10, 10, 240, 120]);
+        let occupied = GrayImage::new(260, 140);
+        let style = TextStyle {
+            angle_deg: Some(5.0),
+            ..TextStyle::default()
+        };
+        let mut shaper = Shaper::new()?;
+        let opts = FitOptions {
+            bounds,
+            mask: None,
+            occupied: &occupied,
+            min_size: 28,
+            max_size: 28,
+            spacing: MIN_LINE_HEIGHT,
+            compact: false,
+            align: Alignment::Leading,
+            rtl_target: false,
+        };
+        let first = fit_region(&mut shaper, "TITLE", &style, opts)?.unwrap();
+        assert!(first.bounds.right() < bounds.center()[0]);
+        let (bbox, ink) = first.rotated.unwrap();
+        let (x, y, _) = ink.enumerate_pixels().find(|(_, _, p)| p[0] != 0).unwrap();
+        let mut blocked = occupied.clone();
+        blocked.put_pixel(bbox.x() + x, bbox.y() + y, Luma([255]));
+        let moved = fit_region(
+            &mut shaper,
+            "TITLE",
+            &style,
+            FitOptions {
+                occupied: &blocked,
+                ..opts
+            },
+        )?
+        .unwrap();
+        assert_eq!(moved.bounds.x(), first.bounds.x());
+        assert_ne!(moved.bounds.y(), first.bounds.y());
+        Ok(())
+    }
 }

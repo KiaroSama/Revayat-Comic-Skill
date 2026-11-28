@@ -396,6 +396,140 @@ pub fn run_strict_qa_with_reviews(
     Ok(report)
 }
 
+/// Checks that each shaped cluster survives rotation and that the core strokes contrast.
+pub fn verify_rotated_ink(
+    shaper: &mut crate::typefont::Shaper,
+    target: &str,
+    region: &crate::typeset::TypesetRegion,
+    style: &crate::typestyle::TextStyle,
+    clean: &RgbImage,
+    rendered: &RgbImage,
+    rtl_target: bool,
+) -> Result<()> {
+    use crate::{mask_bounds, typefit, typestyle};
+
+    same_geometry(clean.dimensions(), rendered.dimensions())?;
+    let b = region.ink_box.checked(clean.dimensions())?;
+    let angle = region.angle_deg;
+    if !angle.is_finite() || !(typestyle::MIN_ROTATION_DEG..=45.0).contains(&angle.abs()) {
+        return Err(VisionError::invalid("invalid rotated lettering angle"));
+    }
+    if missing_line_text(target, &region.lines).is_some() {
+        return Err(VisionError::invalid(
+            "rotated lines do not match the target text",
+        ));
+    }
+    let rtl = bidi::should_shape_rtl(target, rtl_target);
+    let mut lines = Vec::new();
+    let mut clusters = Vec::new();
+    for line in &region.lines {
+        line.bbox.checked(clean.dimensions())?;
+        let shaped = shaper.draw_in_direction(&line.text, region.font_size, style.weight(), rtl)?;
+        let ink = if style.italic {
+            typestyle::italicize(&shaped.pixels)
+        } else {
+            shaped.pixels
+        };
+        if ink.dimensions() != (line.bbox.width(), line.bbox.height()) {
+            return Err(VisionError::invalid(
+                "rotated line bounds do not match the shaped ink",
+            ));
+        }
+        clusters.extend(
+            shaped
+                .cluster_ink
+                .into_iter()
+                .filter(|cluster| !cluster.is_empty())
+                .map(|cluster| {
+                    cluster
+                        .into_iter()
+                        .map(|(x, y)| {
+                            let dx = if style.italic {
+                                typestyle::italic_shift(ink.height(), y)
+                            } else {
+                                0
+                            };
+                            (line.bbox.x() + x + dx, line.bbox.y() + y)
+                        })
+                        .collect::<Vec<_>>()
+                }),
+        );
+        lines.push((line.clone(), ink));
+    }
+    let extent = lines
+        .iter()
+        .map(|(line, _)| line.bbox)
+        .reduce(Rect::union)
+        .ok_or_else(|| VisionError::invalid("missing rotated lines"))?;
+    let rotated = typefit::rotate_line_ink(&lines, extent, angle);
+    let tight = mask_bounds(&rotated)
+        .ok_or_else(|| VisionError::invalid("missing expected rotated ink"))?;
+    let border = region.outline_px;
+    let [dx, dy] = style
+        .shadow
+        .then(|| typestyle::shadow_offset(angle))
+        .unwrap_or_default();
+    if border > 6
+        || b.width() != tight.width() + 2 * border + dx.unsigned_abs() as u32
+        || b.height() != tight.height() + 2 * border + dy.unsigned_abs() as u32
+    {
+        return Err(VisionError::invalid(
+            "rotated ink does not fit its recorded footprint",
+        ));
+    }
+    let glyph_x = b.x() + border + (-dx).max(0) as u32;
+    let glyph_y = b.y() + border + (-dy).max(0) as u32;
+    let mut coverage = GrayImage::new(rotated.width(), rotated.height());
+    let (mut expected, mut changed, mut contrasting) = (0_u64, 0_u64, 0_u64);
+    for (x, y, alpha) in rotated.enumerate_pixels().filter(|(_, _, p)| p[0] != 0) {
+        let x_page = glyph_x + (x - tight.x());
+        let y_page = glyph_y + (y - tight.y());
+        let before = clean.get_pixel(x_page, y_page);
+        let after = rendered.get_pixel(x_page, y_page);
+        let present = qachecks::pixel_changed(before, after);
+        coverage.get_pixel_mut(x, y)[0] = u8::from(present);
+        if alpha[0] >= 64 {
+            expected += 1;
+            changed += u64::from(present);
+            contrasting += u64::from(present && rgb_contrast(before.0, after.0) >= 3.0);
+        }
+    }
+    if expected == 0 || changed * 5 < expected * 3 {
+        return Err(VisionError::invalid(
+            "less than 60% of expected rotated ink is visible",
+        ));
+    }
+    if contrasting < changed.div_ceil(10) {
+        return Err(VisionError::invalid(
+            "rotated lettering has less than 3:1 core-stroke contrast",
+        ));
+    }
+
+    // Forward-map the source cluster cores into the same canvas used by the renderer.
+    let (sin, cos) = f64::from(angle).to_radians().sin_cos();
+    let center = |size| (f64::from(size) - 1.0) * 0.5;
+    for cluster in clusters {
+        let present = cluster
+            .iter()
+            .filter(|&&(x, y)| {
+                let x = f64::from(x - extent.x()) - center(extent.width());
+                let y = f64::from(y - extent.y()) - center(extent.height());
+                let rx = (cos * x - sin * y + center(rotated.width())).round() as u32;
+                let ry = (sin * x + cos * y + center(rotated.height())).round() as u32;
+                coverage
+                    .get_pixel_checked(rx, ry)
+                    .is_some_and(|pixel| pixel[0] != 0)
+            })
+            .count();
+        if present * 5 < cluster.len() * 3 {
+            return Err(VisionError::invalid(
+                "a shaped cluster is missing rotated ink",
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Re-shape the recorded lines and compare each visible cluster with delivered pixels.
 pub fn missing_clusters(
     shaper: &mut crate::typefont::Shaper,
@@ -409,18 +543,7 @@ pub fn missing_clusters(
     missing_clusters_in_direction(shaper, target, lines, size, style, clean, rendered, false)
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn missing_clusters_in_direction(
-    shaper: &mut crate::typefont::Shaper,
-    target: &str,
-    lines: &[crate::typefit::PlacedLine],
-    size: f32,
-    style: &crate::typestyle::TextStyle,
-    clean: &RgbImage,
-    rendered: &RgbImage,
-    rtl_target: bool,
-) -> Result<usize> {
-    same_geometry(clean.dimensions(), rendered.dimensions())?;
+fn missing_line_text(target: &str, lines: &[crate::typefit::PlacedLine]) -> Option<usize> {
     let logical = |s: &str| {
         let text = s
             .chars()
@@ -456,10 +579,25 @@ pub fn missing_clusters_in_direction(
                 continue;
             }
         }
-        return Ok(expected.chars().count().max(1));
+        return Some(expected.chars().count().max(1));
     }
-    if placed != expected {
-        return Ok(expected.chars().count().max(1));
+    (placed != expected).then(|| expected.chars().count().max(1))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn missing_clusters_in_direction(
+    shaper: &mut crate::typefont::Shaper,
+    target: &str,
+    lines: &[crate::typefit::PlacedLine],
+    size: f32,
+    style: &crate::typestyle::TextStyle,
+    clean: &RgbImage,
+    rendered: &RgbImage,
+    rtl_target: bool,
+) -> Result<usize> {
+    same_geometry(clean.dimensions(), rendered.dimensions())?;
+    if let Some(missing) = missing_line_text(target, lines) {
+        return Ok(missing);
     }
     let rtl = bidi::should_shape_rtl(target, rtl_target);
     let mut missing = 0;
@@ -481,7 +619,7 @@ pub fn missing_clusters_in_direction(
                 .iter()
                 .filter(|&&(x, y)| {
                     let italic = if style.italic {
-                        ((shaped.pixels.height() - y - 1) as f32 * 0.16).round() as u32
+                        crate::typestyle::italic_shift(shaped.pixels.height(), y)
                     } else {
                         0
                     };
@@ -537,6 +675,50 @@ mod coverage_tests {
         typeset::{self, TextRegion},
     };
     use image::Rgb;
+
+    #[test]
+    fn rejects_a_missing_short_line_in_a_rotated_block() -> Result<()> {
+        let original = RgbImage::from_pixel(320, 180, Rgb([245; 3]));
+        let target = "MIDNIGHT EXPRESS\nA";
+        let mut request = TextRegion::new("title", Rect([10, 10, 300, 160]), target);
+        request.min_size = 28;
+        request.max_size = 28;
+        request.style.angle_deg = Some(-5.0);
+        let style = request.style.clone();
+        let result = typeset::typeset_page(&original, &[request])?;
+        let region = &result.regions[0];
+        let mut shaper = Shaper::new()?;
+        verify_rotated_ink(
+            &mut shaper,
+            target,
+            region,
+            &style,
+            &original,
+            &result.image,
+            false,
+        )?;
+
+        let mut broken = result.image.clone();
+        let split = region.lines[1].bbox.y() - 2;
+        for y in split..region.ink_box.bottom() {
+            for x in region.ink_box.x()..region.ink_box.right() {
+                broken.put_pixel(x, y, *original.get_pixel(x, y));
+            }
+        }
+        assert!(
+            verify_rotated_ink(
+                &mut shaper,
+                target,
+                region,
+                &style,
+                &original,
+                &broken,
+                false
+            )
+            .is_err()
+        );
+        Ok(())
+    }
 
     #[test]
     fn finds_one_missing_leading_digit_when_the_rest_still_has_ink() -> Result<()> {

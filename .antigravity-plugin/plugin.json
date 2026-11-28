@@ -2,7 +2,7 @@
   "$schema": "https://antigravity.google/schemas/v1/plugin.json",
   "name": "revayat-comic",
   "displayName": "Revayat Comic",
-  "version": "2.0.6",
+  "version": "2.0.7",
   "description": "Pure-Rust (1.100.0) manga, manhwa, manhua and Western comic translator to Persian: 6-stage multi-agent workflow, cropped on-art image editing, bundled Vazir RTL typesetting, pure-Rust PDF/CBZ/CBR/DOCX, bundled Humanizer 4.0.0 & Persian voice guides, and provably untouched artwork.",
   "suggestedPrompts": [
     "Translate this manga chapter into Persian: chapter-01.cbz",

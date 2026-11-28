@@ -9,6 +9,58 @@ const MISSING_GLYPH_COVERAGE: &str = "missing-glyph-coverage";
 const MISSING_TYPESET_PROOF: &str = "missing-typeset-proof";
 const PENDING_REGION: &str = "pending-region";
 
+fn source_words(text: &str) -> Vec<String> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_lowercase)
+        .collect()
+}
+
+fn matching_source(dropped: &[String], active: &[String]) -> bool {
+    if dropped.is_empty() || active.is_empty() {
+        return false;
+    }
+    if active.windows(dropped.len()).any(|words| words == dropped)
+        || dropped.windows(active.len()).any(|words| words == active)
+    {
+        return true;
+    }
+    let ascii_words = dropped
+        .iter()
+        .filter(|word| word.bytes().all(|c| c.is_ascii_alphabetic()))
+        .collect::<std::collections::BTreeSet<_>>();
+    !ascii_words.is_empty()
+        && ascii_words
+            .iter()
+            .filter(|word| active.contains(word))
+            .count()
+            >= ascii_words.len().div_ceil(2)
+}
+
+fn covered_by_translation(
+    page: &PageRecord,
+    dropped: &RegionRecord,
+    policy: &str,
+    source_lang: Option<&str>,
+) -> Result<bool> {
+    let area = bounds(dropped)?;
+    let dropped_words = source_words(&dropped.source_text);
+    for other in &page.regions {
+        if regions::translatable(other, policy)
+            && !other.target_text.trim().is_empty()
+            && ir::foreign_script_guard(source_lang, &other.source_text)
+                == ir::ForeignScriptGuard::Translatable
+            && area
+                .intersection(bounds(other)?)
+                .is_some_and(|overlap| overlap.area() >= area.area().div_ceil(2))
+            && matching_source(&dropped_words, &source_words(&other.source_text))
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 pub fn qa(path: &Path, strict: bool) -> Result<Value> {
     let document = ir::load_doc(path).map_err(failed)?;
     let root = ir::doc_dir(path);
@@ -81,6 +133,32 @@ pub fn qa(path: &Path, strict: bool) -> Result<Value> {
             ir::is_rtl_language(document.meta.get("target_language").and_then(Value::as_str));
         let neighbors = on_art_bounds(page)?;
         for region in &page.regions {
+            if region.dropped || region.state == Some(regions::RegionState::Dropped) {
+                if ir::foreign_script_guard(source_lang, &region.source_text)
+                    == ir::ForeignScriptGuard::Translatable
+                    && region
+                        .source_text
+                        .chars()
+                        .filter(char::is_ascii_alphabetic)
+                        .take(2)
+                        .count()
+                        >= 2
+                    && region
+                        .extra
+                        .get("drop_reason")
+                        .and_then(Value::as_str)
+                        .is_none_or(|s| s.trim().is_empty())
+                    && !covered_by_translation(page, region, document.policy(), source_lang)?
+                {
+                    findings.push(json!({"code":"dropped-source-text", "page":page.id, "region":region.id, "detail":format!("dropped region contains untranslated source text {:?}; translate it or set extra.drop_reason", region.source_text)}));
+                    if strict {
+                        errors += 1;
+                    } else {
+                        warnings += 1;
+                    }
+                }
+                continue;
+            }
             if protected_japanese(source_lang, region) {
                 let tampered = editable(region, document.policy())
                     || !region.target_text.trim().is_empty()
@@ -151,12 +229,11 @@ pub fn qa(path: &Path, strict: bool) -> Result<Value> {
             if let Some(final_page) = &rendered
                 && region.typeset.get("status").and_then(Value::as_str) == Some("fit")
             {
-                let lines = region
+                let angle_deg = region
                     .typeset
-                    .get("lines")
-                    .cloned()
-                    .map_or_else(|| Ok(Vec::new()), serde_json::from_value)
-                    .map_err(failed)?;
+                    .get("angle_deg")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0) as f32;
                 let mut style = region
                     .extra
                     .get("style")
@@ -169,21 +246,42 @@ pub fn qa(path: &Path, strict: bool) -> Result<Value> {
                 if region.typeset.get("weight").and_then(Value::as_str) == Some("medium") {
                     style.medium = true;
                 }
-                let size = region
-                    .typeset
-                    .get("font_size")
-                    .and_then(Value::as_f64)
-                    .unwrap_or_default() as f32;
-                let missing = qa::missing_clusters_in_direction(
-                    &mut shaper,
-                    &region.target_text,
-                    &lines,
-                    size,
-                    &style,
-                    &clean,
-                    final_page,
-                    rtl_target,
-                );
+                let missing = if angle_deg.abs() >= revayat_vision::typestyle::MIN_ROTATION_DEG {
+                    let placement =
+                        serde_json::from_value(json!(region.typeset)).map_err(failed)?;
+                    qa::verify_rotated_ink(
+                        &mut shaper,
+                        &region.target_text,
+                        &placement,
+                        &style,
+                        &clean,
+                        final_page,
+                        rtl_target,
+                    )
+                    .map(|()| 0)
+                } else {
+                    let lines = region
+                        .typeset
+                        .get("lines")
+                        .cloned()
+                        .map_or_else(|| Ok(Vec::new()), serde_json::from_value)
+                        .map_err(failed)?;
+                    let size = region
+                        .typeset
+                        .get("font_size")
+                        .and_then(Value::as_f64)
+                        .unwrap_or_default() as f32;
+                    qa::missing_clusters_in_direction(
+                        &mut shaper,
+                        &region.target_text,
+                        &lines,
+                        size,
+                        &style,
+                        &clean,
+                        final_page,
+                        rtl_target,
+                    )
+                };
                 if !matches!(missing, Ok(0)) {
                     errors += 1;
                     findings.push(json!({"code":MISSING_GLYPH_COVERAGE, "page":page.id, "region":region.id, "detail":missing.map_or_else(|err| err.to_string(), |count| format!("{count} shaped clusters have no matching ink"))}));

@@ -3,7 +3,7 @@ name: revayat-comic
 description: Translate manga, manhwa, manhua and Western comics into Persian and produce a finished CBZ, PDF or folder of pages. Detects panels, speech balloons and sound effects, reads them with your own eyes from rendered crops, removes the original lettering without altering the artwork, and typesets real right-to-left Persian into each balloon. Use for translating a manga chapter, a webtoon, a comic, a CBZ/CBR archive or a comic PDF into Persian (فارسی).
 license: GPL-3.0-or-later
 allowed-tools: Read, Write, Edit, Bash, Glob, Grep, Task, Agent, AskUserQuestion
-metadata: {"homepage":"https://github.com/KiaroSama/Revayat-Comic-Skill","version":"2.0.6","requires":{"bins":["revayat-comic"]}}
+metadata: {"homepage":"https://github.com/KiaroSama/Revayat-Comic-Skill","version":"2.0.7","requires":{"bins":["revayat-comic"]}}
 ---
 
 # Revayat Comic: comics into Persian
@@ -26,8 +26,8 @@ Every comic translation runs through the **six-stage multi-agent workflow** in `
 1. **Initial Translation (`ترجمه اولیه`)**: Web-search official series character names, honorifics, and canon terminology first; draft natural spoken Persian applying `references/voice/persian/SKILL.md` and `references/voice/humanizer/SKILL.md` (v4.0.0).
 2. **Layout & Typesetting Planning (`صفحه آرایی`)**: Set balanced line breaks, generous line spacing (`>= 1.38x`), RTL punctuation, anti-overlap badge/title checks, and classify each region as `typeset` (clean uniform bubble) vs `fullpage_edit` (on-art/speedlines/maps/covers/SFX).
 3. **Bilingual and tone review**: Check the Persian against the source crops and run `revayat-comic voice lint "$DRAFT" --check --style` on a UTF-8 draft file.
-4. **Apply the translation**: Merge the worksheets, then clean and typeset. For lettering on artwork, follow `references/fullpage-image-edit.md`: give `antigravity/gemini-3.1-flash-image` 120-240 px of context beyond the full lettering and its effects. Erase the old letters and all shadows, glows, and outlines before writing Persian; feather approved edits back in place. If visual review flags an edge defect, repair only that small strip. Pass the assembled `<page_id>.png` to `typeset --external-dir` for approved pages only; the CLI typesets pages without a matching PNG normally.
-5. **Visual recheck**: Open every rendered page with `Read`, then run `revayat-comic qa check --doc "$WORK/comic.json" --strict`. Fix remaining marks, overflows and missing glyphs.
+4. **Apply the translation**: Merge the worksheets, refresh masks, then clean and typeset. Prefer Rust for crisp tilted captions and SFX over halftone. If an on-art region needs a model edit, follow `references/fullpage-image-edit.md`: measure its outline, give the crop 120-240 px of context beyond the lettering effects, and exclude kept graphics. Use `clean --external-dir` for approved clean-only repairs and `typeset --external-dir` only for approved composites that already contain lettering.
+5. **Visual recheck**: Run strict QA and open every full-page comparison and 2x risk crop with `Read`. Apply the seven-class Stage 5 review in step 10. Record defects in the ledger, rebuild affected stages, and have the reviewer approve the current images before export.
 6. **Delivery**: Export the requested formats, verify each package with `qa package --package`, and update the translation and QA log.
 
 Before translating, **ask whether the user wants optional parallel translation
@@ -330,7 +330,7 @@ assignment/snapshot contract from `references/parallel-workflow.md`:**
 >     there and leave it printed; `keep` leaves it on purpose. Only for marks
 >     the user has the right to remove: `references/watermarks.md`.
 >   - `kind: sfx` / `sign` / `narration` / `thought` when it is misclassified
->   - `style: bold` / `italic` / `bold-italic` / `outline` / `shadow` / `shout`
+>   - `style: bold` / `italic` / `bold-italic` / `outline` / `no-outline` / `shadow` / `shout`
 >     (comma-separated combinations such as `bold,outline` are supported) to match
 >     shouts, inner thoughts, titles, or SFX over artwork. The skill ships
 >     official SIL OFL-1.1 **Vazir** fonts (`assets/fonts/Vazir-{Regular,Medium,Bold}.ttf`)
@@ -437,7 +437,7 @@ revayat-comic mask --doc "$WORK/comic.json"
 revayat-comic clean --doc "$WORK/comic.json"
 ```
 
-Inspect the cleaned pages before setting new text. Ordinary cleaning handles uniform balloons. For lettering over artwork, follow `references/fullpage-image-edit.md`, which starts with `clean --bubbles-only`. Keep every page at its original width and height. Leave effects you have not approved for translation as drawn.
+Inspect the cleaned pages before setting new text. For masked on-art lettering over halftone or screentone, Rust uses nearby texture to fill the cleared strokes. Check the dots at 2x. Reject white wipe boxes and smeared texture. If an on-art region needs a cropped model edit, follow `references/fullpage-image-edit.md` and start with `clean --bubbles-only` for that page. Keep every page at its original dimensions and leave unapproved effects untouched.
 
 To mark an authorized watermark at the same coordinates on every page, read `references/watermarks.md`, then run:
 
@@ -454,7 +454,19 @@ Mark a watermark that moves from page to page in the worksheet for each page ins
 revayat-comic typeset --doc "$WORK/comic.json"
 ```
 
-The CLI uses the bundled Vazir fonts. Inspect each rendered page for missing dots or glyphs, wrong RTL punctuation, and text touching another balloon or an outline. If a line does not fit, break it differently before trying a shorter translation. Keep the full wording in `fa_full` and review the shorter `fa` before merging again.
+The CLI uses the bundled Vazir fonts. Its page-wide balloon size cap uses speech balloons only: tiny SFX, captions, and signs must not shrink dialogue. Compare the lettering with the usable interior of each roomy balloon. If a line does not fit, reflow it before shortening it; keep the full wording in `fa_full` and review the shorter `fa` before merging again.
+
+Set numeric rendering overrides and `drop_reason` on the matching region in the IR (`comic.json` stores `extra` keys directly on the region). Keep translation edits in the worksheet.
+
+| Setting | When to use it |
+| --- | --- |
+| `extra.angle` | Match a slanted caption or crisp tilted SFX, in degrees from `-45` to `45`. Manual angles with magnitude at least `0.5°` rotate and are flagged for review; smaller angles render level. Automatic tilt detection starts at `2°`. Positive rotates clockwise; negative tilts up to the right. |
+| `extra.outline_px` | Match the original outline with an integer radius of `1` to `6` pixels. |
+| `extra.outline_alpha` | Match opacity on a scale of `1` to `255`; `255` is opaque. Use a lower value for a faint original halo. |
+| `no-outline` in `extra.style` | Suppress automatic outlining when the source has no outline and the replacement remains legible. In a worksheet, use `style: no-outline`. |
+| `extra.drop_reason` | Explain why a dropped detection containing source text should stay excluded, such as a duplicate region already covered elsewhere. Never use it to excuse missed lettering. |
+
+Use `keep: yes` with empty `fa:` and `fa_full:` for protected Japanese lettering. Leave circled volume numbers and adjacent kept SFX outside the masks.
 
 ## Step 10: Check the rendered pages
 
@@ -463,7 +475,9 @@ revayat-comic qa check --doc "$WORK/comic.json" --strict
 revayat-comic qa review-pack --doc "$WORK/comic.json"
 ```
 
-Stop if `ok` is false. Review the page and region in each finding, fix the worksheet or mask as needed, and rerun the affected stages. Then hand `<WORK>/review/flags.json` and the 2x zoomed `[SOURCE | RENDERED]` crops under `<WORK>/review/crops/` to the read-only Stage 5a adversarial reviewer (`references/multi-agent-workflow.md`) to sign `<WORK>/review/ledger.tsv`, repair any `FAIL` rows in Stage 5b, and gate export with:
+Stop if `ok` is false. Fix the findings and rerun the affected stages. Then give the read-only Stage 5a reviewer `$WORK/review/flags.json`, the full-page `[SOURCE | RENDERED]` comparisons (`region_id=*`), and every 2x review crop, including high-risk regions, on-art lettering, titles, and SFX. Scan all four quadrants, margins, and SFX layers of every page, then inspect each crop. Use the Stage 5a checklist in `references/multi-agent-workflow.md` for the seven required defect classes: `UNTRANSLATED_TEXT`, `OUTLINE_MISMATCH`, `FONT_MISMATCH`, `ERASED_GRAPHIC`, `UNDERSIZED_BALLOON`, `HALFTONE_SMEAR`, and `MISSING_TILT`.
+
+A visible defect is a `FAIL`. Record the exact codes in `$WORK/review/ledger.tsv`. Stage 5b repairs the listed defects, and Stage 5a reviews the refreshed evidence. Before export, run:
 
 ```bash
 revayat-comic qa review-pack --doc "$WORK/comic.json" --verify-ledger
@@ -477,13 +491,15 @@ If the artwork changed outside the approved edit areas, compare the original wit
 
 QA checks original integer color samples and alpha, including 16-bit precision,
 as well as the RGB lettering proof. Normal export also requires current cleaning,
-rendering and compression-review evidence. After a geometry, action, source-text,
-or source-language change,
-regenerate masks, clean and typeset in that order. After a target-text or
-target-language change, rerun typeset and review any
-newly raised linguistic or compression findings. A workspace rendered by an older
-version may need one masks/clean/typeset rebuild to acquire the added language
-dependencies; detection does not need to run again.
+rendering and compression-review evidence. After a masking, geometry, action,
+source-text, or source-language change, run `mask` -> `clean` -> `typeset` ->
+`qa check --strict`. After a change limited to target text, target language,
+style, outline, or angle, start at `typeset` and run strict QA again. If an
+approved clean-only repair PNG changes, rerun `clean --external-dir`, then
+`typeset` without that directory and run strict QA again. Open any
+new linguistic or compression findings, then regenerate the review pack for
+Stage 5a. Older workspaces may need a one-time rebuild from the first stale
+stage; detection does not need to run again.
 An export's own old stamp does not prevent producing a new edition.
 
 ### QA findings and recovery
@@ -495,6 +511,7 @@ it cannot waive pixel, glyph, geometry, freshness or package integrity failures.
 | Code | Meaning | Action |
 | --- | --- | --- |
 | `pending-region` | A region has no terminal decision. | Complete its translation or explicitly keep, drop or erase it in the worksheet. |
+| `dropped-source-text` | A dropped region still contains source lettering. | Check the original. Restore and translate missed text, or record a valid reason in `extra.drop_reason` for a deliberate exclusion. |
 | `page-not-rendered` | A page needs lettering but has no rendered artifact. | Clean and typeset the current page, then rerun strict QA. |
 | `page-not-cleaned` | An erase decision needs a cleaned artifact. | Regenerate its mask and clean the page. |
 | `missing-typeset-proof` | Current translated text lacks a successful placement record. | Rerun typeset after fixing any fit or external-edit refusal. |
@@ -506,7 +523,7 @@ it cannot waive pixel, glyph, geometry, freshness or package integrity failures.
 | `compressed-variant` | Displayed Persian differs from full wording without a current review. | Compare `fa_full` and `fa` against the source and layout, then record `reviewed: compressed-variant`; changed wording or layout reopens it. |
 | `artwork-changed` | Native color or alpha samples changed outside authorized masks. | Restore the source, correct edit boundaries, regenerate output and confirm zero outside-mask changes. |
 | `page-dimensions` | Original, cleaned and rendered page dimensions differ. | Restore native dimensions and regenerate the affected artifact. |
-| `protected-japanese-modified` | Japanese kana/SFX on an English-source edition was translated, erased or altered. | Mark the Japanese region `keep`, restore original pixels, and rerun clean/typeset. |
+| `protected-japanese-modified` | Japanese kana/SFX on an English-source edition was translated, erased or altered. | Set `keep: yes` with empty targets, then rebuild masks, clean, typeset, and rerun strict QA. |
 | `mask-dimensions` | A page mask has the wrong dimensions. | Regenerate the mask from the current page; do not resize artwork. |
 | `balloon-ink-survives` | Source lettering remains in an approved balloon interior. | Inspect the mask and polarity, clean the actual glyphs, then typeset again. |
 | `halo-artifact` | Cleaning leaves visible edge or color residue. | Correct the cleaning region or approved external edit and inspect its boundary. |

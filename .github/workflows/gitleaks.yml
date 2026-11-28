@@ -12,13 +12,13 @@ permissions:
   contents: read
 
 concurrency:
-  group: gitleaks-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Keep each push in its own group so GitHub cannot replace a pending scan.
+  group: gitleaks-${{ github.workflow }}-${{ github.event_name == 'push' && github.run_id || github.ref }}
+  cancel-in-progress: false
 
 jobs:
   gitleaks:
     name: Gitleaks secret scan
-    if: github.event_name != 'push' || github.ref_name == github.event.repository.default_branch
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:

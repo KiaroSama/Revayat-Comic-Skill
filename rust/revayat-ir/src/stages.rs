@@ -18,6 +18,7 @@ fn inputs(stage: &str) -> &'static [&'static str] {
         "typeset" | "export" => &[
             "render",
             "text",
+            "lettering",
             "policy",
             "source",
             "source_language",
@@ -158,6 +159,16 @@ pub fn facet_revision(page: &PageRecord, facet: &str) -> Result<String, IrError>
                 data.push('|');
             }
         }
+        "lettering" => {
+            let overrides: Vec<_> = page
+                .regions
+                .iter()
+                .map(|region| {
+                    ["outline_px", "outline_alpha", "angle"].map(|key| region.extra.get(key))
+                })
+                .collect();
+            data.push_str(&sorted_json(&json!(overrides))?);
+        }
         "source" => data.push_str(&stable(Some(&json!(
             page.regions
                 .iter()
@@ -183,6 +194,13 @@ pub fn facet_revision(page: &PageRecord, facet: &str) -> Result<String, IrError>
                 );
                 if let Some(bounds) = region.extra.get("mask_bounds") {
                     let _ = write!(data, "bounds:{}|", stable(Some(bounds))?);
+                }
+                if let Some(solid) = region
+                    .extra
+                    .get("solid_mask")
+                    .filter(|v| v.as_bool() == Some(true))
+                {
+                    let _ = write!(data, "solid:{}|", stable(Some(solid))?);
                 }
             }
         }
@@ -399,5 +417,38 @@ impl StageFreshness {
             stale: stale_stages(doc, needed_for)?,
             unverified: unverified_stages(doc),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lettering_overrides_invalidate_rendered_pages_only() -> Result<(), IrError> {
+        let mut doc: ComicDocument = serde_json::from_value(json!({
+            "pages": [{"id": "p0001", "regions": [{"id": "p0001_r001"}]}]
+        }))?;
+        for stage in ["detect", "mask", "masks", "clean", "typeset", "export"] {
+            stamp_stage(&mut doc, stage, Default::default(), None, None)?;
+            assert!(stale_pages(&doc, stage)?.is_empty(), "{stage}");
+        }
+
+        for (key, value) in [
+            ("angle", json!(-8.0)),
+            ("outline_px", json!(2)),
+            ("outline_alpha", json!(128)),
+            ("style", json!("no-outline")),
+        ] {
+            let mut edited = doc.clone();
+            edited.pages[0].regions[0].extra.insert(key.into(), value);
+            for stage in ["typeset", "export"] {
+                assert_eq!(stale_pages(&edited, stage)?, ["p0001"], "{stage}: {key}");
+            }
+            for stage in ["mask", "masks", "clean"] {
+                assert!(stale_pages(&edited, stage)?.is_empty(), "{stage}: {key}");
+            }
+        }
+        Ok(())
     }
 }

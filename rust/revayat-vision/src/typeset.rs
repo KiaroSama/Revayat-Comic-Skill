@@ -22,6 +22,7 @@ pub struct TextRegion {
     pub max_size: u32,
     pub line_spacing: f32,
     pub compact: bool,
+    pub is_balloon: bool,
     pub align: Alignment,
     pub style: TextStyle,
     pub rtl_target: bool,
@@ -38,6 +39,7 @@ impl TextRegion {
             max_size: 72,
             line_spacing: MIN_LINE_HEIGHT,
             compact: false,
+            is_balloon: false,
             align: Alignment::Center,
             style: TextStyle::default(),
             rtl_target: false,
@@ -53,6 +55,20 @@ pub struct TypesetRegion {
     pub line_height: f32,
     pub ink_box: Rect,
     pub lines: Vec<PlacedLine>,
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub angle_deg: f32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub outline_px: u32,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_zero_f32(value: &f32) -> bool {
+    *value == 0.0
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_zero_u32(value: &u32) -> bool {
+    *value == 0
 }
 
 #[derive(Debug, Clone)]
@@ -81,42 +97,50 @@ fn render(
     style: &TextStyle,
     fill: [u8; 3],
 ) -> Vec<PlacedLine> {
-    let mut rendered = Vec::new();
-    for (line, ink) in fit.lines {
-        let b = line.bbox;
-        let border = if style.outline {
-            (fit.size as u32 / 12).max(1)
-        } else {
-            0
-        };
-        let brush = if border > 0 {
-            typestyle::stroke(&ink, border)
-        } else {
-            ink.clone()
-        };
-        let x = b.x() - border;
-        let y = b.y() - border;
-        if style.shadow {
-            typestyle::paint(page, &brush, x + 2, y + 2, [0; 3], 72);
+    let border = typestyle::effective_outline_radius(style, fit.size);
+    let shadow = style
+        .shadow
+        .then(|| typestyle::shadow_offset(typestyle::effective_angle_deg(style)));
+    let mut paint = |b: Rect, ink: &GrayImage| {
+        let brush = (border > 0).then(|| typestyle::stroke(ink, border));
+        let brush = brush.as_ref().unwrap_or(ink);
+        let (x, y) = (b.x() - border, b.y() - border);
+        let shadow =
+            shadow.map(|[dx, dy]| ((i64::from(x) + dx) as u32, (i64::from(y) + dy) as u32));
+        if let Some((sx, sy)) = shadow {
+            typestyle::paint(page, brush, sx, sy, [0; 3], 72);
         }
-        if style.outline {
+        if border > 0 {
             let outline = if u32::from(fill[0]) + u32::from(fill[1]) + u32::from(fill[2]) > 384 {
                 [0; 3]
             } else {
                 [255; 3]
             };
-            typestyle::paint(page, &brush, x, y, outline, 255);
+            typestyle::paint(
+                page,
+                brush,
+                x,
+                y,
+                outline,
+                style.outline_alpha.unwrap_or(255),
+            );
         }
-        typestyle::paint(page, &ink, b.x(), b.y(), fill, 255);
+        typestyle::paint(page, ink, b.x(), b.y(), fill, 255);
         for (i, j, _) in brush.enumerate_pixels().filter(|(_, _, p)| p[0] != 0) {
             mask.put_pixel(x + i, y + j, Luma([255]));
-            if style.shadow {
-                mask.put_pixel(x + i + 2, y + j + 2, Luma([255]));
+            if let Some((sx, sy)) = shadow {
+                mask.put_pixel(sx + i, sy + j, Luma([255]));
             }
         }
-        rendered.push(line);
+    };
+    if let Some((bbox, ink)) = &fit.rotated {
+        paint(*bbox, ink);
+    } else {
+        for (line, ink) in &fit.lines {
+            paint(line.bbox, ink);
+        }
     }
-    rendered
+    fit.lines.into_iter().map(|(line, _)| line).collect()
 }
 
 /// Returns a page only after every region fits.
@@ -142,6 +166,7 @@ pub fn typeset_page_with_occupied(
         .unwrap_or_else(|| GrayImage::new(page.width(), page.height()));
     let mut image = page.clone();
     let mut output = Vec::new();
+    let explicit_balloons = regions.iter().any(|r| r.is_balloon);
     let cap = page_font_cap(regions);
     for region in regions {
         region.bounds.checked(page.dimensions())?;
@@ -187,6 +212,12 @@ pub fn typeset_page_with_occupied(
                 region.id
             )));
         }
+        let cap = if uses_balloon_cap(region, explicit_balloons) {
+            let room = bounds.width().min(bounds.height());
+            cap.min((room.saturating_mul(4) / 10).clamp(18, 72))
+        } else {
+            region.max_size
+        };
         let fit = fit_region(
             &mut shaper,
             &logical,
@@ -235,6 +266,8 @@ pub fn typeset_page_with_occupied(
             line_height,
             ink_box,
             lines,
+            angle_deg: typestyle::effective_angle_deg(&region.style),
+            outline_px: typestyle::effective_outline_radius(&region.style, font_size),
         });
     }
     Ok(TypesetPage {
@@ -244,18 +277,34 @@ pub fn typeset_page_with_occupied(
     })
 }
 
+fn uses_balloon_cap(region: &TextRegion, explicit_balloons: bool) -> bool {
+    if explicit_balloons {
+        region.is_balloon
+    } else {
+        region.interior.is_some() && !region.compact
+    }
+}
+
 fn page_font_cap(regions: &[TextRegion]) -> u32 {
+    let explicit_balloons = regions.iter().any(|r| r.is_balloon);
     let mut sizes = regions
         .iter()
+        .filter(|r| uses_balloon_cap(r, explicit_balloons))
         .map(|r| {
             let b = r.interior.as_ref().map_or(r.bounds, |m| m.bounds);
             b.width().min(b.height())
         })
         .collect::<Vec<_>>();
     sizes.sort_unstable();
-    sizes
-        .get(sizes.len().saturating_sub(1) / 2)
-        .map_or(72, |size| (size / 3).clamp(16, 72))
+    sizes.get(sizes.len() / 2).map_or(72, |&size| {
+        // Legacy callers do not distinguish balloon paper from other interiors.
+        let max = if size <= 96 || !explicit_balloons {
+            38
+        } else {
+            52
+        };
+        (size.saturating_mul(4) / 10).clamp(24, max)
+    })
 }
 
 fn split_shared_interiors(regions: &[TextRegion]) -> Result<Vec<Option<RegionMask>>> {
@@ -442,6 +491,116 @@ mod tests {
                 .ink_box
                 .intersection(result.regions[0].ink_box)
                 .is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_tiny_sfx_does_not_shrink_a_roomy_speech_balloon() -> Result<()> {
+        let paper = RgbImage::from_pixel(300, 260, image::Rgb([255; 3]));
+        let mut speech = TextRegion::new("speech", Rect([0, 0, 150, 260]), "نگاه کنین!");
+        speech.is_balloon = true;
+        let mut sfx = TextRegion::new("sfx", Rect([180, 0, 60, 40]), "تق");
+        sfx.compact = true;
+        let speech_alone = typeset_page(&paper, std::slice::from_ref(&speech))?;
+        let together = typeset_page(&paper, &[speech, sfx])?;
+        assert!(together.regions[0].font_size >= 30.0);
+        assert_eq!(
+            together.regions[0].font_size,
+            speech_alone.regions[0].font_size
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn rotated_persian_keeps_its_outline_and_passes_ink_qa() -> Result<()> {
+        let paper = RgbImage::from_pixel(180, 100, image::Rgb([160; 3]));
+        let bounds = Rect([9, 8, 150, 80]);
+        let mut region = TextRegion::new("title", bounds, "سلام\nدنیا");
+        region.interior = Some(RegionMask {
+            bounds,
+            pixels: GrayImage::from_fn(bounds.width(), bounds.height(), |x, y| {
+                Luma([u8::from(
+                    x >= 5 && x < bounds.width() - 5 && y >= 4 && y < bounds.height() - 4,
+                ) * 255])
+            }),
+        });
+        region.style.angle_deg = Some(-9.0);
+        region.style.outline = true;
+        region.style.outline_px = Some(2);
+        region.style.outline_alpha = Some(120);
+        let mut occupied = GrayImage::new(paper.width(), paper.height());
+        for x in 105..125 {
+            occupied.put_pixel(x, 29, Luma([255]));
+        }
+        let faint =
+            typeset_page_with_occupied(&paper, std::slice::from_ref(&region), Some(&occupied))?;
+        let entry = &faint.regions[0];
+        assert_eq!(entry.angle_deg, -9.0);
+        assert_eq!(entry.outline_px, 2);
+        assert_eq!(entry.lines.len(), 2);
+        assert_eq!(entry.ink_box.intersection(bounds), Some(entry.ink_box));
+        let mut shaper = Shaper::new()?;
+        crate::qa::verify_rotated_ink(
+            &mut shaper,
+            &region.text,
+            entry,
+            &region.style,
+            &paper,
+            &faint.image,
+            region.rtl_target,
+        )?;
+        assert!(
+            crate::qa::verify_rotated_ink(
+                &mut shaper,
+                &region.text,
+                entry,
+                &region.style,
+                &paper,
+                &paper,
+                region.rtl_target
+            )
+            .is_err()
+        );
+        assert_eq!(
+            crate::qa::compare_outside_mask(&paper, &faint.image, &faint.mask)?.changed,
+            0
+        );
+        assert!(
+            faint
+                .mask
+                .enumerate_pixels()
+                .filter(|(_, _, p)| p[0] != 0)
+                .all(|(x, y, _)| {
+                    (14..154).contains(&x)
+                        && (12..84).contains(&y)
+                        && occupied.get_pixel(x, y)[0] == 0
+                })
+        );
+        let target = crate::bidi::ensure_rli_pdi(&entry.logical_text)?;
+        let report = crate::qa::run_strict_qa(crate::qa::QaPage {
+            original: &paper,
+            cleaned: &paper,
+            final_image: &faint.image,
+            authorized: &faint.mask,
+            regions: &[crate::qa::QaRegion {
+                id: &entry.id,
+                target: &target,
+                ink_box: Some(entry.ink_box),
+                balloon: None,
+                font_size: Some(entry.font_size),
+                line_height: Some(entry.line_height),
+            }],
+        })?;
+        assert!(report.ok, "{:?}", report.findings);
+        region.style.outline_alpha = None;
+        let solid = typeset_page_with_occupied(&paper, &[region], Some(&occupied))?;
+        assert!(
+            solid
+                .image
+                .pixels()
+                .zip(faint.image.pixels())
+                .any(|(solid, faint)| { solid[0] == 255 && (161..=205).contains(&faint[0]) })
         );
         Ok(())
     }

@@ -6,13 +6,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
 
 const ACTIONS: [&str; 3] = ["drop", "keep", "erase"];
-const STYLES: [&str; 6] = [
+const STYLES: [&str; 7] = [
     "bold",
     "italic",
     "bold-italic",
     "outline",
     "shadow",
     "shout",
+    "no-outline",
 ];
 static HEADER: LazyLock<Regex> =
     LazyLock::new(|| crate::matcher(r"^@@\s+(\+?[A-Za-z0-9_#-]+)(?:\s+(.*))?$"));
@@ -107,9 +108,9 @@ pub fn field_lines(name: &str, value: &str) -> String {
 }
 fn normalize_style(style: &str) -> Result<String, IrError> {
     let mut values: BTreeSet<_> = style
-        .split(',')
-        .map(|s| s.trim().to_ascii_lowercase())
+        .split(|c: char| c == ',' || c.is_whitespace())
         .filter(|s| !s.is_empty())
+        .map(str::to_ascii_lowercase)
         .collect();
     if values.iter().any(|s| !STYLES.contains(&s.as_str())) {
         return Err(IrError::refused(

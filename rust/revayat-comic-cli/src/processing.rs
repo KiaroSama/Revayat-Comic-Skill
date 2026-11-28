@@ -402,6 +402,7 @@ fn mask_page(
     let preserved = lettering::preserved_region_bounds(page, policy, source_language)?;
     let mut count = 0;
     for region in &mut page.regions {
+        region.extra.remove("solid_mask");
         if !editable(region, policy)
             || ir::foreign_script_guard(source_language, &region.source_text)
                 == ir::ForeignScriptGuard::ProtectedJapanese
@@ -421,6 +422,9 @@ fn mask_page(
                     .map_err(failed)
             },
         )?;
+        if solid && resolved.is_none() && !bubble_kind(region) {
+            region.extra.insert("solid_mask".into(), json!(true));
+        }
         if let Some((balloon, paper)) = &resolved {
             let geometry =
                 masks::balloon_geometry_from_interior(*balloon, paper).map_err(failed)?;

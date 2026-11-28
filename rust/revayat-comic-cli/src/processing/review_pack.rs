@@ -167,10 +167,30 @@ fn build_manifest(
             if status == "unreliable" {
                 reasons.push("unreliable");
             }
-            if let Some(fs) = r.typeset.get("font_size").and_then(Value::as_f64)
-                && fs < 15.0
+            if let Some(fs) = r.typeset.get("font_size").and_then(Value::as_f64) {
+                if fs < 15.0 {
+                    reasons.push("tiny_font");
+                }
+                if fs <= 18.0
+                    && bubble_kind(r)
+                    && balloon(r)?.is_some_and(|b| b.bounds.width().min(b.bounds.height()) >= 90)
+                {
+                    reasons.push("undersized_balloon");
+                }
+            }
+            if r.typeset
+                .get("angle_deg")
+                .and_then(Value::as_f64)
+                .is_some_and(|a| a.abs() >= f64::from(revayat_vision::typestyle::MIN_ROTATION_DEG))
             {
-                reasons.push("tiny_font");
+                reasons.push("rotated_text");
+            }
+            if r.typeset
+                .get("outline_px")
+                .and_then(Value::as_u64)
+                .is_some_and(|o| o > 0)
+            {
+                reasons.push("outlined_text");
             }
             if r.erase || r.state == Some(regions::RegionState::Erased) {
                 reasons.push("erased_balloon");
@@ -218,7 +238,7 @@ fn build_manifest(
                 &mut items,
             )?;
         }
-        let sbs = side_by_side(&source, &final_img, 1, 1500);
+        let sbs = side_by_side(&source, &final_img, 1, 1804);
         let (crop_path, crop_sha256) = record_crop(&sbs, &format!("{}-page", page.id), output)?;
         items.push(json!({
             "page_id": page.id, "region_id": "*", "crop_path": crop_path,
@@ -226,6 +246,9 @@ fn build_manifest(
         }));
     }
     let mut context = json!({
+        "source": document.source,
+        "title": document.meta.get("title"),
+        "chapter": document.meta.get("chapter"),
         "source_language": document.meta.get("source_language"),
         "target_language": document.meta.get("target_language"),
         "reading_direction": document.meta.get("reading_direction"),

@@ -21,7 +21,7 @@ that needs an unresolved handoff waits for the prior shard's update.
 | **2** | صفحه آرایی | Layout & Typesetting Planner Agent | Draft worksheets + full page images + bubble/region geometry | Line-broken, spaced worksheets + routing tag (`typeset` vs `fullpage_edit`) per region |
 | **3** | بازبینی | Bilingual & Tone Review Agent | Original full pages + draft/planned worksheets + Persian voice guide | Reviewed, natural spoken-Persian worksheets with zero AI tells and verified meaning |
 | **4** | اعمال ترجمه | Apply Translation Agent | Approved worksheets + `comic.json` | Emptied clean speech bubbles + approved crop edits pasted back in place + Vazir RTL typeset pages |
-| **5a** | بازبینی خصمانهٔ تصویر | Adversarial Visual Recheck Agent (read-only) | `revayat-comic qa review-pack` (`flags.json` + 2x side-by-side crops) + full rendered pages + `qa check --strict` | Signed `work/review/ledger.tsv` with per-crop `PASS` or `FAIL` + exact defect codes |
+| **5a** | بازبینی خصمانهٔ تصویر | Adversarial Visual Recheck Agent (read-only) | Strict QA, every full-page comparison, and every 2x review crop | `work/review/ledger.tsv` with each page and crop verdict and exact defect codes |
 | **5b** | اصلاح هدفمند مشکلات | Defect Repair Agent | `work/review/ledger.tsv` `FAIL` rows only | Targeted code/worksheet/crop fixes + regenerated `review-pack` handed back to Stage 5a until 0 `FAIL` rows remain |
 | **6** | بازبینی نهایی و تحویل | Final Review & Delivery Agent | Verified final pages + `qa check --strict` + `qa review-pack --verify-ledger` | `qa package`, lossless CBZ + lossless PDF export, translation & QA log |
 
@@ -79,8 +79,8 @@ Instructions:
    - Map labels, diagram callouts, and stacked captions: balance line lengths evenly and specify generous vertical line spacing (line-height >= 1.38x font size) so Persian dots/ascenders never collide between lines.
    - Cover titles, volume number circles, and spine badges: leave the original volume badge (e.g., `15`) in place and check clearance so the Persian title never overlaps it (e.g., «سِکیری»).
 2. Classify EVERY active region into exactly one rendering route:
-   - `typeset`: clean interior speech bubbles with uniform white/solid background -> emptied cleanly in `clean`, rendered with bundled Vazir TTF via pure-Rust `cosmic-text` RTL shaping.
-   - `fullpage_edit`: on-art lettering over speedlines, screentones, character art, maps, covers, chapter titles, and stylized SFX -> routed to Stage 4's cropped editing workflow using the page-level manifest (`revayat-comic fullpage-prompt`).
+   - `typeset`: speech balloons, flat titles and lists, slanted caption boxes, and crisp SFX Rust can match. Keep the speech-balloon size cap separate from the size of captions and SFX.
+   - `fullpage_edit`: on-art lettering whose background or hand-drawn shape needs a cropped edit. Use Stage 4's `revayat-comic fullpage-prompt` manifest.
 3. Verify ASCII digits (`0-9`) and Persian mechanics: proper ZWNJ (`می‌`, `نمی‌`, `‌ها`, `‌ترین`), Persian punctuation (`،`, `؛`, `؟`), and `RLI`/`PDI` isolation for mixed Latin/Persian lines (e.g., `MBI`).
 
 Output: Layout-planned worksheets and per-page `fullpage_edit` region manifests.
@@ -118,7 +118,7 @@ Output: Approved, review-signed worksheets ready for Stage 4 execution.
 
 ## Stage 4 — Apply Translation (`اعمال ترجمه`)
 
-**Objective:** Clean only uniform speech balloons first. Edit on-art lettering in wide context crops using `references/gemini-flash-prompting.md` (Variant C for stylized art/SFX, Variant D clean-only + Rust Vazir for horizontal titles/credits, pure Rust Vazir for flat multi-line pages such as tables of contents), paste approved edits into an isolated external PNG folder, then typeset every speech balloon deterministically in bundled Vazir (`Vazir-Medium` / `Vazir-Bold`).
+Clean and typeset speech balloons in bundled Vazir. Use the halftone-preserving cleanup and Rust lettering when they match the source. Where artwork needs a model edit, work on one wide-context crop at a time and keep approved composites in a separate PNG folder.
 
 ### Prompt Template (Stage 4)
 
@@ -131,11 +131,9 @@ Input files:
 
 Instructions:
 1. Merge approved worksheets (`revayat-comic worksheet merge`), run `revayat-comic falint fix`, and rebuild masks (`revayat-comic mask`) for the current source, language, geometry, and keep/erase decisions. Retain approved free-lettering mask options.
-2. Empty ONLY clean speech bubbles first (`revayat-comic clean --bubbles-only`) so zero residual ink dots remain inside emptied bubbles while speedlines, screentones, and on-art lettering stay untouched.
-3. For every page containing `fullpage_edit` regions (on-art SFX, speedline shouts, map labels, covers, spines, chapter titles):
-   - Follow `references/gemini-flash-prompting.md` and `references/fullpage-image-edit.md`. Use Variant C (4-part narrative prompt with explicit freeze zones, texture vocabulary, ink + outline/halo color and pixel width, and positive Persian glyph anatomy) for stylized/tilted art; use Variant D (clean-only artwork restoration + Rust Vazir) for straight horizontal titles/credits; use pure Rust Vazir with 0 model calls for flat solid-color lists (such as a table of contents).
-   - Never overwrite the external PNG folder with rendered output pages; keep `$EDITED` strictly separate from `work/rendered/`.
-4. Run `revayat-comic typeset --external-dir <approved-png-directory>` to composite approved on-art edits via solid clipped masks and set every speech balloon deterministically in Vazir. If there are no external edits, omit `--external-dir`.
+2. Use `revayat-comic clean` for deterministic lettering, including masked halftone cleanup where needed. Use `clean --bubbles-only` when preparing a page for cropped on-art edits; it leaves the on-art lettering in place for the crop.
+3. For each `fullpage_edit` region, follow `references/fullpage-image-edit.md` and `references/gemini-flash-prompting.md`. Measure the original outline. Keep circled badges and adjacent Japanese kana outside the edit and paste masks. For Variant D, route the approved clean-only PNG through `revayat-comic clean --external-dir <approved-clean-png-directory>` without `--bubbles-only`; keep those PNGs separate from Variant C composites and `work/rendered/`.
+4. Run `revayat-comic typeset` without `--external-dir` for clean-only Variant D pages. Use `typeset --external-dir <approved-lettered-png-directory>` only for Variant C pages whose composites already have the approved Persian lettering. Rust sets the ordinary speech balloons in Vazir in both cases.
 
 Output: Rendered full pages at the paths recorded in each page's `rendered` field in `<workdir>/comic.json`, ready for adversarial visual inspection.
 ```
@@ -144,54 +142,50 @@ Output: Rendered full pages at the paths recorded in each page's `rendered` fiel
 
 ## Stage 5a — Adversarial Visual Recheck (`بازبینی خصمانهٔ تصویر`, read-only)
 
-**Objective:** Separate inspection from repair so confirmation bias cannot hide defects. Generate 2x pixel-doubled `[SOURCE | RENDERED]` crops with `revayat-comic qa review-pack`, inspect EVERY flagged crop and spot-check at full crispness, and record an explicit fail-closed verdict in `work/review/ledger.tsv`. Stage 5a is strictly read-only on pages and worksheets.
+Stage 5a checks the current evidence and writes `work/review/ledger.tsv`. The reviewer does not edit pages, masks, or worksheets.
 
 ### Prompt Template (Stage 5a)
 
 ```text
-Role: Stage 5a — Adversarial Visual Recheck Agent (read-only) for Revayat Comic.
-You are FORBIDDEN from editing pages, masks, or worksheets. Your job is to find every defect that would embarrass a published print edition.
+Role: Stage 5a, read-only adversarial visual reviewer.
+Run `revayat-comic qa check --strict --doc <workdir>/comic.json`, then `revayat-comic qa review-pack --doc <workdir>/comic.json`. Read `<workdir>/review/flags.json` and resolve each crop_path relative to that file.
 
-Input files:
-- Run first: `revayat-comic qa check --strict --doc <workdir>/comic.json`
-- Run second: `revayat-comic qa review-pack --doc <workdir>/comic.json`
-- Manifest: `<workdir>/review/flags.json`
-- Fresh review template: `<workdir>/review/ledger.template.tsv`
-- 2x zoomed side-by-side `[SOURCE | RENDERED]` crops: `<workdir>/review/crops/*.png`
-- Full rendered pages (for page-wide weight/tone consistency): `<workdir>/rendered/p*.png`
+Open both sets of images with Read:
+1. Every full-page [SOURCE | RENDERED] comparison: use the manifest row with `region_id=*` for each page. The CLI currently writes `crops/<page_id>-page-*.png`; if the manifest lists `pages/<page_id>-compare-*.png`, open that path. Scan top left, top right, bottom left, bottom right, then the margins, gutters, and SFX layers. Look for `UNTRANSLATED_TEXT`, `ERASED_GRAPHIC`, `FONT_MISMATCH`, and `UNDERSIZED_BALLOON`. Compare consecutive pages for weight and family drift. The full-page scan must include text with no region ID and text from dropped regions.
+2. Every flagged region crop at 2x (`crops/*.png`). Compare the source and rendered halves using all seven checks below. Cover every high-risk area, on-art edit, title, and SFX. If the manifest omits a crop you need for that coverage, inspect matching 2x crops from the source and rendered pages. Record any finding on the page's `region_id=*` row without adding unofficial ledger rows.
 
-Mandatory 9-point inspection checklist on EVERY crop in `flags.json` (open each PNG with Read):
-1. `SPECKLE_OR_NOISE`: any salt-and-pepper dots, ghost English strokes, or flat blurry gray patches over halftone/speedlines.
-2. `MISSING_OUTLINE`: missing white/black outer halo or inverted ink polarity compared to the left (SOURCE) half.
-3. `PERSIAN_GLYPH`: any dotted Arabic `ي` at word end, broken letter join, malformed `ک`/`گ`/`پ`/`ی`, or Persian digits where ASCII digits are required.
-4. `TINY_OR_CRAMPED`: spacious speech bubble filled with tiny text (< 15 px), awkward unbroken hyphenated name, or severe centering/alignment drift (especially TOC/credits).
-5. `BIDI_PUNCT`: wrong-side punctuation on numeric or mixed bubbles (e.g., `3.` instead of `.3` in Persian RTL, flipped `?!`, or detached `…`).
-6. `OVERLAP_OR_CLIP`: text colliding with another bubble/on-art region, volume badge (`15`), or balloon outline.
-7. `JAPANESE_DAMAGED`: on English-source editions, any erased, smudged, or modified Japanese hiragana/katakana/kanji SFX (`ゴゴゴ`, `うわあああ`).
-8. `WEIGHT_OR_FONT_DRIFT`: sudden font family, thin/gray stroke, or weight jump between consecutive pages or inside speech bubbles.
-9. `ERASED_RESIDUAL`: leftover dots or unchanged source ink inside an erased balloon.
+Defect codes:
+1. `UNTRANSLATED_TEXT`: English or other source text meant for translation still visible anywhere. Check for tiny `RUMBLE`, `FLASH`, or `STEP` beside Japanese kana or panel borders, including regions mistakenly marked `drop`. Intentionally kept artwork is not a translation omission.
+2. `OUTLINE_MISMATCH`: The replacement has a thick white sticker halo where the source credit or chapter title had a faint edge, or it lacks the source's crisp white or black outline over textured SFX. Compare thickness, opacity, and polarity.
+3. `FONT_MISMATCH`: A font family or weight jumps between comparable regions or pages, such as heavy bold on a light title or table of contents.
+4. `ERASED_GRAPHIC`: A circled volume number (`⑮`), panel border, speedline, or adjacent Japanese SFX stroke was erased, smudged, or redrawn.
+5. `UNDERSIZED_BALLOON`: Text floats in a roomy speech balloon with far more empty space than in the original. Compare the lettering to the usable balloon interior.
+6. `HALFTONE_SMEAR`: A flat white rectangle or blurry patch wipes out halftone or screentone dots behind an SFX.
+7. `MISSING_TILT`: Text sits at 0° in a deliberately slanted caption box or over slanted source SFX where the matching `extra.angle` is needed.
 
-Output: Copy the current `ledger.template.tsv` to `<workdir>/review/ledger.tsv` and fill its verdict, defect_codes and notes columns. Preserve the exact header (`page_id\tregion_id\tstage\tverdict\tdefect_codes\tnotes\treview_id`), IDs, stage=5a and review_id. Record an explicit `PASS` or `FAIL` for EVERY manifest item, including each page's `region_id=*` full-page row. Resolve crop_path relative to flags.json. Never mark PASS without opening that current image; never copy approvals from an older review_id.
+Also reject malformed Persian (`PERSIAN_GLYPH`), misplaced RTL punctuation (`BIDI_PUNCT`), crowding or poorly broken lines (`TINY_OR_CRAMPED`), clipping or collisions (`OVERLAP_OR_CLIP`), and stray or residual ink (`SPECKLE_OR_NOISE` or `ERASED_RESIDUAL`).
+
+Start from the current `ledger.template.tsv`. Preserve the exact header (`page_id\tregion_id\tstage\tverdict\tdefect_codes\tnotes\treview_id`), IDs, `stage=5a`, and `review_id`. Write an explicit `PASS` or `FAIL` on every row. A visible defect defaults to `FAIL`; record every applicable code in `defect_codes` and name the location and evidence in `notes`. Leave unreadable or missing evidence unresolved until it is replaced. A clean strict QA result or a previous approval is not a reason to mark `PASS`. Open every current image yourself; never carry approvals across a changed `review_id`.
 ```
 
 ---
 
 ## Stage 5b — Targeted Defect Repair (`اصلاح هدفمند مشکلات`)
 
-**Objective:** Fix ONLY the `FAIL` items recorded by Stage 5a in `work/review/ledger.tsv`, re-run `clean`/`typeset`/`qa check --strict`/`qa review-pack`, and return the updated crops to Stage 5a for independent verification.
+Fix only the defects Stage 5a recorded. Rebuild from the first affected stage so the reviewer sees the repair on the current rendered page.
 
 ### Prompt Template (Stage 5b)
 
 ```text
-Role: Stage 5b — Targeted Defect Repair Agent for Revayat Comic.
-Input files:
-- `<workdir>/review/ledger.tsv` (`FAIL` rows only)
-- `<workdir>/comic.json` and `references/gemini-flash-prompting.md`
+Role: Stage 5b, targeted defect repairer.
+Read the FAIL rows in `<workdir>/review/ledger.tsv` and the corresponding regions in `<workdir>/comic.json`. Fix the cause without changing passing regions. Correct the worksheet, route a fitting or tilt change to Rust, or repair one approved on-art crop using `references/gemini-flash-prompting.md`.
 
-Instructions:
-1. For each `FAIL` row, apply the root fix (regenerate the single on-art crop with Variant C/D, switch flat multi-line layouts to pure Rust Vazir, adjust worksheet wording/breaks, or fix masking/keep flags) without touching passing regions.
-2. Re-run `revayat-comic typeset --doc <workdir>/comic.json [--external-dir ...]` and `revayat-comic qa check --strict --doc <workdir>/comic.json`.
-3. Regenerate `<workdir>/review/` with `revayat-comic qa review-pack --doc <workdir>/comic.json`. Changed evidence creates a new review_id; the retained old ledger is reference material, not approval of the new images. Return the new template and all current manifest images to Stage 5a for independent `FIXED` / `PASS` verdicts. Only Stage 5a writes the approval rows. Legacy six-column ledgers must be replaced from the current template and reviewed once.
+Run these stages in order, each against `--doc <workdir>/comic.json`:
+- If a repair changes masking, `keep`/`drop`/`translate` or `erase` decisions, geometry, `source_text`, or source language: `mask` -> `clean` -> `typeset` -> `qa check --strict`. Retain approved mask options, and rebuild approved external crops from the fresh cleaned page where needed.
+- If the repair changes a clean-only Variant D PNG within the same mask: `clean --external-dir <approved-clean-png-directory>` -> `typeset` without `--external-dir` -> `qa check --strict`.
+- If the repair changes only target text, style, outline, angle, or a lettered Variant C composite within the same mask: `typeset` -> `qa check --strict`. Pass `--external-dir` to `typeset` only for approved composites that already contain the lettering.
+
+When strict QA passes, run `revayat-comic qa review-pack --doc <workdir>/comic.json`. Return the new template and every current page comparison and crop to Stage 5a. Changed evidence creates a new `review_id`; the old ledger is reference only. Only Stage 5a can approve the new evidence. Replace any legacy six-column ledger with the current template and review all its rows.
 ```
 
 ---

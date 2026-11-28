@@ -262,6 +262,113 @@ pub fn diffuse_inpaint_rgb(
     Ok(current)
 }
 
+pub fn inpaint_textured_ring_rgb(
+    rgb: Option<&[u8]>,
+    mask: Option<&[u8]>,
+    width: i128,
+    height: i128,
+) -> KernelResult<Vec<u8>> {
+    let dim = Image::new(width, height)?;
+    let rgb = dim.buffer(rgb, 3)?;
+    let mask = dim.buffer(mask, 1)?;
+    if mask.iter().all(|&v| v == 0) {
+        return Ok(rgb.to_vec());
+    }
+    if !mask.contains(&0) {
+        return Ok(vec![255; rgb.len()]);
+    }
+    let distances = dim.distances(mask, false);
+    let inner = if distances.iter().any(|d| (3..=14).contains(d)) {
+        3
+    } else {
+        1
+    };
+    let ring: Vec<_> = distances.iter().map(|d| (inner..=14).contains(d)).collect();
+    let [px, py] = [(dim.width, 1), (dim.height, dim.width)].map(|(length, stride)| {
+        let sad = |lag: usize| {
+            if lag >= length {
+                return f64::INFINITY;
+            }
+            let (mut sum, mut count) = (0.0, 0);
+            for (i, &sample) in ring.iter().enumerate() {
+                if sample && i / stride % length < length - lag && ring[i + lag * stride] {
+                    let j = (i + lag * stride) * 3;
+                    for (&a, &b) in rgb[i * 3..][..3].iter().zip(&rgb[j..][..3]) {
+                        sum += f64::from(a.abs_diff(b));
+                    }
+                    count += 1;
+                }
+            }
+            if count < 4 {
+                f64::INFINITY
+            } else {
+                sum / f64::from(count)
+            }
+        };
+        let adjacent = sad(1);
+        if !adjacent.is_finite() || adjacent == 0.0 {
+            return 1;
+        }
+        let (mut period, mut best) = (1, adjacent * 0.65);
+        for lag in 2..=12 {
+            let error = sad(lag);
+            if error < best {
+                (period, best) = (lag, error);
+            }
+        }
+        period
+    });
+    let sources = nearest_ring_samples(dim, &ring, px, py);
+    let fallback = sources
+        .iter()
+        .zip(mask)
+        .any(|(&i, &active)| i == dim.len && active != 0)
+        .then(|| nearest_ring_samples(dim, &ring, 1, 1));
+    let mut result = rgb.to_vec();
+    for (i, &source) in sources.iter().enumerate() {
+        if mask[i] == 0 {
+            continue;
+        }
+        let j = fallback
+            .as_ref()
+            .filter(|_| source == dim.len)
+            .map_or(source, |v| v[i]);
+        result[i * 3..][..3].copy_from_slice(&rgb[j * 3..][..3]);
+    }
+    Ok(result)
+}
+
+fn nearest_ring_samples(dim: Image, ring: &[bool], px: usize, py: usize) -> Vec<usize> {
+    let mut sources: Vec<_> = ring
+        .iter()
+        .enumerate()
+        .map(|(i, &sample)| if sample { i } else { dim.len })
+        .collect();
+    let distance = |a: usize, b: usize| {
+        a.div_euclid(dim.width).abs_diff(b / dim.width) + (a % dim.width).abs_diff(b % dim.width)
+    };
+    // Separable Manhattan nearest-neighbor search on each period's phase lattice.
+    let prefer = |sources: &mut [usize], at: usize, neighbor: usize| {
+        let (a, b) = (sources[at], sources[neighbor]);
+        if b != dim.len && (a == dim.len || distance(at, b) < distance(at, a)) {
+            sources[at] = b;
+        }
+    };
+    for (step, stride, length) in [(px, 1, dim.width), (py, dim.width, dim.height)] {
+        for at in 0..dim.len {
+            if at / stride % length >= step {
+                prefer(&mut sources, at, at - step * stride);
+            }
+        }
+        for at in (0..dim.len).rev() {
+            if at / stride % length < length.saturating_sub(step) {
+                prefer(&mut sources, at, at + step * stride);
+            }
+        }
+    }
+    sources
+}
+
 pub fn detect_textured_ring(
     rgb: Option<&[u8]>,
     mask: Option<&[u8]>,
@@ -340,6 +447,39 @@ pub fn fill_flat_rgb(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn textured_fill_keeps_dot_phase_without_copying_the_white_halo() {
+        let (w, h) = (48, 48);
+        let dot = |x, y| if x % 5 < 2 && y % 7 < 3 { 98 } else { 206 };
+        let mut rgb = Vec::new();
+        let mut mask = Vec::new();
+        for y in 0..h {
+            for x in 0..w {
+                let active = (17..31).contains(&x) && (17..31).contains(&y);
+                let halo = (15..33).contains(&x) && (15..33).contains(&y);
+                rgb.extend(
+                    [if active {
+                        0
+                    } else if halo {
+                        255
+                    } else {
+                        dot(x, y)
+                    }; 3],
+                );
+                mask.push(u8::from(active));
+            }
+        }
+        let filled = inpaint_textured_ring_rgb(Some(&rgb), Some(&mask), w, h).unwrap();
+        for (i, pixel) in filled.as_chunks::<3>().0.iter().enumerate() {
+            let i = i as i128;
+            if mask[i as usize] != 0 {
+                assert_eq!(*pixel, [dot(i % w, i / w); 3]);
+            } else {
+                assert_eq!(*pixel, rgb[i as usize * 3..][..3]);
+            }
+        }
+    }
+
     use super::*;
 
     #[test]

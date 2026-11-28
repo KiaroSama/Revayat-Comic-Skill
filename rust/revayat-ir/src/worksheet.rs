@@ -332,6 +332,13 @@ fn already_applied(page: &PageRecord, reply: &Reply, digest: &str) -> bool {
             )
 }
 
+fn protected_japanese_error(id: &str) -> IrError {
+    IrError::refused(
+        "protected_japanese_artwork",
+        format!("{id}: Japanese kana/SFX on an English-source edition must be kept untouched"),
+    )
+}
+
 fn check_protected_japanese(
     page: &PageRecord,
     source_language: Option<&str>,
@@ -342,16 +349,15 @@ fn check_protected_japanese(
             == ir::ForeignScriptGuard::ProtectedJapanese
             && (regions::translatable(region, policy)
                 || !region.target_text.trim().is_empty()
+                || region
+                    .extra
+                    .get("target_full")
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| !text.trim().is_empty())
                 || region.erase
                 || region.state == Some(regions::RegionState::Erased))
         {
-            return Err(IrError::refused(
-                "protected_japanese_artwork",
-                format!(
-                    "{}: Japanese kana/SFX on an English-source edition must be kept untouched",
-                    region.id
-                ),
-            ));
+            return Err(protected_japanese_error(&region.id));
         }
     }
     Ok(())
@@ -461,6 +467,22 @@ pub fn merge_document(
         addresses(&reply, page)?;
         for block in &reply.blocks {
             crate::replies::validate(block)?;
+            // These actions clear targets before the persisted region is checked.
+            if ["keep", "drop", "erase"]
+                .iter()
+                .any(|action| block.affirmative(action))
+                && ir::foreign_script_guard(
+                    source_lang.as_deref(),
+                    block.value("src").unwrap_or_default(),
+                ) == ir::ForeignScriptGuard::ProtectedJapanese
+                && ["fa", "fa_full"].iter().any(|field| {
+                    block
+                        .value(field)
+                        .is_some_and(|text| !text.trim().is_empty())
+                })
+            {
+                return Err(protected_japanese_error(&block.id));
+            }
         }
         let digest = reply_digest(&reply)?;
         let before = ir::page_fingerprint(page);

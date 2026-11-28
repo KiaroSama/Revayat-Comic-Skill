@@ -5,15 +5,15 @@
 **Translate manga, manhwa, manhua and Western comics into Persian, and deliver a lossless CBZ or PDF with verified artwork preservation.**
 
 [![GitHub Actions CI workflow status](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/ci.yml/badge.svg?branch=main)](.github/workflows/ci.yml)
-[![GNU General Public License v3.0 or later](https://img.shields.io/badge/license-GPL--3.0-2563eb?style=flat-square)](LICENSE)
-[![Latest GitHub version tag](https://img.shields.io/badge/version-v2.0.6-ea580c?style=flat-square)](#releases-and-tags)
-[![Latest GitHub release](https://img.shields.io/badge/release-v2.0.6-dc2626?style=flat-square)](https://github.com/KiaroSama/Revayat-Comic-Skill/releases)
+[![GNU General Public License v3.0 or later](https://img.shields.io/github/license/KiaroSama/Revayat-Comic-Skill?style=flat-square&color=2563eb)](LICENSE)
+[![Latest GitHub version tag](https://img.shields.io/github/v/tag/KiaroSama/Revayat-Comic-Skill?style=flat-square&color=ea580c&label=version)](#releases-and-tags)
+[![Latest GitHub release](https://img.shields.io/github/v/release/KiaroSama/Revayat-Comic-Skill?style=flat-square&color=dc2626)](https://github.com/KiaroSama/Revayat-Comic-Skill/releases)
 [![Automated Cargo workspace tests](https://img.shields.io/badge/tests-Cargo%20workspace-0d9488?style=flat-square)](#development)
 [![Rust 1.100.0 pinned toolchain](https://img.shields.io/badge/Rust-1.100.0-8b5cf6?style=flat-square)](rust-toolchain.toml)
 [![Supported platforms: Linux and Windows 64-bit x64 and arm64](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%28x64%20%7C%20arm64%29-0891b2?style=flat-square)](.github/workflows/ci.yml)
 [![Install via five plugin formats or standalone CLI binary](https://img.shields.io/badge/install-5%20plugins%20%7C%20CLI%20binary-4f46e5?style=flat-square)](#install)
 [![Documentation in English and Persian](https://img.shields.io/badge/docs-English%20%7C%20Persian-0284c7?style=flat-square)](README.fa.md)
-[![GitHub repository size](https://img.shields.io/badge/repo%20size-2.5%20MiB-ca8a04?style=flat-square)](#development)
+[![GitHub repository size](https://img.shields.io/github/repo-size/KiaroSama/Revayat-Comic-Skill?style=flat-square&color=ca8a04)](#development)
 [![Pure Rust runtime with zero Python dependencies](https://img.shields.io/badge/runtime-pure%20Rust%20%7C%20zero%20Python-059669?style=flat-square)](#architecture)
 [![Six-stage multi-agent workflow and cropped image editing](https://img.shields.io/badge/workflow-6%20agents%20%7C%20crop%20edits-7c3aed?style=flat-square)](skills/revayat-comic/references/multi-agent-workflow.md)
 [![Bundled Humanizer 4.0 and Persian voice guides](https://img.shields.io/badge/voice-Humanizer%204.0%20%7C%20Persian-b45309?style=flat-square)](skills/revayat-comic/references/voice/index.md)
@@ -57,6 +57,8 @@ Prebuilt release binaries and CI cover four 64-bit targets:
 
 ## Releases and Tags
 
+In v2.0.7, outlines scale with the type size, and cleanup preserves halftone dots beneath on-art text. Rust can rotate slanted captions and sound effects. Stage 5 now compares entire original and rendered pages side by side as well as reviewing individual crops.
+
 [GitHub Releases](https://github.com/KiaroSama/Revayat-Comic-Skill/releases) has a ZIP for each supported 64-bit target. Extract the standalone `revayat-comic` (Linux) or `revayat-comic.exe` (Windows). For source snapshots, see the [Git tags](https://github.com/KiaroSama/Revayat-Comic-Skill/tags).
 
 ## Install
@@ -70,7 +72,7 @@ Prebuilt release binaries and CI cover four 64-bit targets:
 
 The release ZIP contains the standalone CLI. Install the skill from the repository's plugin manifests or with the [skill installer](install/README.md), and keep `revayat-comic` on `PATH`.
 
-The repository has v2.0.6 manifests for five plugin systems: Agent Plugins (`plugin.json` and `.agents/plugins/marketplace.json`), Claude Code (`.claude-plugin/`), Codex (`.codex-plugin/`), Cursor (`.cursor-plugin/`), and Antigravity (`.antigravity-plugin/`).
+The repository has v2.0.7 manifests for five plugin systems: Agent Plugins (`plugin.json` and `.agents/plugins/marketplace.json`), Claude Code (`.claude-plugin/`), Codex (`.codex-plugin/`), Cursor (`.cursor-plugin/`), and Antigravity (`.antigravity-plugin/`).
 
 In Claude Code:
 

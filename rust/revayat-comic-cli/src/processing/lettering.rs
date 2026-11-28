@@ -1,5 +1,6 @@
 use super::*;
-use revayat_vision::{clean, fullpage_edit, qa, typeset};
+use revayat_vision::{VisionError, clean, fullpage_edit, qa, typeset, typestyle};
+use std::collections::BTreeSet;
 
 fn local_mask(root: &Path, region: &RegionRecord) -> Result<Option<masks::RegionMask>> {
     let Some(path) = &region.mask else {
@@ -176,9 +177,19 @@ pub fn clean(path: &Path, bubbles_only: bool, external: Option<&Path>) -> Result
                     // Saved masks must never override a current keep decision.
                     mask.exclude(&preserved);
                     mask.apply_to(&mut cleaned.mask).map_err(failed)?;
-                    let (image, strategy) =
-                        clean::clean_region(&cleaned.image, &mask, None, external.as_ref())
-                            .map_err(failed)?;
+                    let require_external = region
+                        .extra
+                        .get("solid_mask")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    let (image, strategy) = clean::clean_region_with_solid(
+                        &cleaned.image,
+                        &mask,
+                        None,
+                        external.as_ref(),
+                        require_external,
+                    )
+                    .map_err(failed)?;
                     cleaned.image = image;
                     region.fill = serde_json::to_value(strategy)
                         .map_err(failed)?
@@ -229,6 +240,64 @@ pub(super) fn reading_clean(root: &Path, page: &PageRecord) -> Result<RgbImage> 
         .into_rgb8())
 }
 
+fn lettering_style(region: &RegionRecord) -> Result<typestyle::TextStyle> {
+    let mut style = region
+        .extra
+        .get("style")
+        .and_then(Value::as_str)
+        .map_or_else(|| Ok(Default::default()), typestyle::style_flags)
+        .map_err(failed)?;
+    let integer = |key, max| {
+        region
+            .extra
+            .get(key)
+            .map(|value| {
+                value
+                    .as_u64()
+                    .filter(|n| (1..=max).contains(n))
+                    .ok_or_else(|| {
+                        failed(format!(
+                            "{}: {key} must be an integer in 1..={max}",
+                            region.id
+                        ))
+                    })
+            })
+            .transpose()
+    };
+    style.outline_px = integer("outline_px", 6)?.map(|n| n as u32);
+    style.outline_alpha = integer("outline_alpha", 255)?.map(|n| n as u8);
+    style.outline = !style.no_outline && (style.outline || style.outline_px.is_some());
+    if let Some(value) = region.extra.get("angle") {
+        style.angle_deg = Some(
+            value
+                .as_f64()
+                .filter(|a| (-45.0..=45.0).contains(a))
+                .ok_or_else(|| {
+                    failed(format!("{}: angle must be a number in -45..=45", region.id))
+                })? as f32,
+        );
+    }
+    Ok(style)
+}
+
+fn needs_backing_outline(page: &RgbImage, area: Rect, dark: bool) -> bool {
+    let ink = if dark { [255; 3] } else { [0; 3] };
+    let (mut n, mut sum, mut squares, mut weak) = (0, 0.0, 0.0, 0);
+    for y in (area.y()..area.bottom()).step_by(3) {
+        for x in (area.x()..area.right()).step_by(3) {
+            let rgb = page.get_pixel(x, y).0;
+            let [r, g, b] = rgb.map(f64::from);
+            let luma = 0.299 * r + 0.587 * g + 0.114 * b;
+            n += 1;
+            sum += luma;
+            squares += luma * luma;
+            weak += u32::from(qa::rgb_contrast(rgb, ink) < 3.0);
+        }
+    }
+    let count = f64::from(n);
+    n > 0 && (weak * 4 >= n || squares / count - (sum / count).powi(2) >= 144.0)
+}
+
 pub fn typeset(path: &Path, external: Option<&Path>) -> Result<Value> {
     write_doc(path, "typeset", |loaded| {
         let root = ir::doc_dir(loaded.path()).to_owned();
@@ -253,7 +322,8 @@ pub fn typeset(path: &Path, external: Option<&Path>) -> Result<Value> {
             images::validate_preservation_image(&native).map_err(failed)?;
             let source = native.to_rgb8();
             let mut text = Vec::new();
-            let mut medium_ids = std::collections::BTreeSet::new();
+            let mut medium_ids = BTreeSet::new();
+            let mut auto_tilt_ids = BTreeSet::new();
             let mut glosses = Vec::new();
             let preserved = preserved_region_bounds(page, &policy, source_lang.as_deref())?;
             let mut allowed =
@@ -351,12 +421,40 @@ pub fn typeset(path: &Path, external: Option<&Path>) -> Result<Value> {
                 let mut entry =
                     typeset::TextRegion::new(&region.id, bounds(region)?, &region.target_text);
                 entry.rtl_target = rtl_target;
-                if let Some(style) = region.extra.get("style").and_then(Value::as_str) {
-                    entry.style = revayat_vision::typestyle::style_flags(style).map_err(failed)?;
-                }
-                if bubble_kind(region) && !entry.style.bold && !entry.style.shout {
+                entry.is_balloon = bubble_kind(region);
+                entry.style = lettering_style(region)?;
+                if (entry.is_balloon || region.kind == "caption")
+                    && !entry.style.bold
+                    && !entry.style.shout
+                {
                     entry.style.medium = true;
                     medium_ids.insert(region.id.clone());
+                }
+                if !entry.is_balloon && resolved.is_none() {
+                    let area = entry.bounds.checked(cleaned.dimensions()).map_err(failed)?;
+                    if !entry.style.no_outline && !entry.style.outline {
+                        if let Some((px, alpha)) =
+                            typestyle::detect_original_outline(&source, area, !dark(region))
+                        {
+                            entry.style.outline = true;
+                            entry.style.outline_px.get_or_insert(px);
+                            entry.style.outline_alpha.get_or_insert(alpha);
+                        } else if matches!(region.kind.as_str(), "sfx" | "sign" | "title")
+                            && (region.fill == "inpaint"
+                                || needs_backing_outline(&cleaned, area, dark(region)))
+                        {
+                            entry.style.outline = true;
+                            entry.style.outline_px.get_or_insert(2);
+                        }
+                    }
+                    if entry.style.angle_deg.is_none()
+                        && matches!(region.kind.as_str(), "caption" | "sfx" | "sign")
+                        && let Some(deg) = typestyle::detect_region_angle(&source, area)
+                        && deg.abs() >= 2.0
+                    {
+                        entry.style.angle_deg = Some(deg);
+                        auto_tilt_ids.insert(region.id.clone());
+                    }
                 }
                 if let Some(balloon) = resolved {
                     let interior =
@@ -446,8 +544,16 @@ pub fn typeset(path: &Path, external: Option<&Path>) -> Result<Value> {
             } else {
                 cleaned.clone()
             };
-            let output = typeset::typeset_page_with_occupied(&base, &text, Some(&external_mask))
-                .map_err(failed)?;
+            let output = loop {
+                match typeset::typeset_page_with_occupied(&base, &text, Some(&external_mask)) {
+                    Err(VisionError::Overflow { id }) if auto_tilt_ids.remove(&id) => {
+                        if let Some(entry) = text.iter_mut().find(|r| r.id == id) {
+                            entry.style.angle_deg = None;
+                        }
+                    }
+                    result => break result.map_err(failed)?,
+                }
+            };
             if qa::compare_outside_mask(&cleaned, &output.image, &allowed)
                 .map_err(failed)?
                 .changed

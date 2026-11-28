@@ -168,6 +168,60 @@ fn worksheet_rejects_protected_targets_under_keep_policy_without_partial_writes(
 }
 
 #[test]
+fn worksheet_rejects_protected_full_targets_on_merge_and_replay() -> Result<(), IrError> {
+    let tmp = tempfile::tempdir()?;
+    let path = tmp.path().join("comic.json");
+    let mut doc = rendered_document()?;
+    doc.meta.insert("sfx_policy".into(), json!("keep"));
+    doc.pages[0].regions[0].source_text = "ゴゴゴ".into();
+    doc.pages[0].regions[0].target_text.clear();
+    ir::save_doc(&doc, &path)?;
+
+    let reply = tmp.path().join("worksheets/p0001.done.txt");
+    for replacement in ["fa:\nfa_full: غرش\n", "fa:\nfa_full: غرش\nkeep: yes\n"] {
+        worksheet_reply(&path, "fa:\n", replacement)?;
+        let before = fs::read(&path)?;
+        let reply_before = fs::read(&reply)?;
+        assert_eq!(
+            worksheet::merge_document(&path, None, None, false)
+                .unwrap_err()
+                .code(),
+            "protected_japanese_artwork"
+        );
+        assert_eq!(fs::read(&path)?, before);
+        assert_eq!(fs::read(&reply)?, reply_before);
+    }
+
+    doc.meta.insert("source_language".into(), json!("ja"));
+    ir::save_doc(&doc, &path)?;
+    worksheet_reply(&path, "fa:\n", "fa:\nfa_full: غرش\n")?;
+    worksheet::merge_document(&path, None, None, false)?;
+    let mut doc = ir::load_doc(&path)?;
+    assert_eq!(doc.pages[0].regions[0].extra["target_full"], json!("غرش"));
+
+    doc.meta.insert("source_language".into(), json!("en-US"));
+    ir::save_doc(&doc, &path)?;
+    let before = fs::read(&path)?;
+    let reply_before = fs::read(&reply)?;
+    assert_eq!(
+        worksheet::merge_document(&path, None, None, false)
+            .unwrap_err()
+            .code(),
+        "protected_japanese_artwork"
+    );
+    assert_eq!(fs::read(&path)?, before);
+    assert_eq!(fs::read(&reply)?, reply_before);
+
+    worksheet_reply(&path, "fa_full: غرش\n", "fa_full:\nkeep: yes\n")?;
+    worksheet::merge_document(&path, None, None, false)?;
+    let doc = ir::load_doc(&path)?;
+    assert!(doc.pages[0].regions[0].keep);
+    assert!(!doc.pages[0].regions[0].extra.contains_key("target_full"));
+    assert!(worksheet::merge_document(&path, None, None, false)?.is_empty());
+    Ok(())
+}
+
+#[test]
 fn worksheet_replay_rechecks_changed_source_language_and_allows_keep_repair() -> Result<(), IrError>
 {
     let tmp = tempfile::tempdir()?;

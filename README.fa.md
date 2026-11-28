@@ -7,15 +7,15 @@
 **ترجمهٔ مانگا، مانهوا، مانهوای چینی و کمیک به فارسی، و تحویل CBZ یا PDF بی‌افت با اثبات دست‌نخوردگی نقاشی صفحه.**
 
 [![وضعیت گردش‌کار CI در GitHub Actions](https://github.com/KiaroSama/Revayat-Comic-Skill/actions/workflows/ci.yml/badge.svg?branch=main)](.github/workflows/ci.yml)
-[![مجوز GPL نسخهٔ ۳ یا بالاتر](https://img.shields.io/badge/license-GPL--3.0-2563eb?style=flat-square)](LICENSE)
-[![آخرین برچسب نسخه در گیت‌هاب](https://img.shields.io/badge/version-v2.0.6-ea580c?style=flat-square)](#releases-and-tags)
-[![آخرین انتشار گیت‌هاب](https://img.shields.io/badge/release-v2.0.6-dc2626?style=flat-square)](https://github.com/KiaroSama/Revayat-Comic-Skill/releases)
+[![مجوز GPL نسخهٔ ۳ یا بالاتر](https://img.shields.io/github/license/KiaroSama/Revayat-Comic-Skill?style=flat-square&color=2563eb)](LICENSE)
+[![آخرین برچسب نسخه در گیت‌هاب](https://img.shields.io/github/v/tag/KiaroSama/Revayat-Comic-Skill?style=flat-square&color=ea580c&label=version)](#releases-and-tags)
+[![آخرین انتشار گیت‌هاب](https://img.shields.io/github/v/release/KiaroSama/Revayat-Comic-Skill?style=flat-square&color=dc2626)](https://github.com/KiaroSama/Revayat-Comic-Skill/releases)
 [![آزمون‌های خودکار ورک‌اسپیس Cargo](https://img.shields.io/badge/tests-Cargo%20workspace-0d9488?style=flat-square)](#توسعه)
 [![نسخهٔ ثابت Rust 1.100.0](https://img.shields.io/badge/Rust-1.100.0-8b5cf6?style=flat-square)](rust-toolchain.toml)
 [![پلتفرم‌های پشتیبانی‌شده: لینوکس و ویندوز ۶۴ بیتی](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%28x64%20%7C%20arm64%29-0891b2?style=flat-square)](.github/workflows/ci.yml)
 [![نصب از پنج قالب افزونه یا باینری مستقل CLI](https://img.shields.io/badge/install-5%20plugins%20%7C%20CLI%20binary-4f46e5?style=flat-square)](#نصب)
 [![مستندات به انگلیسی و فارسی](https://img.shields.io/badge/docs-English%20%7C%20Persian-0284c7?style=flat-square)](README.md)
-[![حجم مخزن در گیت‌هاب](https://img.shields.io/badge/repo%20size-2.5%20MiB-ca8a04?style=flat-square)](#توسعه)
+[![حجم مخزن در گیت‌هاب](https://img.shields.io/github/repo-size/KiaroSama/Revayat-Comic-Skill?style=flat-square&color=ca8a04)](#توسعه)
 [![اجرا با Rust خالص بدون هیچ وابستگی پایتونی](https://img.shields.io/badge/runtime-pure%20Rust%20%7C%20zero%20Python-059669?style=flat-square)](#معماری)
 [![گردش‌کار شش‌مرحله‌ای چندعاملی و ویرایش برش‌ها](https://img.shields.io/badge/workflow-6%20agents%20%7C%20crop%20edits-7c3aed?style=flat-square)](skills/revayat-comic/references/multi-agent-workflow.md)
 [![راهنماهای لحن Humanizer ۴.۰ و فارسی همراه بسته](https://img.shields.io/badge/voice-Humanizer%204.0%20%7C%20Persian-b45309?style=flat-square)](skills/revayat-comic/references/voice/index.md)
@@ -65,6 +65,8 @@
 
 ## انتشارها و برچسب‌ها
 
+‏⁧در نسخهٔ `2.0.7`، ضخامت دورخط با اندازهٔ نوشته تغییر می‌کند و هنگام پاک‌کردن نوشته، بافت نقطه‌ای تصویر حفظ می‌شود. برنامه می‌تواند شرح‌های مورب و جلوه‌های صوتی را با همان شیب بچیند. در مرحلهٔ ۵، بازبین علاوه بر برش‌های کوچک، صفحهٔ اصلی و صفحهٔ ترجمه‌شده را هم کنار هم می‌بیند.⁩
+
 در [انتشارهای گیت‌هاب](https://github.com/KiaroSama/Revayat-Comic-Skill/releases) برای هر سیستم ۶۴ بیتی پشتیبانی‌شده یک فایل ZIP هست. برنامهٔ مستقل `revayat-comic` (لینوکس) یا `revayat-comic.exe` (ویندوز) را از آن بیرون بکشید. برای دیدن کد هر نسخه، به [برچسب‌های گیت‌هاب](https://github.com/KiaroSama/Revayat-Comic-Skill/tags) سر بزنید.
 
 ## نصب
@@ -78,7 +80,7 @@
 
 فایل ZIP انتشار، برنامهٔ خط فرمان را در خود دارد. مهارت را از تعریف‌های افزونه در مخزن یا با [نصب‌کنندهٔ مهارت](install/README.md) نصب کنید و `revayat-comic` را در `PATH` نگه دارید.
 
-مخزن برای پنج نوع افزونه فایل تعریف نسخهٔ `2.0.6` دارد: Agent Plugins (`plugin.json` و `.agents/plugins/marketplace.json`)، Claude Code (`.claude-plugin/`)، Codex (`.codex-plugin/`)، Cursor (`.cursor-plugin/`) و Antigravity (`.antigravity-plugin/`).
+مخزن برای پنج نوع افزونه فایل تعریف نسخهٔ `2.0.7` دارد: Agent Plugins (`plugin.json` و `.agents/plugins/marketplace.json`)، Claude Code (`.claude-plugin/`)، Codex (`.codex-plugin/`)، Cursor (`.cursor-plugin/`) و Antigravity (`.antigravity-plugin/`).
 
 در Claude Code:
 

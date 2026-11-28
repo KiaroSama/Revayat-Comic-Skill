@@ -72,7 +72,7 @@ fn on_art_erasure_preserves_overlapping_kept_ink_through_final_export() {
             doc["pages"][0]["regions"] = json!([
                 {"id":"erase", "kind":"sfx", "bbox":[25,25,135,80], "source_text":"ERASE", "erase":true, "locked":true, "polarity":if dark { "dark" } else { "light" }},
                 kept,
-                {"id":"false", "kind":"title", "bbox":[110,50,20,25], "source_text":"false detection", "dropped":true}
+                {"id":"false", "kind":"title", "bbox":[110,50,20,25], "source_text":"false detection", "dropped":true, "drop_reason":"false detector box"}
             ]);
             write_doc(&fixture, &doc);
             success(&fixture.run(&["mask", "--doc", DOC], b""));
