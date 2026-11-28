@@ -161,11 +161,12 @@ pub fn detect_original_outline(
             if tone(x, y) > ink_limit {
                 continue;
             }
-            for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
-                let sample = |d| {
-                    let x = (i64::from(x) + dx * d) as u32;
-                    let y = (i64::from(y) + dy * d) as u32;
-                    b.contains(x, y).then(|| tone(x, y))
+            for (dx, dy) in [(1i64, 0i64), (-1, 0), (0, 1), (0, -1)] {
+                let sample = |d: i64| {
+                    let sx = i64::from(x) + dx * d;
+                    let sy = i64::from(y) + dy * d;
+                    (sx >= 0 && sy >= 0 && b.contains(sx as u32, sy as u32))
+                        .then(|| tone(sx as u32, sy as u32))
                 };
                 let (Some(first), Some(fourth), Some(fifth)) = (sample(1), sample(4), sample(5))
                 else {
