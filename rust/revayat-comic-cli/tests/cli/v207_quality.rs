@@ -518,10 +518,9 @@ fn worksheet_no_outline_suppresses_automatic_outlines_on_halftone() {
     stage(&fixture, "crops", &[]);
     let worksheet = run(&fixture, &["worksheet", "build", "--doc", DOC]);
     let draft = PathBuf::from(worksheet["built"][0].as_str().unwrap());
-    let filled = fs::read_to_string(&draft).unwrap().replace(
-        "fa:\n",
-        "fa: جرقه\nstyle: italic, bold no-outline\nlock: yes\n",
-    );
+    let filled = fs::read_to_string(&draft)
+        .unwrap()
+        .replace("fa:\n", "fa: جرقه\nstyle: italic, bold no-outline\n");
     fs::write(draft.with_file_name("p0001.done.txt"), filled).unwrap();
     run(&fixture, &["worksheet", "merge", "--doc", DOC]);
     render(&fixture);
